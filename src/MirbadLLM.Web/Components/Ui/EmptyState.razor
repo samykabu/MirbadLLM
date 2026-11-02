@@ -1,0 +1,37 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* An empty state that teaches: what this place is for and the next useful action. *@
+<div class="empty @(Inline ? "empty--inline" : null)" data-testid="@TestId">
+    @if (HeadingLevel == 3)
+    {
+        <h3>@Title</h3>
+    }
+    else
+    {
+        <h2>@Title</h2>
+    }
+    @ChildContent
+    @if (Actions is not null)
+    {
+        <div class="empty-actions">@Actions</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = "";
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    [Parameter]
+    public RenderFragment? Actions { get; set; }
+
+    [Parameter]
+    public int HeadingLevel { get; set; } = 2;
+
+    [Parameter]
+    public bool Inline { get; set; }
+
+    [Parameter]
+    public string? TestId { get; set; }
+}

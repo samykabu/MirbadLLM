@@ -1,0 +1,50 @@
+@namespace MirbadLLM.Web.Components.Ui
+@inject IServiceProvider Services
+@* Picks a saved token (Access > Tokens) by name. Binds the token's id, never its value: the caller looks the value up
+   on the server only when it sends the request. The list reloads on focus, so a token added in another tab shows up.
+   The store is optional (GetService), so hosts and tests without one still render: the list is just empty. *@
+<select id="@Id" class="form-select" data-testid="@TestId" aria-describedby="@DescribedBy" disabled="@Disabled"
+        value="@(Value ?? "")" @onchange="OnChangeAsync" @onfocus="LoadAsync">
+    <option value="">No token</option>
+    @foreach (var token in _tokens)
+    {
+        <option value="@token.Id">@token.Name@(token.Hint.Length > 0 ? $" (…{token.Hint})" : "")</option>
+    }
+</select>
+<a class="token-picker-manage" href="access/tokens" target="_blank" rel="noopener" data-testid="@($"{TestId}-manage")">
+    @(_tokens.Count == 0 ? "Add a token" : "Manage tokens") <span class="visually-hidden">(opens in a new tab)</span>
+</a>
+
+@code {
+    /// <summary>The selected token's id; null or empty for none.</summary>
+    [Parameter]
+    public string? Value { get; set; }
+
+    [Parameter]
+    public EventCallback<string?> ValueChanged { get; set; }
+
+    [Parameter, EditorRequired]
+    public string Id { get; set; } = "";
+
+    [Parameter]
+    public string? TestId { get; set; }
+
+    [Parameter]
+    public string? DescribedBy { get; set; }
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    private IReadOnlyList<SavedToken> _tokens = [];
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync() => _tokens = Services.GetService<ITokenStore>() is { } store ? await store.ListAsync() : [];
+
+    private Task OnChangeAsync(ChangeEventArgs e)
+    {
+        string? id = e.Value as string;
+        Value = string.IsNullOrEmpty(id) ? null : id;
+        return ValueChanged.InvokeAsync(Value);
+    }
+}

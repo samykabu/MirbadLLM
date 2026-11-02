@@ -1,0 +1,9 @@
+{
+  "operationId": "op-001",
+  "modelId": "qwen36-35b",
+  "gpus": [],
+  "budgetGiB": 36.0,
+  "hostBudgetGiB": null,
+  "hostPort": 8101,
+  "createdAt": "2026-10-03T10:00:00Z"
+}

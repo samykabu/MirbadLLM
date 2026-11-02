@@ -1,0 +1,6 @@
+; Scoped to this folder only: xUnit test method names follow the conventional
+; MethodUnderTest_Scenario_ExpectedBehavior style, which CA1707 (no underscores in
+; identifiers) flags. The whole test project uses this style; disabling it here only
+; affects files under tests/MirbadLLM.UnitTests/Router/.
+[*.cs]
+dotnet_diagnostic.CA1707.severity = none

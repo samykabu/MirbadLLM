@@ -1,0 +1,63 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* A non-modal side panel over the right of the page (Monitoring's model readout): the page behind stays live and
+   usable. Opening moves focus to its close button; Esc or the button closes it, and the caller returns focus to
+   whatever opened it (OnClose). *@
+<aside class="side-panel @(Open ? "side-panel--open" : null)" aria-labelledby="@(Open ? TitleId : null)"
+       aria-hidden="@(Open ? null : "true")" data-testid="@TestId" @onkeydown="OnKeyDown">
+    @if (Open)
+    {
+        <div class="side-panel-head">
+            <div class="side-panel-title">@Header</div>
+            <button type="button" class="icon-btn" aria-label="Close details" title="Close (Esc)" @ref="_close"
+                    data-testid="@($"{TestId}-close")" @onclick="CloseAsync">
+                <Icon Name="chevron-right" />
+            </button>
+        </div>
+        <div class="side-panel-body">@ChildContent</div>
+    }
+</aside>
+
+@code {
+    [Parameter]
+    public bool Open { get; set; }
+
+    /// <summary>Id of the heading inside <see cref="Header"/> that names the panel.</summary>
+    [Parameter]
+    public string? TitleId { get; set; }
+
+    [Parameter]
+    public RenderFragment? Header { get; set; }
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Raised by Esc and the close button.</summary>
+    [Parameter]
+    public EventCallback OnClose { get; set; }
+
+    [Parameter]
+    public string TestId { get; set; } = "drawer";
+
+    private ElementReference _close;
+    private bool _wasOpen;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Open && !_wasOpen)
+        {
+            await _close.FocusAsync(preventScroll: true);
+        }
+
+        _wasOpen = Open;
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (Open && e.Key == "Escape")
+        {
+            await CloseAsync();
+        }
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+}

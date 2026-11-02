@@ -1,0 +1,65 @@
+/* Fleet readouts and warnings wrap when the strip cannot fit them in full. */
+.status-fleet {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ss-sp-3);
+    min-width: 0;
+    white-space: nowrap;
+}
+
+.readout-nodes {
+    color: var(--ss-text-muted);
+    font-size: var(--ss-fs-100);
+}
+
+.status-node-chip {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.readouts {
+    flex-wrap: wrap;
+    row-gap: var(--ss-sp-1);
+}
+
+@media (max-width: 639.98px) {
+    .status-fleet {
+        gap: var(--ss-sp-2);
+    }
+
+    .status-node-chip {
+        padding: 2px 8px;
+    }
+}
+
+.readout-unit {
+    color: var(--ss-text-muted);
+    font-size: var(--ss-fs-100);
+}
+
+.readout-calm {
+    color: var(--ss-text-muted);
+}
+
+/* A non-zero attention count is the strip's one call to act: amber, linked to the Overview's panel. */
+.readout-attention {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    min-height: 22px;
+    padding: 0 6px;
+    border: 1px solid color-mix(in srgb, var(--ss-busy) 40%, transparent);
+    border-radius: var(--ss-radius-sm);
+    background: var(--ss-busy-subtle);
+    color: var(--ss-busy);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.readout-attention:hover { text-decoration: underline; }

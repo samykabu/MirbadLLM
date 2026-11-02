@@ -1,0 +1,64 @@
+/* Inside another panel (the Overview's node panels): no frame of its own, the host panel spaces it. */
+.headroom--bare {
+    margin-top: 0;
+    padding: 0;
+}
+
+/* The reserve is part of free memory kept back: drawn as a hatch over the free well, so it reads as "held, not used"
+   and stays visible in the dark theme, where the flat reserve grey sat too close to the track. */
+.headroom-seg--reserve {
+    background:
+        repeating-linear-gradient(135deg, var(--ss-series-other) 0 1.5px, transparent 1.5px 4.5px),
+        var(--ss-sunken);
+    box-shadow: inset 1px 0 0 var(--ss-series-other);
+}
+
+/* The legend's reserve swatch carries the same hatch (fourth item: models, other, free, reserve). */
+.headroom ::deep .legend-item:nth-child(4) .swatch--block {
+    background:
+        repeating-linear-gradient(135deg, var(--ss-series-other) 0 1.5px, transparent 1.5px 3.5px),
+        var(--ss-sunken);
+    outline: 1px solid var(--ss-series-other);
+    outline-offset: -1px;
+}
+
+/* Which number is measured and which is budgeted, when the readings disagree. */
+.headroom-note {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--ss-sp-1);
+    margin: 0;
+    max-width: 78ch;
+    color: var(--ss-text-muted);
+    font-size: var(--ss-fs-100);
+    text-wrap: pretty;
+}
+
+.headroom-note ::deep .icon {
+    flex: none;
+    width: 12px;
+    height: 12px;
+    margin-top: 3px;
+}
+
+/* Per-GPU variant (discrete node): one block per GPU, each a head line, its bar and its legend. */
+.headroom--gpus {
+    gap: var(--ss-sp-3);
+}
+
+.headroom-gpu {
+    display: grid;
+    gap: var(--ss-sp-2);
+    min-width: 0;
+}
+
+.headroom-gpu + .headroom-gpu {
+    padding-top: var(--ss-sp-3);
+    border-top: 1px solid var(--ss-border);
+}
+
+.headroom-gpu-title {
+    font-weight: 600;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}

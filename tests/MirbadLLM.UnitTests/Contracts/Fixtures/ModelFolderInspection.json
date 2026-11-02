@@ -1,0 +1,22 @@
+{
+  "folder": "Qwen3.6-35B-A3B-NVFP4",
+  "architecture": "Qwen3MoeForCausalLM",
+  "maxPositionEmbeddings": 262144,
+  "detectedFormat": "NVFP4",
+  "weightsGiB": 34.2,
+  "maySupportMtp": true,
+  "suggestion": {
+    "servedName": "Qwen3.6-35B-A3B-NVFP4",
+    "toolCallParser": "qwen3_coder",
+    "reasoningParser": "qwen3",
+    "quantization": "modelopt_fp4",
+    "memoryBudgetGiB": 44.0,
+    "memoryBudgetFormula": "weights 34.2 GiB + KV 8 GiB + 1.8 GiB overhead"
+  },
+  "kvBytesPerToken": 98304,
+  "hasVisionConfig": false,
+  "isMoe": true,
+  "isMambaHybrid": false,
+  "speculativeBlockSize": null,
+  "paramsBillions": 65.2835028992
+}

@@ -1,0 +1,74 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* Narrows a list to one node (design §8.3 "a ?node= filter"): a Segmented radio group of "All nodes" plus each node
+   while there are at most four, a labelled select otherwise. The caller keeps the choice (in ?node=); this only
+   renders it and reports changes. Native radios, so arrow keys move and select in the browser. *@
+<div class="node-filter" data-testid="@TestId">
+    @if (Nodes.Count <= SegmentedMax)
+    {
+        <span class="node-filter-label" id="@LabelId"><Icon Name="server" /> Node</span>
+        <div class="segmented" role="radiogroup" aria-labelledby="@LabelId">
+            <label class="segmented-option">
+                <input type="radio" name="@GroupName" value="" checked="@(Selected is null)" data-testid="@($"{TestId}-all")"
+                       @onchange="() => SelectAsync(null)" />
+                <span>All nodes</span>
+            </label>
+            @foreach (var node in Nodes)
+            {
+                <label class="segmented-option">
+                    <input type="radio" name="@GroupName" value="@node.Id" checked="@(Selected == node.Id)" data-testid="@($"{TestId}-{node.Id}")"
+                           @onchange="() => SelectAsync(node.Id)" />
+                    <span>@node.Name <span class="num">@node.Count</span></span>
+                    <span class="visually-hidden">, </span>
+                    <span class="node-filter-count num">@node.Count</span>
+                    <span class="visually-hidden">@(node.Count == 1 ? " model" : " models")</span>
+                </label>
+            }
+        </div>
+    }
+    else
+    {
+        <label class="node-filter-label" for="@SelectId"><Icon Name="server" /> Node</label>
+        <select class="form-select node-filter-select" id="@SelectId" data-testid="@($"{TestId}-select")" @onchange="OnSelectChanged">
+            <option value="" selected="@(Selected is null)">All nodes</option>
+            @foreach (var node in Nodes)
+            {
+                <option value="@node.Id" selected="@(Selected == node.Id)">@node.Name (@node.Count)</option>
+            }
+        </select>
+    }
+</div>
+
+@code {
+    /// <summary>Most nodes shown as a Segmented control; more switch to a select (design §8.3).</summary>
+    public const int SegmentedMax = 4;
+
+    private static int _nextId;
+    private readonly int _id = Interlocked.Increment(ref _nextId);
+
+    /// <summary>One choice: node id, display name and how many models it holds.</summary>
+    public sealed record Option(string Id, string Name, int Count);
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<Option> Nodes { get; set; } = [];
+
+    /// <summary>The selected node id; null = all nodes.</summary>
+    [Parameter]
+    public string? Selected { get; set; }
+
+    [Parameter]
+    public EventCallback<string?> SelectedChanged { get; set; }
+
+    [Parameter]
+    public string TestId { get; set; } = "node-filter";
+
+    private string LabelId => $"node-filter-{_id}-label";
+
+    private string SelectId => $"node-filter-{_id}-select";
+
+    private string GroupName => $"node-filter-{_id}";
+
+    private Task OnSelectChanged(ChangeEventArgs e) =>
+        SelectAsync(e.Value?.ToString() is { Length: > 0 } id ? id : null);
+
+    private Task SelectAsync(string? id) => SelectedChanged.InvokeAsync(id);
+}

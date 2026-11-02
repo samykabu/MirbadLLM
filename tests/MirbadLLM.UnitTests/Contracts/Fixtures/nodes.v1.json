@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "nodes": [
+    {
+      "id": "dgx",
+      "uid": "0f9a6c2e4b7d41a8b3c5d6e7f8091a2b",
+      "displayName": "DGX Spark",
+      "address": "https://127.0.0.1:9443",
+      "altAddresses": [ "https://192.0.2.191:9443" ],
+      "approved": true,
+      "draining": false,
+      "revoked": false,
+      "certSpkiSha256": "b3BlbnNzbC1wdWJrZXktaGFzaC1vZi10aGUtZGd4LWtleQ==",
+      "pendingCertSpkiSha256": "bmV3LWtleS1wZW5kaW5nLWR1cmluZy1yb3RhdGlvbi0x",
+      "certNotAfter": "2027-01-01T00:00:00+00:00",
+      "memoryReserveGiB": 8,
+      "gpuReserveGiB": {},
+      "maxConcurrentStarts": null,
+      "defaultVllmImage": null,
+      "labels": [ "arm64", "gb10" ],
+      "lastCapabilities": {
+        "protocol": { "min": 1, "current": 1 },
+        "agentVersion": "1.0.0+78b39d2",
+        "features": [ "runtime.vllm.container", "downloads.hf-container", "services.systemd", "services.docker", "backup-mount", "gpu-processes", "telemetry.v1" ],
+        "os": { "family": "linux", "description": "Ubuntu 24.04 LTS", "kernel": "6.11.0-1016-nvidia" },
+        "arch": "arm64",
+        "cpu": { "logicalCores": 20, "model": "Cortex-X925 + Cortex-A725" },
+        "memory": { "model": "unified", "totalGiB": 121.6 },
+        "gpus": [
+          {
+            "index": 0,
+            "uuid": "GPU-5967a1b2-c3d4-e5f6-a7b8-c9d0e1f2a3b4",
+            "name": "NVIDIA GB10",
+            "memoryTotalGiB": null,
+            "computeCapability": "12.1",
+            "driver": "580.95.05",
+            "sharesHostMemory": true
+          }
+        ],
+        "runtimes": [
+          { "kind": "vllm", "delivery": "container", "available": true, "images": null }
+        ],
+        "images": [
+          { "ref": "local/qwen38-vllm-dflash2:66e5414c6d75", "id": "sha256:66e5414c6d75aa", "digest": null, "arch": "arm64", "sizeBytes": 19300000000 }
+        ],
+        "modelRoots": [
+          { "name": "models", "freeBytes": 812000000000, "totalBytes": 3700000000000, "folderCount": 11 }
+        ],
+        "hostServices": { "manager": "systemd", "hostdAvailable": true, "hostdVersion": "1.4.0", "containers": true },
+        "backupMount": { "supported": true }
+      },
+      "lastContact": "2026-10-03T09:00:00+00:00",
+      "createdAt": "2026-10-03T08:00:00+00:00",
+      "enrolledAt": "2026-10-03T08:00:05+00:00",
+      "enrolledFrom": "172.18.0.3",
+      "approvedAt": "2026-10-03T08:00:00+00:00",
+      "revokedAt": null,
+      "rotation": {
+        "rotationId": "9a8b7c6d5e4f40312a1b2c3d4e5f6a7b",
+        "nodeUid": "0f9a6c2e4b7d41a8b3c5d6e7f8091a2b",
+        "stage": "certInstalled",
+        "operationId": "1d2c3b4a59687f6e5d4c3b2a19080706",
+        "newSpkiSha256": "bmV3LWtleS1wZW5kaW5nLWR1cmluZy1yb3RhdGlvbi0x",
+        "newCertNotAfter": "2027-03-01T00:00:00+00:00",
+        "startedAt": "2026-12-01T03:00:00+00:00",
+        "updatedAt": "2026-12-01T03:00:02+00:00",
+        "error": null
+      }
+    },
+    {
+      "id": "pc-office",
+      "uid": "7e6d5c4b3a2918f7e6d5c4b3a2918f70",
+      "displayName": null,
+      "address": "https://192.0.2.42:9443",
+      "altAddresses": [],
+      "approved": false,
+      "draining": false,
+      "revoked": false,
+      "certSpkiSha256": null,
+      "pendingCertSpkiSha256": "cGMtb2ZmaWNlLWVucm9sbGVkLWtleS1oYXNo",
+      "certNotAfter": "2027-01-01T10:00:00+00:00",
+      "memoryReserveGiB": 4,
+      "gpuReserveGiB": { "GPU-1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d": 1.5 },
+      "maxConcurrentStarts": 2,
+      "defaultVllmImage": "vllm/vllm-openai:v0.11.0",
+      "labels": [ "amd64" ],
+      "lastCapabilities": null,
+      "lastContact": null,
+      "createdAt": "2026-10-03T10:00:00+00:00",
+      "enrolledAt": "2026-10-03T10:05:00+00:00",
+      "enrolledFrom": "192.0.2.42",
+      "approvedAt": null,
+      "revokedAt": null,
+      "rotation": null
+    }
+  ],
+  "joinTokens": [
+    {
+      "sha256": "Wm5vZGUtYm9vdHN0cmFwLXRva2VuLWhhc2gtYmFzZTY0dXJs",
+      "nodeId": "dgx",
+      "createdAt": "2026-10-03T08:00:00+00:00",
+      "expiresAt": "2026-10-03T09:00:00+00:00",
+      "usedAt": "2026-10-03T08:00:05+00:00",
+      "purpose": "bootstrap"
+    },
+    {
+      "sha256": "cGMtb2ZmaWNlLWpvaW4tdG9rZW4taGFzaC1iYXNlNjR1cmw",
+      "nodeId": "pc-office",
+      "createdAt": "2026-10-03T09:55:00+00:00",
+      "expiresAt": "2026-10-03T10:55:00+00:00",
+      "usedAt": "2026-10-03T10:05:00+00:00",
+      "purpose": "join"
+    }
+  ]
+}

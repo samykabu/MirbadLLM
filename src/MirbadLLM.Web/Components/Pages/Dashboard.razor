@@ -1,0 +1,1642 @@
+@page "/"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using MirbadLLM.Orchestration
+@inject IRouterStats RouterStats
+@inject IServiceProvider ServiceProvider
+@inject NavigationManager Nav
+
+<PageTitle>Overview · MirbadLLM</PageTitle>
+
+@* The Overview ("Command Deck"): the old Overview and Monitoring pages as one. Top to bottom: the node scope rail, the
+   KPI strip, the Signal chart beside the fleet counters, the service levels, the leaderboard, the selected
+   model's readout, the nodes (with a node's history when one is scoped) and what to do next. ?node= scopes the page,
+   ?model= opens a readout; both survive the old /monitoring links, which redirect here. *@
+<PageHeader Title="Overview">
+    <Subtitle>@SubtitleText <LiveStamp At="_loadedAt" TestId="dashboard-updated" /></Subtitle>
+    <Actions>
+        @if (_history is not null)
+        {
+            @* Native radios: arrow keys move and select in the browser, like the model editor's source picker. *@
+            <div class="segmented" role="radiogroup" aria-label="Time window" data-testid="window-selector" data-tip="overview">
+                @foreach (var window in Windows)
+                {
+                    int minutes = (int)window.TotalMinutes;
+                    <label class="segmented-option">
+                        <input type="radio" name="overview-window" value="@minutes" checked="@(window == _window)"
+                               data-testid="window-@minutes" @onchange="() => SelectWindow(window)" />
+                        <span>@FormatWindow(window)</span>
+                    </label>
+                }
+            </div>
+        }
+        <a class="btn btn-ghost" href="models" data-testid="all-models"><Icon Name="layers" /> All models</a>
+        <a class="btn btn-primary" href="models/new" data-testid="add-model" data-tour="add-model"><Icon Name="plus" /> Add model</a>
+    </Actions>
+</PageHeader>
+
+@if ((_liveError ?? _nodesError) is { } error)
+{
+    <div class="callout callout--failed page-alert" role="alert" data-testid="dashboard-error">
+        <Icon Name="state-failed" />
+        <div class="callout-body">@error</div>
+    </div>
+}
+
+@if (_history is null)
+{
+    <div class="callout callout--busy page-alert" role="status" data-testid="monitoring-unavailable">
+        <Icon Name="warning" />
+        <div class="callout-body">Monitoring isn't running on this host, so there is no history to show: no trends, Signal chart, leaderboard or readouts.</div>
+    </div>
+}
+
+@if (_addedName is not null)
+{
+    <div class="callout callout--ready page-alert" role="status" data-testid="added-suggestion">
+        <Icon Name="state-ready" />
+        <div class="callout-body">
+            <span><strong>@_addedName</strong> was added. Start it from Models, then tune it to find the fastest settings for its node, or benchmark it as it is.</span>
+            <div class="callout-actions">
+                <a class="btn btn-sm btn-outline-secondary" href="models"><Icon Name="layers" /> Go to Models</a>
+                <a class="btn btn-sm btn-outline-secondary" href="@($"models/{_addedId}/tune")"><Icon Name="sliders" /> Tune it</a>
+                <a class="btn btn-sm btn-ghost" href="@($"models/{_addedId}/benchmark")"><Icon Name="gauge" /> Benchmark</a>
+            </div>
+        </div>
+    </div>
+}
+
+<div class="deck">
+    @if (MultiNode)
+    {
+        <NodeScopeRail Nodes="_nodes" Summaries="_summaries" Beads="_beadsByNode" AllSelected="!Scoped" SelectedId="@_nodeId"
+                       RunningCount="_fleetLatest.Count" WindowLabel="@FormatWindow(_window)" Selected="OnScopeSelected" />
+    }
+
+    <section class="overview-kpis" aria-labelledby="kpi-heading" data-testid="kpi-strip" data-tour="kpis">
+        <h2 id="kpi-heading" class="visually-hidden">@ScopeTitle, last @FormatWindow(_window)</h2>
+        <div class="tiles overview-vitals">
+            @if (HasTraffic)
+            {
+                <StatTile Label="Generation" TestId="kpi-gen" Value="@UiFormat.Number(_fleetGen)" Unit="tok/s"
+                          Detail="@FleetDetail" Trend="_genTrend" TrendWindow="@TrendLabel" />
+                <StatTile Label="Requests" TestId="kpi-req" Value="@UiFormat.Number(_fleetReq)" Unit="req/min"
+                          Detail="Finished requests across all models" Trend="_reqTrend" TrendWindow="@TrendLabel" />
+                <StatTile Label="TTFT p95" TestId="kpi-ttft" Value="@UiFormat.Latency(_fleetTtft).Value" Unit="@UiFormat.Latency(_fleetTtft).Unit"
+                          Detail="@(UiFormat.HasValue(_fleetTtft) ? "Slowest Ready model, time to first token" : "No finished requests in the last sample")"
+                          Trend="_ttftTrend" TrendWindow="@TrendLabel" />
+                <StatTile Label="Error rate" TestId="kpi-errors" Value="@UiFormat.Number(_errorPct)" Unit="%"
+                          Detail="@ErrorDetail" Trend="_errTrend" TrendEmptyText="No requests yet" TrendWindow="@TrendLabel" />
+            }
+            else
+            {
+                <div class="tile tile--traffic" role="group" aria-labelledby="kpi-traffic-label" data-testid="kpi-traffic">
+                    <div class="tile-label" id="kpi-traffic-label">Traffic</div>
+                    <p class="tile-value"><span class="tile-number tile-number--empty">No requests</span></p>
+                    <div class="tile-detail" data-testid="kpi-traffic-detail">@NoTrafficDetail</div>
+                </div>
+            }
+            <StatTile Label="Memory free" TestId="kpi-memory" Value="@MemoryFreeValue" Unit="GiB"
+                      Detail="@MemoryDetail" Trend="_freeTrend" TrendWindow="@TrendLabel" />
+            <StatTile Label="GPU" TestId="kpi-gpu" Value="@UiFormat.Number(GpuValue)" Unit="%"
+                      Detail="@GpuDetail" Trend="_gpuTrend" TrendWindow="@TrendLabel" />
+        </div>
+    </section>
+
+    <div class="deck-row deck-row--signal">
+        <section class="panel signal-panel" aria-labelledby="signal-title" data-testid="fleet-pulse">
+            <div class="deck-head">
+                <h2 class="deck-title" id="signal-title">Signal <span class="deck-note">· generation by model, GPU use by node, last @FormatWindow(_window)</span></h2>
+                <span class="chart-help">
+                    <button type="button" class="info-btn" aria-label="About the Signal chart" popovertarget="signal-help"
+                            style="anchor-name: --signal-help" data-testid="signal-help">
+                        <Icon Name="info" />
+                    </button>
+                    <span class="help-popover" id="signal-help" popover role="note" aria-label="About the Signal chart"
+                          style="position-anchor: --signal-help" data-testid="signal-help-panel">
+                        <span class="help-popover-title">Signal</span>
+                        <span class="help-popover-text">@ThroughputHelp @HeatHelp</span>
+                    </span>
+                </span>
+            </div>
+            <div class="pulse-lead">
+                <span class="pulse-cap" id="pulse-title">@PulseTitle</span>
+                <span class="pulse-big num"><span data-testid="pulse-total"><span @key="UiFormat.Number(_pulse.Total)" class="tick">@UiFormat.Number(_pulse.Total)</span></span><span class="pulse-unit"> tok/s</span></span>
+                <dl class="pulse-facts">
+                    <div><dt>Ready</dt><dd class="num" data-testid="pulse-ready">@_pulse.Ready</dd></div>
+                    <div><dt>Run · wait</dt><dd class="num" data-testid="pulse-run-wait">@UiFormat.Whole(_pulse.Running) · @UiFormat.Whole(_pulse.Waiting)</dd></div>
+                    <div><dt>In flight</dt><dd class="num" data-testid="pulse-in-flight">@UiFormat.Whole(_pulse.InFlight)</dd></div>
+                    <div>
+                        <dt>Errors</dt>
+                        <dd class="num @(_pulse.ErrorPercent > ModelTable.ErrorWarnPercent ? "pulse-warn" : null)" data-testid="pulse-errors">
+                            @if (_pulse.ErrorPercent > ModelTable.ErrorWarnPercent)
+                            {
+                                <Icon Name="warning" />
+                            }
+                            @UiFormat.Percent(_pulse.ErrorPercent)
+                        </dd>
+                    </div>
+                </dl>
+            </div>
+            <SignalChart Data="_signal" WindowLabel="@FormatWindow(_window)" EndLabel="@_signalEnd"
+                         EmptyText="@(_history is null ? "Monitoring isn't running on this host." : $"No model was Ready{OnScope} in the last {FormatWindow(_window)}, and no node sent a GPU reading.")" />
+        </section>
+
+        <FleetStatsPanel Requests="_stats?.Requests" TokensToday="TokensToday"
+                         CrashFree="CrashFree" CrashedEver="@(_stats?.LastCrashAt is not null)" CountingSince="_stats?.StartedAt"
+                         ErrorBudgetLeft="_errorBudgetLeft" BudgetPercent="_targets.ErrorBudgetPercent" />
+    </div>
+
+    @if (_rows.Count == 0)
+    {
+        <section class="panel deck-empty" aria-label="No models yet">
+            <EmptyState Title="No models yet" HeadingLevel="2" Inline="true" TestId="dashboard-empty">
+                <ChildContent>
+                    <p>
+                        A model is one runtime container (vLLM or llama.cpp) serving one checkpoint under a served name, on one node.
+                        Add one from a checkpoint folder that is already on a node, or download a checkpoint from Hugging Face first.
+                    </p>
+                </ChildContent>
+                <Actions>
+                    <a class="btn btn-sm btn-primary" href="models/new"><Icon Name="folder" /> Add from a folder</a>
+                    <a class="btn btn-sm btn-outline-secondary" href="models/new?source=download"><Icon Name="download" /> Download from Hugging Face</a>
+                </Actions>
+            </EmptyState>
+        </section>
+    }
+
+    <div class="deck-row deck-row--slo">
+        <ServiceLevelPanel Bars="_serviceBars" Chips="_serviceChips" />
+    </div>
+
+    @if (_history is not null)
+    {
+        <ModelTable @ref="_table" Title="Leaderboard" Rows="_tableRows" NotRunning="_off" SelectedId="@_selectedModelId" SelectedIdChanged="OnModelSelected"
+                    Note="@(Scoped ? $"on {SelectedNodeName}, last {FormatWindow(_window)}" : MultiNode ? $"on every node, last {FormatWindow(_window)}" : $"on this host, last {FormatWindow(_window)}")"
+                    EmptyText="@(Scoped ? $"No model is Ready on {SelectedNodeName}. Start one on Models." : MultiNode ? "No model is Ready on any node. Start one on Models." : "No model is Ready. Start one on Models.")"
+                    OnClear="@(Scoped ? EventCallback.Factory.Create(this, () => OnScopeSelected(NodeScopeRail.AllScope)) : default)" />
+
+        @Readout()
+    }
+
+    <section class="overview-headroom" aria-labelledby="headroom-heading">
+        <div class="deck-head">
+            <h2 class="deck-title" id="headroom-heading">Nodes <span class="deck-note">· memory a new model can get, GPU, disk and downloads</span></h2>
+            @if (_rows.Count > 0)
+            {
+                <span class="section-note num" data-testid="models-summary">@_readyCount Ready of @_rows.Count <a href="models">models</a></span>
+            }
+        </div>
+        @if (_views.Count > 0)
+        {
+            <div class="headroom-panels" data-testid="node-groups">
+                @for (int i = 0; i < _views.Count; i++)
+                {
+                    var view = _views[i];
+                    <NodeGroup @key="view.Id" View="view" Now="_now" Tour="@(i == 0 ? "overview-headroom" : null)">
+                        <div class="overview-runs">
+                            <div class="panel-label">Running · tok/s</div>
+                            @foreach (var row in _rows.Where(r => r.Definition.Placement?.NodeId == view.Id && r.Status.State == ModelState.Ready))
+                            {
+                                var model = row.Definition;
+                                var load = _snapshot?.LatestKpis.GetValueOrDefault(model.Id)?.Load;
+                                bool generation = PoolingDetection.Detect(model) == PoolingMode.None;
+                                <a href="@($"models/{model.Id}/overview")" class="overview-run">
+                                    <span class="model-swatch" style="@($"background:{_modelColors.GetValueOrDefault(model.Id, "var(--ss-series-other)")}")" aria-hidden="true"></span>
+                                    <span class="overview-run-name">@model.ServedName</span>
+                                    <span class="num" title="@(generation ? "Generated tokens per second" : "Input tokens per second")">@UiFormat.Number(generation ? load?.GenerationTokensPerSecond : load?.PromptTokensPerSecond)</span>
+                                </a>
+                            }
+                            <span class="muted">@(view.ModelCount - view.ReadyCount) stopped models</span>
+                        </div>
+                        @NodeFacts(view.Id!)
+                    </NodeGroup>
+                }
+            </div>
+        }
+        else
+        {
+            <div data-tour="overview-headroom">
+                <MemoryHeadroom TotalGiB="_memory.TotalGiB" AvailableGiB="_memory.AvailableGiB" ModelsGiB="_modelsGiB" ReserveGiB="_reserveGiB" />
+            </div>
+        }
+        @if (_history is not null && (!MultiNode || Scoped))
+        {
+            @HostSection()
+        }
+    </section>
+
+    <section aria-labelledby="overview-next-heading">
+        <h2 class="visually-hidden" id="overview-next-heading">Next</h2>
+        <div class="overview-next">
+            <a class="panel" href="chat"><Icon Name="terminal" /><span><strong>Try a model</strong><small>Chat with a Ready model and see its speed</small></span><Icon Name="arrow-right" /></a>
+            <a class="panel" href="access"><Icon Name="shield" /><span><strong>Connect a client</strong><small>Base URL, API keys and client settings</small></span><Icon Name="arrow-right" /></a>
+            <a class="panel" href="models" data-testid="next-models"><Icon Name="play" /><span><strong>Run a model</strong><small>Start, stop, tune and benchmark models</small></span><Icon Name="arrow-right" /></a>
+        </div>
+    </section>
+</div>
+
+
+@code {
+    // ================================================================ constants
+
+    private static readonly TimeSpan[] Windows = [TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(60)];
+
+    /// <summary>Signal heat rows (nodes, or GPUs of discrete nodes) shown before the rest are left out.</summary>
+    private const int MaxHeatRows = 12;
+
+    /// <summary>The query parameter of the open model readout.</summary>
+    public const string ModelQueryKey = "model";
+
+    public const string GpuHelp =
+        "Whole-GPU utilization from nvidia-smi, sampled every 5 seconds. The GB10 reports no per-process GPU utilization, " +
+        "so it can't be split per model; Generation throughput shows which model is doing the work.";
+
+    public const string MemoryHelp =
+        "Unified memory (CPU and GPU share it), stacked up to the host's total. Each model's area is the GPU memory its " +
+        "container's processes use, measured by nvidia-smi through the host agent, while the container runs (Starting, Ready " +
+        "or Stopping). Host services that use the GPU (ComfyUI, Ollama) get their own area when the host agent can name them. " +
+        "Without the host agent's readout (not installed, or an older version) a model's area is its configured budget instead, " +
+        "and the note under the chart says which one you are looking at. Other processes is the rest of the used memory " +
+        "(the OS, other programs, CPU-side memory); Free is what the kernel reports available.";
+
+    public const string ThroughputHelp =
+        "Generated tokens per second per model, stacked, so the top edge is the total; each model keeps the colour of its " +
+        "row in the leaderboard. From each model's counters (the difference between two 5-second scrapes). Embedding and " +
+        "reranking models generate none, so they are left out here; the leaderboard shows their input (prompt) tokens per second, " +
+        "marked \"in\". A gap means the model wasn't Ready, or it is the first sample after a start.";
+
+    public const string HeatHelp =
+        "The strip below is GPU utilization per node (per GPU on a node with discrete GPUs), from the well colour at 0% " +
+        "to amber, turning orange above 80%. An empty cell is a moment without a reading.";
+
+    public const string GpuMemoryHelp =
+        "VRAM of one GPU, stacked up to its total. Each model's area is its memory on this GPU: the GPU memory its " +
+        "container's processes use (measured through the node's agent) or its configured budget, split evenly over the GPUs " +
+        "it is placed on (tensor parallel puts equal bytes on each). Other processes is the rest of the used VRAM; Free is " +
+        "total minus used as nvidia-smi reports it.";
+
+    public const string GpuDiscreteHelp =
+        "Utilization of each GPU from nvidia-smi, sampled every 5 seconds, one line per GPU. It is whole-GPU utilization, " +
+        "not split per model; Generation throughput shows which model is doing the work.";
+
+    public const string HostRamHelp =
+        "Host RAM of this node (CPU memory, separate from the GPUs' VRAM): used and available as the kernel reports them. " +
+        "Models live in VRAM on this node, so RAM is not split per model.";
+
+    // ================================================================ state
+
+    private sealed record Row(ModelDefinition Definition, ModelStatus Status);
+
+    /// <summary>The Signal panel's facts for the scope.</summary>
+    private sealed record Pulse(double? Total, string Ready, double Running, double Waiting, double? InFlight, double? ErrorPercent);
+
+    private const LiveNeeds Needs = LiveNeeds.Models | LiveNeeds.Statuses | LiveNeeds.Memory;
+
+    private IMetricsHistory? _history;
+    private IModelMetricsReader? _metricsReader;
+    private INodeStatusCache? _nodeCache;
+    private INodeRegistry? _nodeRegistry;
+    private ModelRecoveryState? _recovery;
+    private FleetStatsStore? _statsStore;
+    private OverviewOptions _targets = new();
+    private double _reserveGiB = 8;
+    private TimeSpan _bucketWidth = TimeSpan.FromSeconds(5);
+    private string _defaultNodeId = RegistryMigrationOptions.DefaultBootstrapNodeId;
+
+    private CancellationTokenSource? _cts;
+    private LiveDataService? _live;
+    private bool _ownsLive;
+    private IDisposable? _subscription;
+    private LiveSnapshot? _snapshot;
+    private DateTimeOffset? _loadedAt;
+    private string? _liveError;
+    private DateTimeOffset _now = DateTimeOffset.UtcNow;
+    private TimeSpan _window = Windows[1];
+
+    // Scope (?node=): with several nodes the rail picks every node or one; one node is always the whole page.
+    private List<NodeSelector.Option> _nodes = [];
+    private bool _allScope = true;
+    private string _nodeId = RegistryMigrationOptions.DefaultBootstrapNodeId;
+    private string? _requestedNodeId;
+
+    // Nodes.
+    private List<Nodes.NodeRow> _nodeRows = [];
+    private Dictionary<string, NodeRecord> _records = new(StringComparer.Ordinal);
+    private string? _nodesError;
+    private List<NodeGroupView> _views = [];
+    private List<NodeSummary> _summaries = [];
+    private Dictionary<string, NodeSummary> _summaryById = new(StringComparer.Ordinal);
+    private Dictionary<string, List<NodeCard.Bead>> _beadsByNode = new(StringComparer.Ordinal);
+    private Dictionary<string, IReadOnlyList<DownloadStatus>?> _downloads = new(StringComparer.Ordinal);
+    private DateTimeOffset _downloadsAt = DateTimeOffset.MinValue;
+
+    // Models.
+    private List<Row> _rows = [];
+    private IReadOnlyList<ModelDefinition> _definitions = [];
+    private int _readyCount;
+    private int _scopeReady;
+    private int _scopeShouldRun;
+    private int _generationCount;
+    private double _modelsGiB;
+    private MemorySnapshot _memory = new(0, 0);
+    private IReadOnlyDictionary<string, string> _modelColors = new Dictionary<string, string>();
+    private HashSet<string> _poolingIds = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _servedNameById = new(StringComparer.Ordinal);
+    private Dictionary<string, ModelStatus> _statusById = new(StringComparer.Ordinal);
+    private Dictionary<string, RouterModelStats> _routerByServed = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyDictionary<string, ModelKpis> _fleetLatest = new Dictionary<string, ModelKpis>();
+    private IReadOnlyDictionary<string, ModelKpis> _latestKpis = new Dictionary<string, ModelKpis>();
+    private readonly Dictionary<string, IReadOnlyList<ModelSample>> _modelSamples = new(StringComparer.Ordinal);
+
+    // KPI strip.
+    private double? _fleetGen;
+    private double? _fleetReq;
+    private double? _fleetTtft;
+    private double? _errorPct;
+    private double? _measuredErrorPct;
+    private long _routerTotal;
+    private long _routerFailed;
+    private bool _nodeTiles;
+    private double? _fleetFree;
+    private double? _fleetTotal;
+    private int _fleetMemoryNodes;
+    private int _scopeNodeCount;
+    private double? _busiestGpu;
+    private string? _busiestNode;
+    private GpuSnapshot? _busiestGpuSnapshot;
+    private GpuSnapshot? _gpu;
+    private List<DateTimeOffset> _times = [];
+    private IReadOnlyList<double?> _genTrend = [];
+    private IReadOnlyList<double?> _reqTrend = [];
+    private IReadOnlyList<double?> _ttftTrend = [];
+    private IReadOnlyList<double?> _errTrend = [];
+    private IReadOnlyList<double?> _freeTrend = [];
+    private IReadOnlyList<double?> _gpuTrend = [];
+
+    // Signal, leaderboard, readout, history.
+    private SignalChart.Payload _signal = SignalChart.Empty(2);
+    private string _signalEnd = "now";
+    private Pulse _pulse = new(null, UiFormat.Missing, 0, 0, null, null);
+    private List<ModelTable.Row> _tableRows = [];
+    private List<ModelTable.Off> _off = [];
+    private ModelTable? _table;
+    private string? _selectedModelId;
+    private string? _focusRowId;
+    private bool _focusReadout;
+    private ElementReference _readoutHeading;
+    private IReadOnlyList<HostSample> _hostSamples = [];
+    private IReadOnlyList<MonitoringSeries.GpuInWindow>? _gpus;
+
+    // Fleet counters and service levels.
+    private FleetStatsSnapshot? _stats;
+    private double? _errorBudgetLeft;
+    private List<ServiceLevelPanel.Bar> _serviceBars = [];
+    private List<string> _serviceChips = [];
+
+    private string? _addedId;
+    private string? _addedName;
+
+    /// <summary><c>?added={id}</c>: the editor just registered this model; suggest tuning it.</summary>
+    [SupplyParameterFromQuery(Name = "added")]
+    public string? AddedQuery { get; set; }
+
+    // ================================================================ derived
+
+    private bool MultiNode => _nodes.Count > 1;
+
+    /// <summary>True when the rail narrowed the page to one node of several.</summary>
+    private bool Scoped => MultiNode && !_allScope;
+
+    private string SelectedNodeName => _nodes.FirstOrDefault(n => n.Id == _nodeId)?.Name ?? _nodeId;
+
+    private string ScopeTitle => Scoped ? SelectedNodeName : MultiNode ? "Fleet" : "This host";
+
+    private string OnScope => Scoped ? $" on {SelectedNodeName}" : MultiNode ? " on any node" : "";
+
+    private string PulseTitle => Scoped ? $"Generation on {SelectedNodeName}" : MultiNode ? "Fleet generation" : "Generation";
+
+    private string TrendLabel => $"last {FormatWindow(_window)}";
+
+    private string SubtitleText => "Where models run, how fast, and what needs you" + (_nodeRows.Count > 1 ? $" · {_nodeRows.Count} nodes" : "");
+
+
+    /// <summary>
+    /// Anything served in the window: tokens, requests or finished requests (errors count). The router's totals run since
+    /// the controller started, so they do not count as traffic in the window.
+    /// </summary>
+    private bool HasTraffic =>
+        _fleetGen is > 0
+        || _fleetReq is > 0
+        || _measuredErrorPct is not null
+        || _errTrend.Any(v => v is not null)
+        || _genTrend.Any(v => v is > 0)
+        || _reqTrend.Any(v => v is > 0);
+
+    private string NoTrafficDetail => _scopeReady == 0
+        ? $"No model is Ready{OnScope}, so there is no generation, request rate, latency or error rate to show."
+        : $"{_scopeReady} Ready {(_scopeReady == 1 ? "model has" : "models have")} served nothing in the last {FormatWindow(_window)}. Generation, requests, TTFT and errors appear here once requests arrive.";
+
+    private string FleetDetail => _scopeReady == 0
+        ? "No model is Ready"
+        : $"Across {_generationCount} generation models";
+
+    // Router totals stay at 0 until the OpenAI-compatible router itself has handled a request; while that's true, the
+    // tile falls back to the measured vLLM finish reasons, so it must say which source it means.
+    private string ErrorDetail => _routerTotal != 0
+        ? $"{UiFormat.Whole(_routerFailed)} failed of {UiFormat.Whole(_routerTotal)} routed since the controller started"
+        : _errorPct is null
+            ? "No requests routed since the controller started"
+            : $"vLLM finish reasons, last {FormatWindow(_window)}";
+
+    private string MemoryFreeValue => _nodeTiles
+        ? UiFormat.Decimal1(_fleetFree)
+        : UiFormat.Decimal1(_memory.TotalGiB > 0 ? _memory.AvailableGiB : null);
+
+    private string MemoryDetail
+    {
+        get
+        {
+            if (!_nodeTiles)
+            {
+                return $"{UiFormat.Decimal1(_memory.TotalGiB - _memory.AvailableGiB)} of {UiFormat.GiB(_memory.TotalGiB)} used";
+            }
+
+            if (_fleetMemoryNodes == 0)
+            {
+                return Scoped ? $"{SelectedNodeName} has sent no memory reading" : "No node has sent a memory reading";
+            }
+
+            if (Scoped)
+            {
+                return $"{UiFormat.Decimal1(_fleetTotal - _fleetFree)} of {UiFormat.GiB(_fleetTotal)} used on {SelectedNodeName}";
+            }
+
+            string text = $"{UiFormat.Decimal1(_fleetTotal - _fleetFree)} of {UiFormat.GiB(_fleetTotal)} used across {_fleetMemoryNodes} {(_fleetMemoryNodes == 1 ? "node" : "nodes")}";
+            int missing = _scopeNodeCount - _fleetMemoryNodes;
+            return missing > 0 ? $"{text} ({missing} not reporting)" : text;
+        }
+    }
+
+    private double? GpuValue => _nodeTiles ? _busiestGpu : _gpu?.UtilizationPercent;
+
+    private string GpuDetail
+    {
+        get
+        {
+            if (_nodeTiles && !Scoped)
+            {
+                return _busiestNode is null ? "No GPU telemetry" : $"Busiest of {_scopeNodeCount} nodes: {_busiestNode}";
+            }
+
+            var gpu = _nodeTiles ? _busiestGpuSnapshot : _gpu;
+            if (gpu is null)
+            {
+                return _nodeTiles && _busiestGpu is not null ? "Utilization only" : "No GPU telemetry";
+            }
+
+            var parts = new List<string>(2);
+            if (UiFormat.HasValue(gpu.PowerWatts))
+            {
+                parts.Add($"{UiFormat.Number(gpu.PowerWatts)} W");
+            }
+
+            if (UiFormat.HasValue(gpu.TemperatureC))
+            {
+                parts.Add($"{UiFormat.Number(gpu.TemperatureC)} °C");
+            }
+
+            return parts.Count == 0 ? "Utilization only" : string.Join(" · ", parts);
+        }
+    }
+
+    private double? TokensToday => _stats is { } stats && _statsStore is { } store ? stats.TokensOn(_now, store.Zone) : null;
+
+    private TimeSpan? CrashFree => _stats is { } stats ? _now - (stats.LastCrashAt ?? stats.StartedAt) : null;
+
+    /// <summary>The TTFT target as people say it: "1 s", "750 ms".</summary>
+    private string TargetText => _targets.TtftTargetMs >= 1000 && _targets.TtftTargetMs % 1000 == 0
+        ? $"{UiFormat.Whole(_targets.TtftTargetMs / 1000)} s"
+        : $"{UiFormat.Whole(_targets.TtftTargetMs)} ms";
+
+    // ================================================================ lifecycle
+
+    protected override async Task OnInitializedAsync()
+    {
+        _history = ServiceProvider.GetService<IMetricsHistory>();
+        _metricsReader = ServiceProvider.GetService<IModelMetricsReader>();
+        _nodeCache = ServiceProvider.GetService<INodeStatusCache>();
+        _recovery = ServiceProvider.GetService<ModelRecoveryState>();
+        _nodeRegistry = ServiceProvider.GetService<INodeRegistry>();
+        _statsStore = ServiceProvider.GetService<FleetStatsStore>();
+        _targets = ServiceProvider.GetService<IOptions<OverviewOptions>>()?.Value ?? new OverviewOptions();
+        _reserveGiB = ServiceProvider.GetService<IOptions<MirbadLLMOptions>>()?.Value.MemoryReserveGiB ?? new MirbadLLMOptions().MemoryReserveGiB;
+        if (ServiceProvider.GetService<IOptions<MetricsOptions>>()?.Value.SampleInterval is { Ticks: > 0 } interval)
+        {
+            _bucketWidth = interval;
+        }
+
+        _defaultNodeId = ServiceProvider.GetService<IOptions<RegistryMigrationOptions>>()?.Value.EffectiveBootstrapNodeId ?? _defaultNodeId;
+        _nodeId = _defaultNodeId;
+        _requestedNodeId = NodeSelector.FromQuery(Nav);
+        _allScope = _requestedNodeId is null || string.Equals(_requestedNodeId, NodeScopeRail.AllScope, StringComparison.OrdinalIgnoreCase);
+        if (_allScope)
+        {
+            _requestedNodeId = null;
+        }
+
+        _selectedModelId = NodeSelector.FromQuery(Nav, ModelQueryKey);
+
+        _cts = new CancellationTokenSource();
+        _live = LiveDataService.Resolve(ServiceProvider, out _ownsLive);
+        await ApplyAsync(await _live.GetAsync(Needs, _cts.Token));
+
+        // Data follows the circuit's shared 5 s refresh; its 1 s clock only re-renders elapsed timers while a model is
+        // Starting or Stopping.
+        _subscription = _live.Subscribe(Needs,
+            snapshot => InvokeAsync(async () =>
+            {
+                await ApplyAsync(snapshot);
+                StateHasChanged();
+            }),
+            now => _rows.Any(r => r.Status.State is ModelState.Starting or ModelState.Stopping)
+                ? InvokeAsync(() =>
+                {
+                    _now = now;
+                    StateHasChanged();
+                })
+                : Task.CompletedTask);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        try
+        {
+            if (_focusReadout && _selectedModelId is not null && _readoutHeading.Context is not null)
+            {
+                _focusReadout = false;
+                await _readoutHeading.FocusAsync();
+            }
+
+            // A closed readout hands focus back to the row that opened it.
+            if (_focusRowId is { } id && _table is not null)
+            {
+                _focusRowId = null;
+                await _table.FocusRowAsync(id);
+            }
+        }
+        catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException or TaskCanceledException)
+        {
+            // Prerendering or a dropped circuit: focus is a nicety.
+        }
+    }
+
+    /// <summary>Reloads now through the shared service, so the status bar updates in the same pass.</summary>
+    private async Task LoadAsync()
+    {
+        if (_live is not null)
+        {
+            await ApplyAsync(await _live.RefreshAsync(_cts?.Token ?? CancellationToken.None));
+        }
+    }
+
+    private async Task ApplyAsync(LiveSnapshot snapshot)
+    {
+        var ct = _cts?.Token ?? CancellationToken.None;
+        _snapshot = snapshot;
+        _now = DateTimeOffset.UtcNow;
+        _loadedAt = snapshot.At;
+        _liveError = snapshot.Error;
+        _memory = snapshot.Memory ?? _memory;
+        var definitions = snapshot.Models ?? [];
+
+        try
+        {
+            var reading = await FleetNodes.ReadAsync(_nodeCache, _nodeRegistry, definitions, ct);
+            _nodeRows = reading.Rows;
+            _records = reading.Records;
+            _nodesError = reading.Error;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Keep the last node list: the charts still read the history, and the next refresh retries. Say so (the old
+            // Monitoring page swallowed this).
+            _nodesError = $"Could not read the node states: {ex.Message}";
+        }
+
+        _nodes = NodeSelector.From(_nodeRows);
+        _nodeId = NodeSelector.Resolve(_nodes, _requestedNodeId ?? _nodeId, _defaultNodeId);
+
+        // ?added=: the editor just registered this model.
+        if (!string.IsNullOrEmpty(AddedQuery) && definitions.FirstOrDefault(d => d.Id == AddedQuery) is { } added)
+        {
+            _addedId = added.Id;
+            _addedName = added.ServedName;
+        }
+
+        // Legacy composition without a history: the KPI strip reads each Ready model's live metrics instead.
+        var loads = new List<ModelMetrics>();
+        if (_history is null && _metricsReader is not null)
+        {
+            foreach (var definition in definitions.Where(d => snapshot.Statuses?.GetValueOrDefault(d.Id)?.State == ModelState.Ready))
+            {
+                if (await _metricsReader.GetAsync(definition.Id, ct) is { } load)
+                {
+                    loads.Add(load);
+                }
+            }
+        }
+
+        _legacyLoads = loads;
+        await ReadSideDataAsync(definitions, ct);
+        Compute();
+    }
+
+    private List<ModelMetrics> _legacyLoads = [];
+
+    /// <summary>Reads what the side panels need beyond the snapshot: the nodes' downloads (every 15 s). A failure leaves
+    /// that part unknown ("—"), never the page broken.</summary>
+    private async Task ReadSideDataAsync(IReadOnlyList<ModelDefinition> definitions, CancellationToken ct)
+    {
+        if (ServiceProvider.GetService<IHuggingFaceDownloader>() is { } registered && _now - _downloadsAt >= TimeSpan.FromSeconds(15))
+        {
+            _downloadsAt = _now;
+            var targets = _nodeRows.Count == 0 ? [_defaultNodeId] : _nodeRows.Where(n => n.IsServing).Select(n => n.Id).ToList();
+            var results = await Task.WhenAll(targets.Select(async id => (id, list: await DownloadsOfAsync(registered, id, ct))));
+            _downloads = results.ToDictionary(r => r.id, r => r.list, StringComparer.Ordinal);
+        }
+    }
+
+    private async Task<IReadOnlyList<DownloadStatus>?> DownloadsOfAsync(IHuggingFaceDownloader registered, string nodeId, CancellationToken ct)
+    {
+        IHuggingFaceDownloader? downloader = (registered is MirbadLLM.Orchestration.Multinode.RemoteHuggingFaceDownloader own ? own.NodeId == nodeId : nodeId == _defaultNodeId)
+            ? registered
+            : ServiceProvider.GetService<MirbadLLM.Orchestration.Recovery.IRestoreNodeResources>()?.DownloaderFor(nodeId);
+        if (downloader is null)
+        {
+            return null;
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(3));
+        try
+        {
+            return await downloader.ListAsync(timeout.Token);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            return null; // unreachable node or a slow agent: the panel says "—"
+        }
+    }
+
+    // ================================================================ compute
+
+    /// <summary>Everything the page shows, from the last snapshot, the history and the scope and window.</summary>
+    private void Compute()
+    {
+        if (_snapshot is not { } snapshot)
+        {
+            return;
+        }
+
+        var definitions = snapshot.Models ?? [];
+        var statuses = snapshot.Statuses ?? new Dictionary<string, ModelStatus>();
+        bool scoped = Scoped;
+        HashSet<string>? onNode = scoped ? MonitoringSeries.ModelsOn(definitions, _nodeId, _defaultNodeId) : null;
+        bool InScope(string id) => onNode is null || onNode.Contains(id);
+        var scopeRows = scoped ? _nodeRows.Where(n => n.Id == _nodeId).ToList() : _nodeRows;
+
+        // ---- host series ----
+        var series = _nodeRows.ToDictionary(n => n.Id, n => _history?.GetHost(n.Id, _window) ?? [], StringComparer.Ordinal);
+        _summaries = _nodes.Select(n => MonitoringNodes.Summarize(n.Id, n.Name, series.GetValueOrDefault(n.Id) ?? [])).ToList();
+        _summaryById = _summaries.ToDictionary(s => s.NodeId, StringComparer.Ordinal);
+        _hostSamples = _history is null ? []
+            : scoped ? series.GetValueOrDefault(_nodeId) ?? []
+            : _nodeRows.Count == 1 ? series[_nodeRows[0].Id]
+            : _nodeRows.Count == 0 ? _history.GetHost(_window)
+            : [];
+        _gpus = MonitoringSeries.Gpus(_hostSamples);
+        var scopeSeries = scopeRows.ToDictionary(n => n.Id, n => series.GetValueOrDefault(n.Id) ?? [], StringComparer.Ordinal);
+
+        // One series: every trend lines up on that node's sampler instants. Several nodes: each node's collector samples
+        // on its own clock, so fleet sums line up on sampling-interval buckets instead, and a bucket a node has no sample
+        // in is a gap, never a partial sum.
+        bool grouped = scopeRows.Count > 1;
+        _times = grouped
+            ? scopeSeries.Values.SelectMany(s => s).Select(s => Bucket(s.At)).Distinct().Order().ToList()
+            : _hostSamples.Select(s => s.At).ToList();
+
+        // ---- models ----
+        var registered = definitions.Select(d => d.Id).ToHashSet(StringComparer.Ordinal);
+        var latest = (_history?.Latest() ?? snapshot.LatestKpis)
+            .Where(kv => registered.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
+        _fleetLatest = latest;
+        _latestKpis = latest.Where(kv => InScope(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
+
+        var rows = new List<Row>(definitions.Count);
+        var bucketed = new Dictionary<string, IReadOnlyList<ModelSample>>(StringComparer.Ordinal);
+        _modelSamples.Clear();
+        double modelsGiB = 0;
+        foreach (var definition in definitions)
+        {
+            var status = statuses.TryGetValue(definition.Id, out var s) ? s : new ModelStatus(definition.Id, ModelState.Stopped);
+            rows.Add(new Row(definition, status));
+            if (status.State is ModelState.Starting or ModelState.Ready or ModelState.Stopping)
+            {
+                modelsGiB += definition.MemoryBudgetGiB;
+            }
+
+            if (!InScope(definition.Id) || _history is null)
+            {
+                continue;
+            }
+
+            var samples = _history.GetModel(definition.Id, _window);
+            _modelSamples[definition.Id] = samples;
+            // Last sample per bucket, re-stamped on the bucket, so the fleet sums below add one value per model.
+            bucketed[definition.Id] = grouped ? samples.GroupBy(x => Bucket(x.At)).Select(g => g.Last() with { At = g.Key }).ToList() : samples;
+        }
+
+        _rows = rows;
+        _definitions = definitions;
+        _modelsGiB = modelsGiB;
+        _readyCount = rows.Count(r => r.Status.State == ModelState.Ready);
+        var scopeModelRows = rows.Where(r => InScope(r.Definition.Id)).ToList();
+        _scopeReady = scopeModelRows.Count(r => r.Status.State == ModelState.Ready);
+        _scopeShouldRun = scopeModelRows.Count(r => r.Status.State is ModelState.Ready or ModelState.Starting or ModelState.Failed);
+        _generationCount = scopeModelRows.Count(r => r.Status.State == ModelState.Ready && PoolingDetection.Detect(r.Definition) == PoolingMode.None);
+        _servedNameById = definitions.ToDictionary(d => d.Id, d => d.ServedName, StringComparer.Ordinal);
+        _statusById = new Dictionary<string, ModelStatus>(statuses, StringComparer.Ordinal);
+        _poolingIds = definitions.Where(d => PoolingDetection.Detect(d) != PoolingMode.None).Select(d => d.Id).ToHashSet(StringComparer.Ordinal);
+        // Colours over every node's models (and named GPU consumers), so a model keeps its colour when the scope changes.
+        _modelColors = ModelColors.Assign(definitions.Select(d => d.Id).Concat(latest.Keys), _hostSamples.SelectMany(h => h.OtherGpuGiB?.Keys ?? []));
+
+        // ---- KPI strip ----
+        // (Every sum goes through FiniteSum: a KPI a runtime does not report is NaN — llama.cpp has no requests/min — and
+        //  one NaN used to make the whole fleet tile read "—", hiding the vLLM models' rate (MN-230, MN-234).)
+        var readyKpis = scopeModelRows
+            .Where(r => r.Status.State == ModelState.Ready && latest.ContainsKey(r.Definition.Id))
+            .Select(r => latest[r.Definition.Id])
+            .ToList();
+        _fleetGen = _scopeReady == 0 ? null
+            : readyKpis.Count > 0 ? FiniteSum(readyKpis.Select(k => k.Load.GenerationTokensPerSecond))
+            // ?? 0 keeps the pre-MN-234 answer of the legacy branch: no model carries a load at all is 0, not "—".
+            : FiniteSum(_legacyLoads.Select(l => l.GenerationTokensPerSecond)) ?? 0;
+        _fleetReq = readyKpis.Count == 0 ? null : FiniteSum(readyKpis.Select(k => k.RequestsPerMinute));
+        _fleetTtft = readyKpis.Select(k => k.TimeToFirstToken?.P95).Where(UiFormat.HasValue).DefaultIfEmpty(null).Max();
+
+        var all = bucketed.Values.SelectMany(x => x).GroupBy(x => x.At).ToDictionary(g => g.Key, g => g.ToList());
+        _genTrend = _times.Select(t => all.TryGetValue(t, out var g) ? FiniteSum(g.Select(x => x.Kpis.Load.GenerationTokensPerSecond)) : null).ToList();
+        _reqTrend = _times.Select(t => all.TryGetValue(t, out var g) ? FiniteSum(g.Select(x => x.Kpis.RequestsPerMinute)) : null).ToList();
+        _ttftTrend = _times.Select(t => all.TryGetValue(t, out var g) ? g.Select(x => x.Kpis.TimeToFirstToken?.P95).Where(UiFormat.HasValue).DefaultIfEmpty(null).Max() : null).ToList();
+        // Router stats carry no history, so the error-rate tile's trend comes from vLLM's own finish reasons instead.
+        _errTrend = _times.Select(t => all.TryGetValue(t, out var g) ? ErrorPercentOf(g.Select(x => x.Kpis)) : null).ToList();
+
+        _nodeTiles = _nodeRows.Count > 1;
+        _scopeNodeCount = scopeRows.Count;
+        if (_nodeTiles)
+        {
+            _freeTrend = grouped ? FleetTrend(scopeSeries, _times, FreeOf, v => v.Sum()) : _hostSamples.Select(FreeOf).ToList();
+            _gpuTrend = grouped ? FleetTrend(scopeSeries, _times, UtilizationOf, v => v.Max()) : _hostSamples.Select(UtilizationOf).ToList();
+            ApplyFleetLatest(scopeRows, scopeSeries);
+        }
+        else
+        {
+            _freeTrend = _hostSamples.Select(h => (double?)h.Memory.AvailableGiB).ToList();
+            _gpuTrend = _hostSamples.Select(h => h.Gpu?.UtilizationPercent).ToList();
+        }
+
+        _gpu = _hostSamples.Count > 0 ? _hostSamples[^1].Gpu : null;
+        _measuredErrorPct = ErrorPercentOf(readyKpis);
+
+        var router = RouterStats.Snapshot();
+        _routerByServed = router.GroupBy(r => r.ServedName, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
+        var scopeServed = scoped ? scopeModelRows.Select(r => r.Definition.ServedName).ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
+        var scopeRouter = router.Where(r => scopeServed is null || scopeServed.Contains(r.ServedName)).ToList();
+        _routerTotal = scopeRouter.Sum(r => r.TotalRequests);
+        _routerFailed = scopeRouter.Sum(r => r.FailedRequests);
+        // The router has not routed anything yet (e.g. only ever called through each model's own port): fall back to the
+        // measured vLLM finish reasons rather than showing a dash while errors happen.
+        _errorPct = _routerTotal == 0 ? _measuredErrorPct : (double)_routerFailed / _routerTotal * 100;
+
+        // ---- leaderboard and Signal ----
+        _stats = _statsStore?.Snapshot();
+        _tableRows = _latestKpis.Select(kv => RowFor(kv.Key, kv.Value)).ToList();
+        _off = definitions.Where(d => InScope(d.Id) && !_latestKpis.ContainsKey(d.Id))
+            .OrderBy(d => d.ServedName, StringComparer.OrdinalIgnoreCase)
+            .Select(d => new ModelTable.Off(d.Id, d.ServedName, _statusById.GetValueOrDefault(d.Id)?.State ?? ModelState.Stopped, WhereFor(d.Id)))
+            .ToList();
+        _pulse = PulseFor(Math.Max(definitions.Count(d => InScope(d.Id)), _latestKpis.Count));
+        _signal = BuildSignal(definitions.Where(d => InScope(d.Id)).ToList(), scopeRows, scopeSeries);
+        _beadsByNode = _nodes.ToDictionary(
+            n => n.Id,
+            n =>
+            {
+                var placed = MonitoringSeries.ModelsOn(definitions, n.Id, _defaultNodeId);
+                return definitions.Where(d => placed.Contains(d.Id)).OrderBy(d => d.Id, StringComparer.Ordinal)
+                    .Select(d => new NodeCard.Bead(d.ServedName, _modelColors.GetValueOrDefault(d.Id, "var(--ss-series-other)"), latest.ContainsKey(d.Id)))
+                    .ToList();
+            },
+            StringComparer.Ordinal);
+
+        // The readout stays open across refreshes; it closes when its model stops or leaves the scope.
+        if (_selectedModelId is not null && snapshot.Models is not null && !_latestKpis.ContainsKey(_selectedModelId))
+        {
+            _selectedModelId = null;
+        }
+
+        // ---- nodes ----
+        _views = scopeRows.Select(node =>
+        {
+            var latestHost = series.TryGetValue(node.Id, out var list) && list.Count > 0 ? list[^1] : null;
+            var placed = rows.Where(r => r.Definition.Placement?.NodeId == node.Id)
+                .Select(r => new FleetNodes.PlacedModel(r.Definition, r.Status.State)).ToList();
+            return FleetNodes.ViewFor(node, placed, _records.GetValueOrDefault(node.Id), latestHost);
+        }).ToList();
+
+        ComputeServiceLevels();
+    }
+
+    /// <summary>The service levels and their chips, from the figures above.</summary>
+    private void ComputeServiceLevels()
+    {
+        _errorBudgetLeft = ServiceLevels.ErrorBudgetLeft(_errorPct, _targets.ErrorBudgetPercent);
+
+        _serviceBars =
+        [
+            new("availability", "Availability", "models Ready",
+                _scopeShouldRun > 0 ? $"{_scopeReady} / {_scopeShouldRun}" : UiFormat.Missing, ServiceLevels.AvailabilityScore(_scopeReady, _scopeShouldRun)),
+            new("errors", "Error budget", $"under {UiFormat.Number(_targets.ErrorBudgetPercent)}% failed",
+                _errorBudgetLeft is double left ? $"{UiFormat.Whole(left * 100)}% left" : UiFormat.Missing, _errorBudgetLeft),
+            new("latency", "Latency", $"TTFT p95 under {TargetText}",
+                UiFormat.LatencyText(_fleetTtft), ServiceLevels.LatencyScore(_fleetTtft, _targets.TtftTargetMs)),
+        ];
+
+        var chips = new List<string>(3);
+        if (ZeroErrorStreak() is { } streak)
+        {
+            chips.Add(streak);
+        }
+
+        if (CrashFree is { } crashFree)
+        {
+            chips.Add($"Crash-free · {FleetStatsPanel.Streak(crashFree)}");
+        }
+
+        if (_scopeShouldRun > 0)
+        {
+            chips.Add(_scopeReady == _scopeShouldRun ? $"Full house · {_scopeReady}/{_scopeShouldRun}" : $"Ready · {_scopeReady}/{_scopeShouldRun}");
+        }
+
+        _serviceChips = chips;
+    }
+
+    /// <summary>"Zero-error streak · 47 min" from the error trend; "No errors · last 15 min" for a clean window; null without traffic.</summary>
+    private string? ZeroErrorStreak()
+    {
+        if (!_errTrend.Any(v => v is not null))
+        {
+            return null;
+        }
+
+        for (int i = _errTrend.Count - 1; i >= 0; i--)
+        {
+            if (_errTrend[i] is > 0 && i < _times.Count)
+            {
+                var clean = _now - _times[i];
+                return clean < TimeSpan.FromMinutes(1) ? null : $"Zero-error streak · {FleetStatsPanel.Streak(clean)}";
+            }
+        }
+
+        return $"No errors · last {FormatWindow(_window)}";
+    }
+
+    // ================================================================ events
+
+    private void SelectWindow(TimeSpan window)
+    {
+        _window = window;
+        Compute();
+    }
+
+    private void OnScopeSelected(string? scope)
+    {
+        if (string.IsNullOrEmpty(scope) || (scope != NodeScopeRail.AllScope && _nodes.All(n => n.Id != scope)))
+        {
+            return;
+        }
+
+        // Pressing the scoped node's card again goes back to every node.
+        _allScope = scope == NodeScopeRail.AllScope || (!_allScope && scope == _nodeId);
+        if (!_allScope)
+        {
+            _nodeId = scope;
+            _requestedNodeId = scope;
+        }
+
+        Compute();
+
+        // A readout of a model outside the new scope closed in Compute; the URL follows both.
+        UrlQuery.For(Nav).Replace(new Dictionary<string, object?>
+        {
+            [NodeSelector.DefaultQueryKey] = _allScope ? null : _nodeId,
+            [ModelQueryKey] = _selectedModelId,
+        });
+    }
+
+    private void OnModelSelected(string? modelId)
+    {
+        if (modelId is null && _selectedModelId is not null)
+        {
+            _focusRowId = _selectedModelId;
+        }
+
+        _selectedModelId = modelId;
+        _focusReadout = modelId is not null;
+        UrlQuery.For(Nav).Replace(ModelQueryKey, modelId);
+    }
+
+    private void OnReadoutKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && _selectedModelId is not null)
+        {
+            OnModelSelected(null);
+        }
+    }
+
+
+    // ================================================================ leaderboard rows
+
+    private string ServedNameFor(string modelId) => _servedNameById.GetValueOrDefault(modelId, modelId);
+
+    private RouterModelStats? RouterFor(string modelId) => _routerByServed.GetValueOrDefault(ServedNameFor(modelId));
+
+    private ModelTable.Row RowFor(string modelId, ModelKpis kpis)
+    {
+        bool pooling = _poolingIds.Contains(modelId);
+        var badge = ModelBadge(modelId);
+        var router = RouterFor(modelId);
+        List<double?> trend = _modelSamples.TryGetValue(modelId, out var samples)
+            ? samples.Select(s => s.HasRates ? (double?)(pooling ? s.Kpis.Load.PromptTokensPerSecond : s.Kpis.Load.GenerationTokensPerSecond) : null).ToList()
+            : [];
+        return new ModelTable.Row(
+            modelId,
+            ServedNameFor(modelId),
+            _modelColors.GetValueOrDefault(modelId, "var(--ss-series-other)"),
+            WhereFor(modelId),
+            badge.Text,
+            badge.Icon,
+            badge.Tone,
+            pooling,
+            pooling ? kpis.Load.PromptTokensPerSecond : kpis.Load.GenerationTokensPerSecond,
+            trend,
+            kpis.Load.RunningRequests,
+            kpis.Load.WaitingRequests,
+            kpis.Load.KvCacheUsage * 100,
+            kpis.TimeToFirstToken?.P95,
+            router?.TotalRequests,
+            ErrorPercent(router is null ? [] : [router]));
+    }
+
+    /// <summary>The Signal panel's facts over the Ready models of the scope; embedding models stay out of the generation total.</summary>
+    private Pulse PulseFor(int registered)
+    {
+        var generation = _latestKpis.Where(kv => !_poolingIds.Contains(kv.Key)).Select(kv => kv.Value.Load.GenerationTokensPerSecond).ToList();
+        var routers = _latestKpis.Keys.Select(RouterFor).OfType<RouterModelStats>().ToList();
+        return new Pulse(
+            generation.Count == 0 ? null : generation.Where(v => UiFormat.HasValue(v)).Sum(),
+            $"{_latestKpis.Count}/{registered}",
+            _latestKpis.Values.Select(k => k.Load.RunningRequests).Where(v => UiFormat.HasValue(v)).Sum(),
+            _latestKpis.Values.Select(k => k.Load.WaitingRequests).Where(v => UiFormat.HasValue(v)).Sum(),
+            routers.Count == 0 ? null : routers.Sum(r => r.InFlight),
+            ErrorPercent(routers));
+    }
+
+    /// <summary>Failed share of the router's requests, in percent; null without requests.</summary>
+    private static double? ErrorPercent(IReadOnlyList<RouterModelStats> stats)
+    {
+        long total = stats.Sum(s => s.TotalRequests);
+        return total == 0 ? null : (double)stats.Sum(s => s.FailedRequests) / total * 100;
+    }
+
+    /// <summary>"dev-b · llama.cpp" for a model of the snapshot (with several nodes; one node needs no "where").</summary>
+    private string? WhereFor(string modelId)
+    {
+        var definition = _snapshot?.Models?.FirstOrDefault(d => d.Id == modelId);
+        if (definition is null)
+        {
+            return null;
+        }
+
+        string runtime = LlamaCppEditing.RuntimeName(definition.Runtime);
+        if (!MultiNode)
+        {
+            return runtime;
+        }
+
+        string nodeId = definition.Placement?.NodeId ?? _defaultNodeId;
+        return $"{_nodes.FirstOrDefault(n => n.Id == nodeId)?.Name ?? nodeId} · {runtime}";
+    }
+
+    /// <summary>The benchmark or tuning run on this model, when one is running.</summary>
+    private MaintenanceState? JobFor(string modelId) => _snapshot?.JobOn(modelId);
+
+    private static string JobHref(MaintenanceState job) =>
+        $"models/{Uri.EscapeDataString(job.ModelId)}/{(job.JobKind == "tuning" ? "tune" : "benchmark")}";
+
+    /// <summary>A Ready model's state as text, icon and <c>.state--*</c> tone, for its leaderboard row and its readout.</summary>
+    private (string Text, string Icon, string Tone) ModelBadge(string modelId)
+    {
+        var status = _statusById.GetValueOrDefault(modelId);
+        var job = JobFor(modelId);
+        return job is not null
+            ? (job.JobKind == "tuning" ? "Tuning" : "Benchmarking", job.JobKind == "tuning" ? "sliders" : "gauge", "starting")
+            : status is { RestartPending: true }
+                ? ("Restart pending", "refresh", "starting")
+                : _latestKpis[modelId].Load.RunningRequests > 0
+                    ? ("Busy", "gauge", "starting")
+                    : ("Ready", "state-ready", "ready");
+    }
+
+    // ================================================================ Signal
+
+    /// <summary>
+    /// The Signal chart's columns: one per sampling interval across the window, the latest sample of each model (and node)
+    /// in each. Models are the scope's generation models; heat rows are the scope's nodes, one per GPU on a discrete node.
+    /// </summary>
+    private SignalChart.Payload BuildSignal(List<ModelDefinition> scopeModels, List<Nodes.NodeRow> scopeRows, Dictionary<string, IReadOnlyList<HostSample>> scopeSeries)
+    {
+        if (_history is null)
+        {
+            return SignalChart.Empty(2);
+        }
+
+        int columns = Math.Max(2, (int)Math.Round(_window / _bucketWidth));
+        // The axis ends at the newest sample (now, while the sampler runs), so a stalled sampler shows its last data.
+        var newest = _modelSamples.Values.SelectMany(s => s).Select(s => (DateTimeOffset?)s.At)
+            .Concat(scopeSeries.Values.SelectMany(s => s).Select(s => (DateTimeOffset?)s.At))
+            .Concat(_hostSamples.Select(s => (DateTimeOffset?)s.At))
+            .Max() ?? _now;
+        var end = Bucket(newest);
+        _signalEnd = _now - newest <= _bucketWidth * 3 ? "now" : UiFormat.ClockTimeUtc(newest);
+        var start = end - (_bucketWidth * (columns - 1));
+        int Column(DateTimeOffset at) => (int)Math.Floor((Bucket(at) - start) / _bucketWidth);
+
+        var models = new List<SignalChart.Series>();
+        foreach (var definition in scopeModels
+            .Where(d => !_poolingIds.Contains(d.Id) && _modelSamples.TryGetValue(d.Id, out var s) && s.Count > 0)
+            .OrderBy(d => d.Id, StringComparer.Ordinal))
+        {
+            var values = new double?[columns];
+            foreach (var sample in _modelSamples[definition.Id])
+            {
+                int c = Column(sample.At);
+                if (c >= 0 && c < columns && sample.HasRates && UiFormat.HasValue(sample.Kpis.Load.GenerationTokensPerSecond))
+                {
+                    values[c] = sample.Kpis.Load.GenerationTokensPerSecond;
+                }
+            }
+
+            models.Add(new(definition.ServedName, _modelColors.GetValueOrDefault(definition.Id, "var(--ss-series-other)"), values));
+        }
+
+        var heat = new List<SignalChart.HeatRow>();
+        void AddRow(string label, IEnumerable<(DateTimeOffset At, double? Value)> points)
+        {
+            var values = new double?[columns];
+            bool any = false;
+            foreach (var (at, value) in points)
+            {
+                int c = Column(at);
+                if (c >= 0 && c < columns && UiFormat.HasValue(value))
+                {
+                    values[c] = value;
+                    any = true;
+                }
+            }
+
+            if (any)
+            {
+                heat.Add(new(label, values));
+            }
+        }
+
+        if (scopeRows.Count == 0)
+        {
+            AddRow("GPU", _hostSamples.Select(h => (h.At, UtilizationOf(h))));
+        }
+
+        foreach (var node in scopeRows)
+        {
+            var samples = scopeSeries.GetValueOrDefault(node.Id) ?? [];
+            if (MonitoringSeries.Gpus(samples) is { Count: > 1 } gpus)
+            {
+                foreach (var gpu in gpus)
+                {
+                    AddRow($"{node.Name} · {gpu.Label}", samples.Select(h => (h.At, h.Gpus?.FirstOrDefault(g => g.Uuid == gpu.Uuid)?.UtilizationPercent)));
+                }
+            }
+            else
+            {
+                AddRow(node.Name, samples.Select(h => (h.At, UtilizationOf(h))));
+            }
+        }
+
+        // shortcut: past MaxHeatRows GPUs the strip keeps the first ones (by node name); a group-by-node row would scale further.
+        return SignalChart.Build(columns, models, heat.Take(MaxHeatRows).ToList());
+    }
+
+    // ================================================================ fleet helpers
+
+    /// <summary>Latest free memory over the scope's nodes (from each node's live memory) and the busiest GPU (from each
+    /// node's latest sample).</summary>
+    private void ApplyFleetLatest(List<Nodes.NodeRow> scopeRows, Dictionary<string, IReadOnlyList<HostSample>> scopeSeries)
+    {
+        double free = 0;
+        double total = 0;
+        int reporting = 0;
+        foreach (var node in scopeRows)
+        {
+            if (node.Memory is not { } memory)
+            {
+                continue;
+            }
+
+            var gpus = memory.Model == MemoryModel.Discrete ? memory.Gpus.Where(g => g.TotalGiB is not null).ToList() : [];
+            if (gpus.Count > 0)
+            {
+                free += gpus.Sum(g => g.FreeGiB ?? (g.UsedGiB is { } used ? g.TotalGiB!.Value - used : 0));
+                total += gpus.Sum(g => g.TotalGiB!.Value);
+            }
+            else
+            {
+                free += memory.HostAvailableGiB;
+                total += memory.HostTotalGiB;
+            }
+
+            reporting++;
+        }
+
+        _fleetMemoryNodes = reporting;
+        _fleetFree = reporting > 0 ? free : null;
+        _fleetTotal = reporting > 0 ? total : null;
+
+        _busiestGpu = null;
+        _busiestNode = null;
+        _busiestGpuSnapshot = null;
+        foreach (var node in scopeRows)
+        {
+            if (scopeSeries.TryGetValue(node.Id, out var list) && list.Count > 0 && UtilizationOf(list[^1]) is { } util
+                && (_busiestGpu is null || util > _busiestGpu))
+            {
+                _busiestGpu = util;
+                _busiestNode = node.Name;
+                _busiestGpuSnapshot = list[^1].Gpu;
+            }
+        }
+    }
+
+    /// <summary>The sum of the finite values of <paramref name="values"/>, or null when none of them is finite.</summary>
+    private static double? FiniteSum(IEnumerable<double> values)
+    {
+        double sum = 0;
+        bool any = false;
+        foreach (double value in values)
+        {
+            if (double.IsFinite(value))
+            {
+                sum += value;
+                any = true;
+            }
+        }
+
+        return any ? sum : null;
+    }
+
+    /// <summary>Memory free for models in one host sample: free VRAM over the GPUs of a discrete node, else host available.</summary>
+    private static double? FreeOf(HostSample sample)
+    {
+        if (sample.Gpus is { Count: > 0 } gpus)
+        {
+            return gpus.All(g => g.MemoryTotalGiB is not null && g.MemoryUsedGiB is not null)
+                ? gpus.Sum(g => g.MemoryTotalGiB!.Value - g.MemoryUsedGiB!.Value)
+                : null;
+        }
+
+        return sample.Memory.AvailableGiB;
+    }
+
+    /// <summary>GPU utilization in one host sample: the node's GPU reading, else its busiest GPU.</summary>
+    private static double? UtilizationOf(HostSample sample) =>
+        sample.Gpu?.UtilizationPercent
+        ?? sample.Gpus?.Select(g => g.UtilizationPercent).Where(UiFormat.HasValue).DefaultIfEmpty(null).Max();
+
+    /// <summary>
+    /// A fleet trend over several nodes: per bucket, <paramref name="combine"/> of every node's value. A bucket where a
+    /// node that has samples in the window has none (or no value) is a gap: a partial sum would read as a drop.
+    /// </summary>
+    private List<double?> FleetTrend(
+        Dictionary<string, IReadOnlyList<HostSample>> nodeSeries,
+        List<DateTimeOffset> times,
+        Func<HostSample, double?> valueOf,
+        Func<IEnumerable<double>, double> combine)
+    {
+        var perNode = nodeSeries.Values
+            .Where(s => s.Count > 0)
+            .Select(s => s.GroupBy(x => Bucket(x.At)).ToDictionary(g => g.Key, g => valueOf(g.Last())))
+            .Where(d => d.Values.Any(UiFormat.HasValue)) // a node that never reports this value (no GPU) does not blank the fleet
+            .ToList();
+        return times.Select(t =>
+        {
+            var values = new List<double>(perNode.Count);
+            foreach (var node in perNode)
+            {
+                if (!node.TryGetValue(t, out var v) || !UiFormat.HasValue(v))
+                {
+                    return null;
+                }
+
+                values.Add(v!.Value);
+            }
+
+            return values.Count == 0 ? null : (double?)combine(values);
+        }).ToList();
+    }
+
+    /// <summary>The start of the sampling-interval bucket <paramref name="at"/> falls in.</summary>
+    private DateTimeOffset Bucket(DateTimeOffset at) =>
+        new(at.UtcTicks - (at.UtcTicks % _bucketWidth.Ticks), TimeSpan.Zero);
+
+    /// <summary>Fleet error % from vLLM's own finish reasons: (error + abort) / all finished requests, in the given set of
+    /// KPI samples (one per Ready model). Null when nothing finished, not zero.</summary>
+    private static double? ErrorPercentOf(IEnumerable<ModelKpis> kpisList)
+    {
+        double errorSum = 0;
+        double totalSum = 0;
+        foreach (var kpis in kpisList)
+        {
+            foreach (var (reason, perMinute) in kpis.FinishedByReasonPerMinute)
+            {
+                totalSum += perMinute;
+                if (reason is "error" or "abort")
+                {
+                    errorSum += perMinute;
+                }
+            }
+        }
+
+        return totalSum == 0 ? null : errorSum / totalSum * 100;
+    }
+
+    private static string FormatWindow(TimeSpan window) => $"{(int)window.TotalMinutes} min";
+
+    // ================================================================ readout
+
+    private RenderFragment Readout() => __builder =>
+    {
+        string? id = _selectedModelId is { } selected && _latestKpis.ContainsKey(selected) ? selected : null;
+        <section class="panel readout" aria-labelledby="@(id is null ? "readout-cap" : $"mon-{id}")" data-testid="model-readout" @onkeydown="OnReadoutKeyDown">
+            @if (id is null)
+            {
+                <p class="readout-empty" data-testid="readout-empty">
+                    <span class="panel-label" id="readout-cap">Readout</span>
+                    <span class="muted">Select a model in the leaderboard for its throughput, latency, cache, router counters and history here.</span>
+                </p>
+            }
+            else
+            {
+                var kpis = _latestKpis[id];
+                var badge = ModelBadge(id);
+                bool pooling = _poolingIds.Contains(id);
+                double? kvLeft = UiFormat.HasValue(kpis.Load.KvCacheUsage) ? Math.Clamp(1 - kpis.Load.KvCacheUsage, 0, 1) : null;
+                double? latencyLeft = ServiceLevels.LatencyBudgetLeft(kpis.TimeToFirstToken?.P95, _targets.TtftTargetMs);
+                <article class="model-readout" aria-labelledby="@($"mon-{id}")" data-testid="@($"model-kpis-{id}")">
+                    <div class="readout-side">
+                        <div class="readout-top">
+                            <span class="panel-label">Readout</span>
+                            <button type="button" class="icon-btn" aria-label="Close the readout" data-testid="readout-close" @onclick="() => OnModelSelected(null)">
+                                <Icon Name="close" />
+                            </button>
+                        </div>
+                        <h2 id="@($"mon-{id}")" class="model-readout-title" tabindex="-1" @ref="_readoutHeading">
+                            <span class="model-swatch" style="@($"background:{_modelColors.GetValueOrDefault(id, "var(--ss-series-other)")}")" aria-hidden="true"></span>
+                            @ServedNameFor(id)
+                        </h2>
+                        <div class="model-readout-meta">
+                            <span class="state state--@badge.Tone" data-testid="@($"model-state-{id}")"><Icon Name="@badge.Icon" /> <span>@badge.Text</span></span>
+                            <span class="model-card-id">@id</span>
+                            @if (WhereFor(id) is { } where)
+                            {
+                                <span class="model-panel-where" data-testid="@($"model-where-{id}")"><Icon Name="server" /> @where</span>
+                            }
+                            @if (JobFor(id) is { } job)
+                            {
+                                <a class="chip chip--busy" href="@JobHref(job)" data-testid="@($"model-job-link-{id}")">
+                                    <Icon Name="@(job.JobKind == "tuning" ? "sliders" : "gauge")" />
+                                    @(job.JobKind == "tuning" ? "Tuning" : "Benchmarking") · view progress
+                                    <Icon Name="arrow-right" />
+                                </a>
+                            }
+                        </div>
+                        <div class="model-readout-hero">
+                            <div><b class="num">@UiFormat.Number(pooling ? kpis.Load.PromptTokensPerSecond : kpis.Load.GenerationTokensPerSecond)</b><span>@(pooling ? "Input" : "Generation") tok/s</span></div>
+                            <div><b class="num">@UiFormat.Whole(kpis.Load.RunningRequests) · @UiFormat.Whole(kpis.Load.WaitingRequests)</b><span>Running · waiting</span></div>
+                            <div><b class="num">@FormatPercentValue(kpis.Load.KvCacheUsage * 100)</b><span>KV cache</span></div>
+                        </div>
+                        <div class="stamina" data-testid="@($"stamina-{id}")">
+                            <span class="panel-label">Stamina</span>
+                            <div class="stamina-line"><span class="muted">KV headroom</span><span class="num">@(kvLeft is double kl ? $"{UiFormat.Whole(kl * 100)}%" : UiFormat.Missing)</span></div>
+                            <div class="stamina-bar" role="img" aria-label="@($"KV headroom {(kvLeft is double k1 ? $"{UiFormat.Whole(k1 * 100)}%" : "not reported")}")"><span class="stamina-fill--kv" style="@Width(kvLeft)"></span></div>
+                            <div class="stamina-line"><span class="muted">Latency budget <span class="muted">· TTFT p95 vs @TargetText</span></span><span class="num">@(latencyLeft is double ll ? $"{UiFormat.Whole(ll * 100)}%" : UiFormat.Missing)</span></div>
+                            <div class="stamina-bar" role="img" aria-label="@($"Latency budget {(latencyLeft is double l1 ? $"{UiFormat.Whole(l1 * 100)}% left" : "not measured")}")"><span class="stamina-fill--latency" style="@Width(latencyLeft)"></span></div>
+                        </div>
+                        <div class="readout-actions">
+                            <a class="btn btn-sm btn-outline-secondary" href="@($"models/{id}/logs")"><Icon Name="logs" /> Logs</a>
+                            <a class="btn btn-sm btn-outline-secondary" href="@($"models/{id}/benchmark")"><Icon Name="gauge" /> Benchmark</a>
+                            <a class="btn btn-sm btn-outline-secondary" href="@($"models/{id}/tune")"><Icon Name="sliders" /> Tune</a>
+                        </div>
+                    </div>
+                    <div class="readout-main">
+                        @ReadoutFigures(id, kpis)
+                        <div class="model-readout-charts">
+                            <LineChart Title="Gen tok/s" Height="90" Series="GenTokSeries(id)" EmptyText="@NoModelSamples" />
+                            <LineChart Title="Running/Waiting" Height="90" Series="RunningWaitingSeries(id)" EmptyText="@NoModelSamples" />
+                            <LineChart Title="TTFT p95" Unit="s" Height="90" Series="TtftP95Series(id)"
+                                       EmptyText="@($"No requests finished in the last {FormatWindow(_window)}")" />
+                            <LineChart Title="KV cache" Unit="%" Height="90" Series="KvCacheSeries(id)" EmptyText="@NoModelSamples" />
+                        </div>
+                    </div>
+                </article>
+            }
+        </section>
+    };
+
+    /// <summary>The readout's four groups of figures: throughput, latency, cache and decoding, the router.</summary>
+    private RenderFragment ReadoutFigures(string modelId, ModelKpis kpis) => __builder =>
+    {
+        var routerStats = RouterFor(modelId);
+        <div class="kv-groups">
+            <div class="kv-group">
+                <h3>Throughput</h3>
+                <dl class="kv">
+                    <dt>Generation</dt><dd><span data-testid="kpi-gen-tps-@modelId">@Fmt(kpis.Load.GenerationTokensPerSecond)</span> tok/s</dd>
+                    <dt>Prompt</dt><dd>@Fmt(kpis.Load.PromptTokensPerSecond) tok/s</dd>
+                    <dt>Requests</dt><dd>@Fmt(kpis.RequestsPerMinute) /min</dd>
+                    <dt>Running / waiting</dt><dd data-testid="kpi-running-waiting-@modelId">@Fmt0(kpis.Load.RunningRequests) / @Fmt0(kpis.Load.WaitingRequests)</dd>
+                    <dt>KV cache</dt><dd>@FormatPercentValue(kpis.Load.KvCacheUsage * 100)</dd>
+                </dl>
+            </div>
+            <div class="kv-group">
+                <h3>Latency, p50 / p95</h3>
+                <dl class="kv">
+                    <dt>Time to first token</dt><dd data-testid="kpi-ttft-@modelId">@Latency(kpis.TimeToFirstToken)</dd>
+                    <dt>Inter-token</dt><dd>@Latency(kpis.InterTokenLatency)</dd>
+                    <dt>End-to-end</dt><dd>@Latency(kpis.EndToEndLatency)</dd>
+                    <dt>Queue</dt><dd>@Latency(kpis.QueueTime)</dd>
+                </dl>
+            </div>
+            <div class="kv-group">
+                <h3>Cache and decoding</h3>
+                <dl class="kv">
+                    <dt>Prefix cache hits</dt><dd>@FormatPercentValue(Times100(kpis.PrefixCacheHitRate))</dd>
+                    @if (kpis.SpecDecodeAcceptanceRate is not null)
+                    {
+                        <dt>Spec-decode accepted</dt><dd data-testid="kpi-spec-decode-@modelId">@FormatPercentValue(Times100(kpis.SpecDecodeAcceptanceRate))</dd>
+                    }
+                    <dt>Preemptions</dt><dd>@Fmt(kpis.PreemptionsPerMinute) /min</dd>
+                    <dt>Tool calls</dt><dd>@Fmt(kpis.ToolCallsPerMinute) /min</dd>
+                    <dt class="kv-full">Finished by reason, per minute</dt>
+                    <dd class="kv-full" data-testid="kpi-finish-@modelId">
+                        @if (kpis.FinishedByReasonPerMinute.Count == 0)
+                        {
+                            @UiFormat.Missing
+                        }
+                        else
+                        {
+                            <ul class="reason-list">
+                                @foreach (var reason in kpis.FinishedByReasonPerMinute)
+                                {
+                                    <li><span class="reason-name">@reason.Key</span> <span class="num">@Fmt(reason.Value)</span></li>
+                                }
+                            </ul>
+                        }
+                    </dd>
+                </dl>
+            </div>
+            <div class="kv-group" data-testid="kpi-router-@modelId">
+                <h3>Router, since controller start</h3>
+                <dl class="kv">
+                    <dt>Requests</dt><dd>@(routerStats is null ? UiFormat.Missing : UiFormat.Whole(routerStats.TotalRequests))</dd>
+                    <dt>Failed</dt><dd>@(routerStats is null ? UiFormat.Missing : UiFormat.Whole(routerStats.FailedRequests))</dd>
+                    <dt>Error rate</dt><dd>@UiFormat.Percent(ErrorPercent(routerStats is null ? [] : [routerStats]))</dd>
+                    <dt>In flight</dt><dd>@(routerStats is null ? UiFormat.Missing : UiFormat.Whole(routerStats.InFlight))</dd>
+                </dl>
+            </div>
+        </div>
+    };
+
+    private static string Width(double? share) =>
+        $"width:{((share ?? 0) * 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}%";
+
+    private string NoModelSamples => $"No samples from this model in the last {FormatWindow(_window)}";
+
+    private static double? Times100(double? value) => value is double v ? v * 100 : null;
+
+    private static string Fmt(double value) => double.IsNaN(value) ? "—" : value.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string Fmt0(double value) => double.IsNaN(value) ? "—" : value.ToString("0", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string FormatPercentValue(double? value) =>
+        value is double v && !double.IsNaN(v) ? v.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "%" : "—";
+
+    private static string Latency(LatencyStats? stats) =>
+        stats is null ? "— / —" : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{stats.P50 * 1000:0} / {stats.P95 * 1000:0} ms");
+
+    private List<LineChartSeries> GenTokSeries(string modelId) =>
+    [
+        new LineChartSeries("Gen tok/s", "var(--ss-series-1)", ModelPoints(modelId, k => k.Load.GenerationTokensPerSecond)),
+    ];
+
+    private List<LineChartSeries> RunningWaitingSeries(string modelId) =>
+    [
+        new LineChartSeries("Running", "var(--ss-series-1)", ModelPoints(modelId, k => k.Load.RunningRequests)),
+        new LineChartSeries("Waiting", "var(--ss-series-2)", ModelPoints(modelId, k => k.Load.WaitingRequests)),
+    ];
+
+    private List<LineChartSeries> TtftP95Series(string modelId) =>
+    [
+        new LineChartSeries("TTFT p95", "var(--ss-series-1)", ModelPoints(modelId, k => k.TimeToFirstToken?.P95)),
+    ];
+
+    private List<LineChartSeries> KvCacheSeries(string modelId) =>
+    [
+        new LineChartSeries("KV cache %", "var(--ss-series-1)", ModelPoints(modelId, k => k.Load.KvCacheUsage * 100)),
+    ];
+
+    private List<LineChartPoint> ModelPoints(string modelId, Func<ModelKpis, double?> selector) =>
+        _modelSamples.TryGetValue(modelId, out var samples)
+            ? samples.Select(s => new LineChartPoint(s.At, selector(s.Kpis))).ToList()
+            : [];
+
+    // ================================================================ nodes
+
+    /// <summary>A node panel's extra facts: GPU, temperature and power, peak memory in the window, model disk, downloads.</summary>
+    private RenderFragment NodeFacts(string nodeId) => __builder =>
+    {
+        var summary = _summaryById.GetValueOrDefault(nodeId);
+        var node = _nodeRows.FirstOrDefault(n => n.Id == nodeId);
+        var disk = node?.Capabilities?.ModelRoots.FirstOrDefault(r => r.Name == "models");
+        <dl class="node-facts" data-testid="@($"node-facts-{nodeId}")">
+            <div><dt>GPU</dt><dd class="num">@UiFormat.Percent(summary?.GpuUtilization)</dd></div>
+            <div><dt>Temp · power</dt><dd class="num">@Reading(summary?.TemperatureC, " °C") · @Reading(summary?.PowerWatts, " W")</dd></div>
+            <div>
+                <dt>Peak used, @FormatWindow(_window)</dt>
+                <dd class="num" data-testid="@($"node-peak-{nodeId}")">@UiFormat.GiB(summary?.PeakUsedGiB)</dd>
+            </div>
+            <div>
+                <dt>Model disk free</dt>
+                <dd class="num" data-testid="@($"node-disk-{nodeId}")" title="@(disk is { TotalBytes: > 0 } d ? $"{UiFormat.Bytes(d.FreeBytes)} free of {UiFormat.Bytes(d.TotalBytes)}, {d.FolderCount} folders" : null)">
+                    @(disk is { TotalBytes: > 0 } root ? UiFormat.Bytes(root.FreeBytes) : UiFormat.Missing)
+                </dd>
+            </div>
+        </dl>
+        <p class="node-downloads muted" data-testid="@($"node-downloads-{nodeId}")">
+            <Icon Name="download" />
+            <span>@DownloadText(nodeId)</span>
+        </p>
+    };
+
+    private string DownloadText(string nodeId)
+    {
+        if (!_downloads.TryGetValue(nodeId, out var list) || list is null)
+        {
+            return $"Downloads {UiFormat.Missing}";
+        }
+
+        var active = list.Where(d => d.State is DownloadState.Queued or DownloadState.Downloading).ToList();
+        if (active.Count == 0)
+        {
+            return "No downloads in progress";
+        }
+
+        var first = active[0];
+        string percent = first.TotalBytes > 0 ? $" · {UiFormat.Whole(100.0 * first.BytesDownloaded / first.TotalBytes)}%" : "";
+        string speed = first.BytesPerSecond is double bps ? $" · {UiFormat.Bytes((long)bps)}/s" : "";
+        string more = active.Count > 1 ? $" (+{active.Count - 1} more)" : "";
+        return $"{(first.State == DownloadState.Queued ? "Queued" : "Downloading")} {first.RepoId}{percent}{speed}{more}";
+    }
+
+    private static string Reading(double? value, string unit) => UiFormat.HasValue(value) ? UiFormat.Whole(value) + unit : UiFormat.Missing;
+
+    /// <summary>The scoped node's history (the old Monitoring host section): tiles, then the unified node's charts or the
+    /// discrete node's per-GPU ones. Folded under the node panels; open when a node was picked on the rail.</summary>
+    private RenderFragment HostSection() => __builder =>
+    {
+        <details class="panel history" open="@Scoped" data-testid="host-history">
+            <summary>
+                <span class="history-title">History</span>
+                <span class="section-note" data-testid="host-section-note">Last @FormatWindow(_window)@(MultiNode ? $" · {SelectedNodeName}" : "")</span>
+            </summary>
+            <div class="history-body">
+                @if (_hostSamples.Count == 0)
+                {
+                    <p class="muted" role="status" data-testid="monitoring-collecting">
+                        @(MultiNode
+                            ? $"No samples from {SelectedNodeName} in the last {FormatWindow(_window)} yet. A node that just came online reports within 5 seconds; an offline node reports nothing."
+                            : "Collecting the first samples. Numbers appear within 5 seconds.")
+                    </p>
+                }
+                else if (_gpus is { } gpus)
+                {
+                    @DiscreteHost(gpus)
+                }
+                else
+                {
+                    var latestHost = _hostSamples[^1];
+                    var used = latestHost.Memory.TotalGiB - latestHost.Memory.AvailableGiB;
+                    @* The charts right below carry these trends, so the tiles drop their sparkline slot. *@
+                    <div class="tiles tiles--4">
+                        <StatTile Label="Memory used" TestId="host-memory" ShowTrend="false" Value="@UiFormat.Decimal1(used)" Unit="@($"of {UiFormat.GiB(latestHost.Memory.TotalGiB)}")"
+                                  Detail="@($"{UiFormat.GiB(latestHost.Memory.AvailableGiB)} free")" />
+                        <StatTile Label="GPU utilization" TestId="host-gpu-util" ShowTrend="false" Value="@UiFormat.Number(latestHost.Gpu?.UtilizationPercent)" Unit="%"
+                                  Detail="@NotReported(latestHost.Gpu?.UtilizationPercent)" />
+                        <StatTile Label="Power" TestId="host-power" ShowTrend="false" Value="@UiFormat.Number(latestHost.Gpu?.PowerWatts)" Unit="W"
+                                  Detail="@NotReported(latestHost.Gpu?.PowerWatts)" />
+                        <StatTile Label="Temperature" TestId="host-temp" ShowTrend="false" Value="@UiFormat.Number(latestHost.Gpu?.TemperatureC)" Unit="°C"
+                                  Detail="@NotReported(latestHost.Gpu?.TemperatureC)" />
+                    </div>
+
+                    <div class="chart-grid" data-testid="host-charts">
+                        <LineChart Title="GPU utilization" Unit="%" Height="120" Series="GpuUtilSeries()" Help="@GpuHelp"
+                                   EmptyText="@NoGpuText(SelectedOrOnlyName, GpuUtilSeries())" />
+                        <LineChart Title="Memory by model" Unit="GiB" Height="120" Stacked="true" Series="MonitoringSeries.Memory(_hostSamples, _modelColors, ServedNameFor)" Help="@MemoryHelp"
+                                   Note="@MonitoringSeries.MemorySourceNote(_hostSamples)" />
+                    </div>
+                }
+            </div>
+        </details>
+    };
+
+    private string SelectedOrOnlyName => MultiNode ? SelectedNodeName : _nodeRows.Count == 1 ? _nodeRows[0].Name : _nodeId;
+
+    /// <summary>A discrete node's history (design §8.3): tiles, per-GPU utilization, host RAM and one memory chart per GPU.</summary>
+    private RenderFragment DiscreteHost(IReadOnlyList<MonitoringSeries.GpuInWindow> gpus) => __builder =>
+    {
+        var latestHost = _hostSamples[^1];
+        var used = latestHost.Memory.TotalGiB - latestHost.Memory.AvailableGiB;
+        var latestGpus = latestHost.Gpus ?? [];
+        var utilizations = latestGpus.Where(g => g.UtilizationPercent is not null).Select(g => g.UtilizationPercent!.Value).ToList();
+        double? averageUtil = utilizations.Count == 0 ? null : utilizations.Average();
+        string? firstGpu = latestGpus.Count > 1 ? $"GPU {latestGpus.Min(g => g.Index)}" : null;
+        <div class="tiles tiles--4" data-testid="host-tiles-discrete">
+            <StatTile Label="Host RAM used" TestId="host-memory" ShowTrend="false" Value="@UiFormat.Decimal1(used)" Unit="@($"of {UiFormat.GiB(latestHost.Memory.TotalGiB)}")"
+                      Detail="@($"{UiFormat.GiB(latestHost.Memory.AvailableGiB)} free")" />
+            <StatTile Label="GPU utilization" TestId="host-gpu-util" ShowTrend="false" Value="@UiFormat.Number(averageUtil)" Unit="%"
+                      Detail="@(NotReported(averageUtil) ?? (latestGpus.Count > 1 ? $"average of {latestGpus.Count} GPUs" : null))" />
+            <StatTile Label="Power" TestId="host-power" ShowTrend="false" Value="@UiFormat.Number(latestHost.Gpu?.PowerWatts)" Unit="W"
+                      Detail="@(NotReported(latestHost.Gpu?.PowerWatts) ?? firstGpu)" />
+            <StatTile Label="Temperature" TestId="host-temp" ShowTrend="false" Value="@UiFormat.Number(latestHost.Gpu?.TemperatureC)" Unit="°C"
+                      Detail="@(NotReported(latestHost.Gpu?.TemperatureC) ?? firstGpu)" />
+        </div>
+
+        <div class="chart-grid" data-testid="host-charts">
+            <LineChart Title="GPU utilization" Unit="%" Height="120" Series="MonitoringSeries.GpuUtilization(_hostSamples, gpus)" Help="@GpuDiscreteHelp"
+                       EmptyText="@NoGpuText(SelectedOrOnlyName, MonitoringSeries.GpuUtilization(_hostSamples, gpus))" />
+            <LineChart Title="Host RAM" Unit="GiB" Height="120" Stacked="true" Series="MonitoringSeries.HostRam(_hostSamples)" Help="@HostRamHelp" />
+            @foreach (var gpu in gpus)
+            {
+                <LineChart Title="@($"{gpu.Label} memory by model")" Unit="GiB" Height="120" Stacked="true"
+                           Series="MonitoringSeries.GpuMemory(_hostSamples, gpu.Uuid, _modelColors, ServedNameFor)" Help="@GpuMemoryHelp"
+                           Note="@MonitoringSeries.MemorySourceNote(_hostSamples)" />
+            }
+        </div>
+    };
+
+    /// <summary>The tile detail for a reading this node does not report (no GPU readout, e.g. no nvidia-smi).</summary>
+    private static string? NotReported(double? value) => UiFormat.HasValue(value) ? null : "Not reported by this node";
+
+    /// <summary>The empty text of a GPU utilization chart: which node reports no utilization at all, or no samples yet.</summary>
+    private string NoGpuText(string nodeName, IReadOnlyList<LineChartSeries> series) =>
+        series.Any(s => s.Points.Count > 0)
+            ? $"{nodeName} reports no GPU utilization (no GPU readout on this node)"
+            : $"No samples in the last {FormatWindow(_window)}";
+
+    private List<LineChartSeries> GpuUtilSeries() =>
+    [
+        new LineChartSeries("GPU %", "var(--ss-series-1)", _hostSamples.Select(s => new LineChartPoint(s.At, s.Gpu?.UtilizationPercent)).ToList()),
+    ];
+
+    public async ValueTask DisposeAsync()
+    {
+        _subscription?.Dispose();
+        _cts?.Cancel();
+        if (_ownsLive && _live is not null)
+        {
+            await _live.DisposeAsync();
+        }
+
+        _cts?.Dispose();
+        _statsStore?.Flush();
+    }
+}

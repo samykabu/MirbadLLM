@@ -1,0 +1,38 @@
+/* Phone width: the Segmented control wraps instead of pushing the page sideways; the select fills the row. */
+.node-selector {
+    max-width: 100%;
+    min-width: 0;
+}
+
+.node-selector .segmented {
+    flex-wrap: wrap;
+    max-width: 100%;
+}
+
+.node-selector .segmented-option {
+    max-width: 100%;
+}
+
+.node-selector .segmented-option > span:first-of-type {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.node-selector-state {
+    color: var(--ss-text-muted);
+    font-weight: 400;
+    font-size: var(--ss-fs-100);
+}
+
+.node-selector .form-select {
+    width: auto;
+    max-width: 100%;
+}
+
+@media (max-width: 639.98px) {
+    .node-selector,
+    .node-selector .form-select {
+        width: 100%;
+    }
+}

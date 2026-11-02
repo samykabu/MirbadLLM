@@ -1,0 +1,18 @@
+{
+  "repoId": "guoxuter/ov_intent_analysis_sft:v7_q8",
+  "revision": null,
+  "folder": "ov-intent-analysis-v7-q8",
+  "allowPatterns": null,
+  "token": null,
+  "existing": "refuse",
+  "source": "ollama",
+  "ollama": {
+    "registry": "registry.ollama.ai",
+    "name": "guoxuter/ov_intent_analysis_sft",
+    "tag": "v7_q8",
+    "modelDigest": "sha256:aa98adccdec6a3be82d462563586abe1db520f93281ecc3f9bc3ff978b12d795"
+  },
+  "operationId": "op-302",
+  "issuedAt": "2026-10-07T11:00:00+00:00",
+  "expiresAt": "2026-10-08T11:00:00+00:00"
+}

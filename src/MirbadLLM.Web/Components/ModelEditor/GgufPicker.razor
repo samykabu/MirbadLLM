@@ -1,0 +1,220 @@
+@namespace MirbadLLM.Web.Components.ModelEditor
+@using System.Globalization
+@using MirbadLLM.Agent.Contracts
+@* The llama.cpp model editor's GGUF picker (design-p3p4 §A.7, MN-226). Two shapes:
+   - a Hugging Face GGUF repo (Variants set): one row per quantization with its size, split parts and its fit on each GPU
+     of the chosen node. Before the download only the file size is known, so the fit is a lower bound ("needs at least",
+     weights × 1.10 + one CUDA context); the vision projectors (mmproj) are listed separately;
+   - a folder on the node (Folder set): its model GGUF (picked from the agent's list when it holds several), its header
+     summary (through IAgentClient.InspectGgufAsync, the gguf.inspect route) and the estimate's fit on each GPU. *@
+<div class="gguf-picker" data-testid="gguf-picker">
+    @if (Variants is { } variants)
+    {
+        <div class="gguf-table-wrap">
+            <table class="data-table data-table--stack gguf-variants" data-testid="gguf-variants">
+                <caption class="visually-hidden">GGUF variants of the repo, with their fit on each GPU</caption>
+                <thead>
+                    <tr>
+                        <th scope="col" class="col-check"><span class="visually-hidden">Choose</span></th>
+                        <th scope="col">Variant</th>
+                        <th scope="col">Size</th>
+                        <th scope="col">Parts</th>
+                        <th scope="col">Fit</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var variant in variants)
+                    {
+                        string id = "gguf-variant-" + Slug(variant.Name);
+                        bool on = string.Equals(variant.Name, SelectedVariant, StringComparison.Ordinal);
+                        double need = LlamaCppEditing.MinimumNeedGiB(variant.TotalBytes);
+                        <tr data-testid="@id" class="@(on ? "gguf-row--on" : null)">
+                            <td class="col-check">
+                                <input type="radio" class="form-check-input" name="gguf-variant" id="@id-radio" data-testid="@($"{id}-radio")"
+                                       checked="@on" aria-describedby="@id-fit" @onchange="() => SelectedVariantChanged.InvokeAsync(variant.Name)" />
+                            </td>
+                            <td class="col-primary"><label for="@id-radio" class="num">@variant.Name</label></td>
+                            <td data-label="Size" class="num">@UiFormat.Bytes(variant.TotalBytes)</td>
+                            <td data-label="Parts" class="num">@variant.FileCount.ToString(CultureInfo.InvariantCulture)</td>
+                            <td data-label="Fit" id="@id-fit" data-testid="@($"{id}-fit")">
+                                @FitLines(need, atLeast: true)
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="field-hint" data-testid="gguf-variants-hint">
+            Before the download only the size is known, so each fit counts the weights alone (× 1.10, plus
+            <span class="num">@UiFormat.GiB(MirbadLLM.Orchestration.Multinode.LlamaCppMemoryEstimate.CudaContextGiBPerGpu)</span> CUDA context).
+            The KV cache and compute buffers are added once the download has read the file's header.
+        </div>
+
+        @if (Projectors.Count > 0)
+        {
+            <fieldset class="gguf-projectors" data-testid="gguf-projectors">
+                <legend class="field-label">Vision projector (mmproj)</legend>
+                <label class="form-check">
+                    <input type="radio" class="form-check-input" name="gguf-projector" data-testid="gguf-projector-none"
+                           checked="@string.IsNullOrEmpty(SelectedProjector)" @onchange="() => SelectedProjectorChanged.InvokeAsync(string.Empty)" />
+                    <span class="form-check-label">None (text or embedding model)</span>
+                </label>
+                @foreach (var projector in Projectors)
+                {
+                    <label class="form-check">
+                        <input type="radio" class="form-check-input" name="gguf-projector" data-testid="@($"gguf-projector-{Slug(projector.Name)}")"
+                               checked="@string.Equals(projector.Name, SelectedProjector, StringComparison.Ordinal)"
+                               @onchange="() => SelectedProjectorChanged.InvokeAsync(projector.Name)" />
+                        <span class="form-check-label"><span class="num">@projector.Name</span> · <span class="num">@UiFormat.Bytes(projector.Bytes)</span></span>
+                    </label>
+                }
+            </fieldset>
+        }
+    }
+    else if (Folder is not null)
+    {
+        <div class="field">
+            <FieldHelp Label="GGUF file" For="field-gguf-file" Help="@LlamaCppFieldHelp.GgufFile" />
+            <div class="gguf-file-row">
+                @if (Candidates.Count > 0)
+                {
+                    <select class="form-select num" id="field-gguf-file" data-testid="field-gguf-file" value="@File"
+                            @onchange="e => OnFileChosenAsync(e.Value as string)">
+                        <option value="">Choose a GGUF</option>
+                        @foreach (string candidate in Candidates)
+                        {
+                            <option value="@candidate">@candidate</option>
+                        }
+                    </select>
+                }
+                else
+                {
+                    <input class="form-control num" id="field-gguf-file" data-testid="field-gguf-file" value="@File" placeholder="The folder's only GGUF"
+                           autocomplete="off" spellcheck="false" @onchange="e => FileChanged.InvokeAsync(e.Value as string ?? string.Empty)" />
+                }
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="gguf-read-button" @onclick="OnRead">Read header</button>
+            </div>
+        </div>
+
+        <div class="field field--wide" aria-live="polite">
+            @if (Error is not null)
+            {
+                <div class="callout callout--failed" role="alert" data-testid="gguf-error">
+                    <Icon Name="state-failed" /><div class="callout-body">@Error</div>
+                </div>
+            }
+            @if (Summary is { } s)
+            {
+                <dl class="kv gguf-summary" data-testid="gguf-summary">
+                    <dt>File</dt><dd class="num" data-testid="gguf-summary-file">@s.File@(s.SplitCount > 1 ? $" (+{s.SplitCount - 1} parts)" : "")</dd>
+                    <dt>Architecture</dt><dd data-testid="gguf-summary-arch">@s.Architecture</dd>
+                    <dt>Type</dt><dd>@(s.FileType ?? UiFormat.Missing)</dd>
+                    <dt>Size</dt><dd>@UiFormat.Bytes(s.FileBytes)</dd>
+                    <dt>Layers</dt><dd data-testid="gguf-summary-layers">@s.BlockCount.ToString(CultureInfo.InvariantCulture)</dd>
+                    <dt>Trained context</dt><dd data-testid="gguf-summary-context">@(s.ContextLength is { } ctx ? ctx.ToString("N0", CultureInfo.InvariantCulture) + " tokens" : UiFormat.Missing)</dd>
+                    <dt>Pooling</dt><dd data-testid="gguf-summary-pooling">@(s.PoolingType ?? "none (chat model)")</dd>
+                    <dt>Attention</dt><dd>@(s.CausalAttention == false ? "non-causal" : "causal")</dd>
+                    <dt>Chat template</dt><dd>@(s.HasChatTemplate ? "in the file" : "none in the file")</dd>
+                </dl>
+                @if (Estimate is { } estimate)
+                {
+                    <div class="gguf-fit" data-testid="gguf-fit">
+                        @FitLines(estimate.BudgetGiB, atLeast: false)
+                    </div>
+                }
+            }
+        </div>
+    }
+</div>
+
+@code {
+    /// <summary>The repo's GGUF variants (download shape); null for the folder shape.</summary>
+    [Parameter]
+    public IReadOnlyList<GgufVariant>? Variants { get; set; }
+
+    /// <summary>The repo's vision projectors (<c>mmproj-*</c>), listed apart from the variants.</summary>
+    [Parameter]
+    public IReadOnlyList<RepoFile> Projectors { get; set; } = [];
+
+    [Parameter]
+    public string SelectedVariant { get; set; } = "";
+
+    [Parameter]
+    public EventCallback<string> SelectedVariantChanged { get; set; }
+
+    [Parameter]
+    public string SelectedProjector { get; set; } = "";
+
+    [Parameter]
+    public EventCallback<string> SelectedProjectorChanged { get; set; }
+
+    /// <summary>The room on each GPU of the chosen node (one entry on a unified node); empty when unknown.</summary>
+    [Parameter]
+    public IReadOnlyList<GgufGpuRoom> Rooms { get; set; } = [];
+
+    /// <summary>The folder on the node (folder shape); null for the download shape.</summary>
+    [Parameter]
+    public string? Folder { get; set; }
+
+    /// <summary>The model GGUFs of a folder that holds several (from the agent's refusal); empty = type or leave blank.</summary>
+    [Parameter]
+    public IReadOnlyList<string> Candidates { get; set; } = [];
+
+    /// <summary>The chosen file, relative to the folder.</summary>
+    [Parameter]
+    public string File { get; set; } = "";
+
+    [Parameter]
+    public EventCallback<string> FileChanged { get; set; }
+
+    /// <summary>Reads the header of <see cref="File"/>.</summary>
+    [Parameter]
+    public EventCallback OnRead { get; set; }
+
+    /// <summary>The header read.</summary>
+    [Parameter]
+    public GgufSummary? Summary { get; set; }
+
+    /// <summary>Why the header could not be read.</summary>
+    [Parameter]
+    public string? Error { get; set; }
+
+    /// <summary>The live estimate of the current settings (for the fit lines).</summary>
+    [Parameter]
+    public GgufMemoryEstimate? Estimate { get; set; }
+
+    private async Task OnFileChosenAsync(string? file)
+    {
+        File = file ?? "";
+        await FileChanged.InvokeAsync(File);
+        if (File.Length > 0)
+        {
+            await OnRead.InvokeAsync();
+        }
+    }
+
+    /// <summary>
+    /// One line per GPU: "GPU 0: the GGUF estimate needs 8.9 GiB, 10.9 GiB free after the 2.5 GiB reserve", with its
+    /// verdict. The need is named (<see cref="LlamaCppEditing.NeedText"/>, MN-239 item 2) because the placement's verdict
+    /// on the same page measures the model's memory budget instead.
+    /// </summary>
+    private RenderFragment FitLines(double need, bool atLeast) =>
+        @<ul class="plain-list gguf-fit-list">
+            @if (Rooms.Count == 0)
+            {
+                <li class="muted">@LlamaCppEditing.NeedText(need, atLeast); choose the node to see its GPUs.</li>
+            }
+            @foreach (var room in Rooms)
+            {
+                bool? fits = LlamaCppEditing.Fits(need, room);
+                <li class="budget-check @(fits == false ? "budget-check--over" : fits == true ? "budget-check--ok" : null)"
+                    data-fits="@(fits switch { true => "true", false => "false", _ => "unknown" })">
+                    <Icon Name="@(fits == true ? "check" : "warning")" />
+                    <span>@LlamaCppEditing.FitText(need, room, atLeast)@(fits switch { true => " · fits", false => " · does not fit", _ => "" })</span>
+                </li>
+            }
+        </ul>;
+
+    private static string Slug(string value) =>
+        new([.. value.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-')]);
+}

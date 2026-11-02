@@ -1,0 +1,129 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* One node's headroom panel on the Overview (design §8.3): the node's id (a link to its page), state badge (colour +
+   icon + text), Ready count, and memory headroom (one bar for a unified node, one per GPU for a discrete one) with
+   what can be given to a new model. A node that is not serving says when it was last seen: its figures are the
+   cache's last view (§3.5), not live ones. ChildContent, when given, follows the headroom. *@
+<section class="panel node-group@(View.IsStale ? " node-group--stale" : "")" aria-labelledby="@TitleId" data-testid="@($"node-group-{Key}")"
+         data-state="@(View.State is { } s ? StateBadge.NodeLook(s, View.Draining).Slug : "none")" data-tour="@Tour">
+    <div class="node-group-top">
+    <RingGauge Percent="UsedPercent" Size="56" ShowValue="true" Label="Memory used" TestId="@($"node-group-ring-{Key}")" />
+    <div class="node-group-head">
+        <div class="node-group-title-row">
+            <h3 class="node-group-title" id="@TitleId">
+                @if (View.Known)
+                {
+                    <a href="@($"nodes/{Uri.EscapeDataString(View.Id!)}")" data-testid="@($"node-group-link-{Key}")">@View.Name</a>
+                }
+                else
+                {
+                    @View.Name
+                }
+            </h3>
+            @if (View.State is { } state)
+            {
+                <StateBadge Node="state" Draining="View.Draining" TestId="@($"node-group-state-{Key}")" />
+                @if (View.Draining && View.IsStale)
+                {
+                    <span class="chip chip--busy chip--inline" data-testid="@($"node-group-draining-{Key}")"><Icon Name="state-stopping" /> Draining</span>
+                }
+            }
+            @if (View.ModelCount > 0)
+            {
+                <span class="section-note num" data-testid="@($"node-group-summary-{Key}")">@View.ReadyCount Ready of @View.ModelCount</span>
+            }
+        </div>
+        <span class="muted node-group-platform">@(View.Os ?? UiFormat.Missing) · @(View.MemoryModel?.ToString().ToLowerInvariant() ?? UiFormat.Missing)</span>
+        @if (View.IsStale)
+        {
+            <p class="node-group-note muted" data-testid="@($"node-group-seen-{Key}")">
+                <Icon Name="clock" />
+                <span>
+                    @(View.LastContact is { } seen ? $"Last seen {UiFormat.Elapsed(seen, Now)} ago" : "Never seen")
+                    · figures are the last known, not live
+                </span>
+            </p>
+        }
+        else if (View.Id is null)
+        {
+            <p class="node-group-note muted" data-testid="@($"node-group-note-{Key}")">
+                These models are not placed on a node. Choose a node in a model's editor before starting it.
+            </p>
+        }
+        else if (!View.Known)
+        {
+            <p class="node-group-note muted" data-testid="@($"node-group-note-{Key}")">
+                The master has no such node: it is not registered, was revoked, or is still waiting for approval.
+            </p>
+        }
+        @if (View.Reasons.Count > 0)
+        {
+            <p class="node-group-note muted" data-testid="@($"node-group-reasons-{Key}")">@string.Join("; ", View.Reasons)</p>
+        }
+    </div>
+
+    </div>
+    <p class="node-group-memory"><span class="num">@UiFormat.GiB(View.AvailableGiB)</span> of <span class="num">@UiFormat.GiB(View.TotalGiB)</span> free · GPU <span class="num">@UiFormat.Percent(View.GpuUtilization)</span></p>
+
+    @if (ChildContent is not null)
+    {
+        <div class="node-group-models">@ChildContent</div>
+    }
+    <div class="node-group-foot">
+        @foreach (string runtime in View.Runtimes)
+        {
+            <span class="chip chip--inline">@runtime</span>
+        }
+        <span class="chip chip--inline num">Ready @View.ReadyCount / @View.ModelCount</span>
+    </div>
+    @if (ShowHeadroom && View.Known)
+    {
+        <details class="node-group-breakdown">
+        <summary>Memory breakdown</summary>
+        @if (View.Gpus.Count > 0)
+        {
+            <MemoryHeadroom Bare="true" Title="GPU memory" HeadingLevel="4" IdPrefix="@($"node-{Key}")" Gpus="View.Gpus"
+                            HostTotalGiB="View.TotalGiB" HostAvailableGiB="View.AvailableGiB" />
+        }
+        else if (View.TotalGiB is > 0 && View.AvailableGiB is { } available)
+        {
+            <MemoryHeadroom Bare="true" HeadingLevel="4" IdPrefix="@($"node-{Key}")" TotalGiB="View.TotalGiB.Value" AvailableGiB="available"
+                            ModelsGiB="View.ModelsGiB" ReserveGiB="View.ReserveGiB" />
+        }
+        else
+        {
+            <p class="node-group-note muted" data-testid="@($"node-group-no-memory-{Key}")">
+                Memory <span class="num">@UiFormat.Missing</span>: the node has sent no memory reading.
+            </p>
+        }
+        </details>
+    }
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public NodeGroupView View { get; set; } = default!;
+
+    /// <summary>False when the page already shows this node's headroom (a single node keeps today's page-level bar).</summary>
+    [Parameter]
+    public bool ShowHeadroom { get; set; } = true;
+
+    /// <summary>Clock for "last seen".</summary>
+    [Parameter]
+    public DateTimeOffset Now { get; set; } = DateTimeOffset.UtcNow;
+
+    /// <summary>Guided-tour anchor (<c>data-tour</c>) for this panel; null for none.</summary>
+    [Parameter]
+    public string? Tour { get; set; }
+
+    /// <summary>Optional content under the headroom.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Stable key for ids: the node id, or <c>_unplaced</c> (not a valid node slug, so it never collides).</summary>
+    public string Key => View.Id ?? "_unplaced";
+
+    private string TitleId => $"node-group-{Key}-title";
+
+    private double? UsedPercent => !View.IsStale && View.TotalGiB is > 0 && View.AvailableGiB is { } available
+        ? 100 * (1 - available / View.TotalGiB.Value) : null;
+}

@@ -1,0 +1,278 @@
+{
+  "start": "2026-10-04T00:00:00.0000000\u002B00:00",
+  "model": [
+    {
+      "At": "2026-10-04T00:00:00\u002B00:00",
+      "Kpis": {
+        "Load": {
+          "RunningRequests": 1,
+          "WaitingRequests": 1,
+          "KvCacheUsage": 0.1,
+          "GenerationTokensPerSecond": 0,
+          "PromptTokensPerSecond": 0
+        },
+        "RequestsPerMinute": 0,
+        "TimeToFirstToken": null,
+        "InterTokenLatency": null,
+        "EndToEndLatency": null,
+        "QueueTime": null,
+        "PrefixCacheHitRate": null,
+        "SpecDecodeAcceptanceRate": null,
+        "PreemptionsPerMinute": 0,
+        "FinishedByReasonPerMinute": {},
+        "ToolCallsPerMinute": 0
+      },
+      "HasRates": false
+    },
+    {
+      "At": "2026-10-04T00:00:05\u002B00:00",
+      "Kpis": {
+        "Load": {
+          "RunningRequests": 2,
+          "WaitingRequests": 0,
+          "KvCacheUsage": 0.2,
+          "GenerationTokensPerSecond": 600,
+          "PromptTokensPerSecond": 100
+        },
+        "RequestsPerMinute": 144,
+        "TimeToFirstToken": {
+          "P50": 0.6,
+          "P95": 1
+        },
+        "InterTokenLatency": null,
+        "EndToEndLatency": {
+          "P50": 3.6666666666666665,
+          "P95": 5
+        },
+        "QueueTime": null,
+        "PrefixCacheHitRate": 0.7272727272727273,
+        "SpecDecodeAcceptanceRate": null,
+        "PreemptionsPerMinute": 12,
+        "FinishedByReasonPerMinute": {
+          "stop": 120,
+          "length": 24
+        },
+        "ToolCallsPerMinute": 36
+      },
+      "HasRates": true
+    },
+    {
+      "At": "2026-10-04T00:00:10\u002B00:00",
+      "Kpis": {
+        "Load": {
+          "RunningRequests": 0,
+          "WaitingRequests": 1,
+          "KvCacheUsage": 0.30000000000000004,
+          "GenerationTokensPerSecond": 1000,
+          "PromptTokensPerSecond": 100
+        },
+        "RequestsPerMinute": 144,
+        "TimeToFirstToken": {
+          "P50": 0.6,
+          "P95": 1
+        },
+        "InterTokenLatency": null,
+        "EndToEndLatency": {
+          "P50": 3.6666666666666665,
+          "P95": 5
+        },
+        "QueueTime": null,
+        "PrefixCacheHitRate": 0.7272727272727273,
+        "SpecDecodeAcceptanceRate": null,
+        "PreemptionsPerMinute": 12,
+        "FinishedByReasonPerMinute": {
+          "stop": 120,
+          "length": 24
+        },
+        "ToolCallsPerMinute": 36
+      },
+      "HasRates": true
+    },
+    {
+      "At": "2026-10-04T00:00:15\u002B00:00",
+      "Kpis": {
+        "Load": {
+          "RunningRequests": 1,
+          "WaitingRequests": 0,
+          "KvCacheUsage": 0.4,
+          "GenerationTokensPerSecond": 1400,
+          "PromptTokensPerSecond": 100
+        },
+        "RequestsPerMinute": 144,
+        "TimeToFirstToken": {
+          "P50": 0.6,
+          "P95": 1
+        },
+        "InterTokenLatency": null,
+        "EndToEndLatency": {
+          "P50": 3.6666666666666665,
+          "P95": 5
+        },
+        "QueueTime": null,
+        "PrefixCacheHitRate": 0.7272727272727273,
+        "SpecDecodeAcceptanceRate": null,
+        "PreemptionsPerMinute": 12,
+        "FinishedByReasonPerMinute": {
+          "stop": 120,
+          "length": 24
+        },
+        "ToolCallsPerMinute": 36
+      },
+      "HasRates": true
+    },
+    {
+      "At": "2026-10-04T00:00:20\u002B00:00",
+      "Kpis": {
+        "Load": {
+          "RunningRequests": 2,
+          "WaitingRequests": 1,
+          "KvCacheUsage": 0.5,
+          "GenerationTokensPerSecond": 1800,
+          "PromptTokensPerSecond": 100
+        },
+        "RequestsPerMinute": 144,
+        "TimeToFirstToken": {
+          "P50": 0.6,
+          "P95": 1
+        },
+        "InterTokenLatency": null,
+        "EndToEndLatency": {
+          "P50": 3.6666666666666665,
+          "P95": 5
+        },
+        "QueueTime": null,
+        "PrefixCacheHitRate": 0.7272727272727273,
+        "SpecDecodeAcceptanceRate": null,
+        "PreemptionsPerMinute": 12,
+        "FinishedByReasonPerMinute": {
+          "stop": 120,
+          "length": 24
+        },
+        "ToolCallsPerMinute": 36
+      },
+      "HasRates": true
+    }
+  ],
+  "latest": {
+    "m": {
+      "Load": {
+        "RunningRequests": 2,
+        "WaitingRequests": 1,
+        "KvCacheUsage": 0.5,
+        "GenerationTokensPerSecond": 1800,
+        "PromptTokensPerSecond": 100
+      },
+      "RequestsPerMinute": 144,
+      "TimeToFirstToken": {
+        "P50": 0.6,
+        "P95": 1
+      },
+      "InterTokenLatency": null,
+      "EndToEndLatency": {
+        "P50": 3.6666666666666665,
+        "P95": 5
+      },
+      "QueueTime": null,
+      "PrefixCacheHitRate": 0.7272727272727273,
+      "SpecDecodeAcceptanceRate": null,
+      "PreemptionsPerMinute": 12,
+      "FinishedByReasonPerMinute": {
+        "stop": 120,
+        "length": 24
+      },
+      "ToolCallsPerMinute": 36
+    }
+  },
+  "host": [
+    {
+      "At": "2026-10-04T00:00:00\u002B00:00",
+      "Memory": {
+        "TotalGiB": 128,
+        "AvailableGiB": 90
+      },
+      "Gpu": {
+        "UtilizationPercent": 40,
+        "PowerWatts": 30,
+        "TemperatureC": 50,
+        "SmClockMHz": 1500
+      },
+      "ModelMemoryGiB": {
+        "m": 12
+      },
+      "MemorySource": 0,
+      "OtherGpuGiB": null
+    },
+    {
+      "At": "2026-10-04T00:00:05\u002B00:00",
+      "Memory": {
+        "TotalGiB": 128,
+        "AvailableGiB": 90
+      },
+      "Gpu": {
+        "UtilizationPercent": 40,
+        "PowerWatts": 30,
+        "TemperatureC": 50,
+        "SmClockMHz": 1500
+      },
+      "ModelMemoryGiB": {
+        "m": 12
+      },
+      "MemorySource": 0,
+      "OtherGpuGiB": null
+    },
+    {
+      "At": "2026-10-04T00:00:10\u002B00:00",
+      "Memory": {
+        "TotalGiB": 128,
+        "AvailableGiB": 90
+      },
+      "Gpu": {
+        "UtilizationPercent": 40,
+        "PowerWatts": 30,
+        "TemperatureC": 50,
+        "SmClockMHz": 1500
+      },
+      "ModelMemoryGiB": {
+        "m": 12
+      },
+      "MemorySource": 0,
+      "OtherGpuGiB": null
+    },
+    {
+      "At": "2026-10-04T00:00:15\u002B00:00",
+      "Memory": {
+        "TotalGiB": 128,
+        "AvailableGiB": 90
+      },
+      "Gpu": {
+        "UtilizationPercent": 40,
+        "PowerWatts": 30,
+        "TemperatureC": 50,
+        "SmClockMHz": 1500
+      },
+      "ModelMemoryGiB": {
+        "m": 12
+      },
+      "MemorySource": 0,
+      "OtherGpuGiB": null
+    },
+    {
+      "At": "2026-10-04T00:00:20\u002B00:00",
+      "Memory": {
+        "TotalGiB": 128,
+        "AvailableGiB": 90
+      },
+      "Gpu": {
+        "UtilizationPercent": 40,
+        "PowerWatts": 30,
+        "TemperatureC": 50,
+        "SmClockMHz": 1500
+      },
+      "ModelMemoryGiB": {
+        "m": 12
+      },
+      "MemorySource": 0,
+      "OtherGpuGiB": null
+    }
+  ]
+}

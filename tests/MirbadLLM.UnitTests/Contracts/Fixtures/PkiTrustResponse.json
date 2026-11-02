@@ -1,0 +1,10 @@
+{
+  "anchors": [
+    {
+      "spkiSha256": "q1x7Hn2c0bWm8yJ2b3Ue9mJ3o0o7p0hJ6V1c4tQ2nYk=",
+      "subject": "CN=mirbadllm CA, O=mirbadllm",
+      "notAfter": "2036-10-03T08:00:00+00:00"
+    }
+  ],
+  "masterSan": "spiffe://mirbadllm/master"
+}

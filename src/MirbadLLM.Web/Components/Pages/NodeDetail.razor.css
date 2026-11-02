@@ -1,0 +1,183 @@
+/* A tab's first section starts right under the Line tabs (the panel already pads 16px). */
+.section--first {
+    margin-top: 0;
+}
+
+.node-cert-actions,
+.node-settings-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-2);
+}
+
+.node-settings-form {
+    display: grid;
+    gap: var(--ss-sp-4);
+}
+
+/* A SHA-256 fingerprint is 95 characters: let it wrap at any point instead of widening the page on a phone. */
+.node-fingerprint {
+    overflow-wrap: anywhere;
+}
+
+/* What to do about a Windows or native agent's Degraded reasons (MN-227): one muted line each, icon first. */
+.node-reason-help {
+    display: grid;
+    gap: var(--ss-sp-1);
+    margin: var(--ss-sp-2) 0 0;
+    padding: 0;
+    list-style: none;
+    color: var(--ss-text-muted);
+}
+
+.node-reason-help li {
+    display: flex;
+    gap: var(--ss-sp-2);
+    align-items: flex-start;
+}
+
+/* The icon keeps its size; the sentence beside it is a flex item that must be allowed to shrink below its
+   max-content width, or on a narrow page (~400 px) it stays one long line and runs off the panel's right edge
+   instead of wrapping (MN-239 item 7). "anywhere" is for the file paths and `code` these sentences quote. */
+.node-reason-help li > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+/* Installed llama.cpp versions: one per line; an unverified one carries its state pill (icon + label). */
+.node-versions {
+    display: grid;
+    gap: var(--ss-sp-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.node-version-state {
+    margin-inline-start: var(--ss-sp-2);
+}
+
+/* Header: id, state, OS and runtimes on one line; the reason, last contact and freshness under it. */
+.node-head-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ss-sp-2);
+    margin-top: var(--ss-sp-1);
+}
+
+.node-head-id {
+    color: var(--ss-text);
+}
+
+.node-head-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ss-sp-1) var(--ss-sp-3);
+    margin-top: var(--ss-sp-2);
+    font-size: var(--ss-fs-100);
+}
+
+.node-head-reason {
+    color: var(--ss-text);
+    max-width: 70ch;
+}
+
+/* Overview's attention panel: state reasons, their help, and the alerts the list flags. */
+.node-attention {
+    display: grid;
+    gap: var(--ss-sp-3);
+}
+
+.node-attention > p {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--ss-sp-2);
+    max-width: 80ch;
+}
+
+.node-attention-list {
+    display: grid;
+    gap: var(--ss-sp-1);
+    margin: 0;
+    padding-left: 1.1rem;
+}
+
+.node-disk-recovery h3 {
+    margin: 0 0 var(--ss-sp-2);
+    font-size: var(--ss-fs-300);
+}
+
+.node-disk-recovery ol {
+    display: grid;
+    gap: var(--ss-sp-2);
+    margin: 0 0 var(--ss-sp-3);
+    padding-inline-start: 1.25rem;
+}
+
+.node-alerts {
+    display: grid;
+    gap: var(--ss-sp-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.node-alert {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--ss-sp-2);
+    max-width: 80ch;
+}
+
+.node-alert > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.node-alert--failed { color: var(--ss-failed); }
+.node-alert--busy { color: var(--ss-busy); }
+
+.node-reason-help {
+    margin-top: 0;
+}
+
+/* Models on this node: the served name links to the model; a Failed one shows its cause in place. */
+.node-model-name {
+    font-family: var(--ss-font-mono);
+    font-weight: 600;
+}
+
+.node-model-error {
+    max-width: 48ch;
+    margin-top: var(--ss-sp-1);
+    color: var(--ss-failed);
+    font-size: var(--ss-fs-100);
+    overflow-wrap: anywhere;
+}
+
+.node-job {
+    margin-bottom: var(--ss-sp-3);
+}
+
+/* Hashes, fingerprints and audit details have no spaces: let them break anywhere rather than widen a table or the page. */
+.node-break {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.node-identity ::deep h1 { font-family:var(--ss-font-mono); font-size:26px; overflow-wrap:anywhere; }
+.node-overview { margin-top:0; }
+.node-overview > div { min-width:0; }
+.node-overview .section:first-child { margin-top:0; }
+.node-overview [data-testid=node-attention-none] { padding: 14px 16px; border: 1px solid var(--ss-panel-edge); border-radius: var(--ss-radius-lg); background: var(--ss-panel); box-shadow: var(--ss-panel-shadow); }
+.node-model-name { font-family: var(--ss-font-sans); font-size: 13px; font-weight: 500; }
+.node-models-table { min-width: 520px; }
+.node-models-table td { height: 52px; }
+.node-models-table .node-model-name { overflow-wrap: anywhere; }
+.node-models-table ::deep .state { background: transparent; border: 0; padding: 0; }
+.node-settings-group { display:grid; grid-template-columns:160px minmax(0,1fr); gap:var(--ss-sp-5); border-bottom:1px solid var(--ss-border); padding:var(--ss-sp-5) 0; }
+.node-settings-group h3 { font-size:var(--ss-fs-300); margin:0; }
+.node-settings-actions { position:sticky; bottom:var(--ss-sp-4); padding:var(--ss-sp-3); background:var(--ss-elevated); border-radius:var(--ss-radius); box-shadow:var(--ss-shadow-2); }
+@media (max-width:760px) { .node-settings-group { grid-template-columns:minmax(0,1fr); gap:var(--ss-sp-3); } }

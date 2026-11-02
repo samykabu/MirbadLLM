@@ -1,0 +1,7 @@
+{
+  "image": "local/qwen38-vllm-dflash2:66e5414c6d75",
+  "digest": "sha256:66e5414c6d75",
+  "operationId": "op-004",
+  "issuedAt": "2026-10-03T12:00:00+00:00",
+  "expiresAt": "2026-10-04T12:00:00+00:00"
+}

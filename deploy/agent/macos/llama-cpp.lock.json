@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "version": "b11476",
+  "backend": "metal",
+  "commit": "988190680",
+  "assets": [
+    {
+      "name": "llama-b11476-bin-macos-arm64.tar.gz",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11476/llama-b11476-bin-macos-arm64.tar.gz",
+      "sha256": "577634a1b8a59e8dabe02ba10de1e610be0574dfaf1cf3020e6dd42853ed877e",
+      "bytes": 12012019,
+      "prefix": "llama-b11476/"
+    }
+  ],
+  "files": [
+    {
+      "path": "LICENSE",
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+      "bytes": 1078
+    },
+    {
+      "path": "libggml-base.0.dylib",
+      "sha256": "6fba8bb7fb529801d1b73782ac1707b653b1ea4caf53f667b85bc801e2883326",
+      "bytes": 751256
+    },
+    {
+      "path": "libggml-blas.0.dylib",
+      "sha256": "6526259e8f70a5b3a394df3ba082050c290d7653846efbdc84b3710b22fb4eac",
+      "bytes": 58776
+    },
+    {
+      "path": "libggml-cpu.0.dylib",
+      "sha256": "937073375f79a187d8fda2e3900a9095e979593b691d6bbb146956743ceddd82",
+      "bytes": 957408
+    },
+    {
+      "path": "libggml-metal.0.dylib",
+      "sha256": "a40058fab152c973339e40e80df900c1b311e06bcfb4c1c473cb169c7ee88a5c",
+      "bytes": 5554552
+    },
+    {
+      "path": "libggml-rpc.0.dylib",
+      "sha256": "48c13b7c2c56e2b569b636e6a28d1c0853ad2d1db1980c0afd374651c6e897d0",
+      "bytes": 219808
+    },
+    {
+      "path": "libggml.0.dylib",
+      "sha256": "85ac40d540a5cc86f28a70270ddcdde677e92eb585c3bacd1b7e82270fe8934b",
+      "bytes": 60128
+    },
+    {
+      "path": "libllama-common.0.dylib",
+      "sha256": "e90e6f5bba4ff114f7fb9ed1328171b1c4eceac71ee8923178f5d417310b0d4e",
+      "bytes": 7753304
+    },
+    {
+      "path": "libllama-server-impl.dylib",
+      "sha256": "d699e1d7f0b3d5c63c9e7cd88c50e37c96cbf64802dbcefdc784983565a29608",
+      "bytes": 9195480
+    },
+    {
+      "path": "libllama.0.dylib",
+      "sha256": "423bd595e045f0bb8225ad721571d5ab9842815f1b975f2462d2c7c8e0594bd7",
+      "bytes": 3311984
+    },
+    {
+      "path": "libmtmd.0.dylib",
+      "sha256": "c87488222bc71275f75da743e8cc628b014b59d051bc0e303c444e96f54762a7",
+      "bytes": 1398944
+    },
+    {
+      "path": "llama-server",
+      "sha256": "1bf5602a2be50097c44282a6ecc63234d94ee8f96d39fd45fed6eff4e74b6b41",
+      "bytes": 49984
+    }
+  ]
+}

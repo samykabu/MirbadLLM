@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- A fake llama-server for process-driver tests and the Windows dev setup (design-p3p4 §A.1, plan-p3p4 §4.1).
+       Created empty by the P3/P4 contract freeze (MN-202); MN-211 implements it: /health 503 -> 200, /v1/models with
+       the alias, /v1/embeddings, streaming /v1/chat/completions, /metrics with llamacpp:* families, honouring
+       the port and alias arguments and LLAMA_API_KEY, with crash and slow-load knobs set by environment variables. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>fake-llama-server</AssemblyName>
+    <RootNamespace>MirbadLLM.FakeLlamaServer</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+</Project>

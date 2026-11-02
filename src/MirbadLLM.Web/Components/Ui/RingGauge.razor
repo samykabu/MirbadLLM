@@ -1,0 +1,54 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using System.Globalization
+@* A ring for a 0–100 share (a node's memory, a model's KV cache). Null draws the bare track and reads "—", never 0.
+   The value is always text as well: inside the ring with ShowValue, otherwise the caller prints it next to the ring. *@
+<span class="ring" style="@($"--ring-size: {Size}px")" role="img" aria-label="@($"{Label}: {Text}")" data-testid="@TestId">
+    <svg viewBox="0 0 36 36" aria-hidden="true">
+        <circle class="ring-track" cx="18" cy="18" r="@F(Radius)" stroke-width="@F(Stroke)" />
+        @if (Clamped is double percent)
+        {
+            <circle class="ring-value" cx="18" cy="18" r="@F(Radius)" stroke-width="@F(Stroke)"
+                    stroke-dasharray="@F(Circumference)" stroke-dashoffset="@F(Circumference * (1 - percent / 100))"
+                    data-testid="@(TestId is null ? null : $"{TestId}-value")" />
+        }
+    </svg>
+    @if (ShowValue)
+    {
+        <b class="ring-text num" aria-hidden="true">@Text</b>
+    }
+</span>
+
+@code {
+    /// <summary>The share, 0–100; null when it is not known.</summary>
+    [Parameter]
+    public double? Percent { get; set; }
+
+    /// <summary>What the ring measures, for the accessible name ("Memory", "KV cache").</summary>
+    [Parameter]
+    public string Label { get; set; } = "Usage";
+
+    /// <summary>Rendered width and height in pixels.</summary>
+    [Parameter]
+    public int Size { get; set; } = 52;
+
+    /// <summary>Ring thickness in the 36-unit view box.</summary>
+    [Parameter]
+    public double Stroke { get; set; } = 4;
+
+    /// <summary>Print the value inside the ring.</summary>
+    [Parameter]
+    public bool ShowValue { get; set; }
+
+    [Parameter]
+    public string? TestId { get; set; }
+
+    private double? Clamped => UiFormat.HasValue(Percent) ? Math.Clamp(Percent!.Value, 0, 100) : null;
+
+    private string Text => Clamped is double percent ? string.Create(CultureInfo.InvariantCulture, $"{percent:0}%") : UiFormat.Missing;
+
+    private double Radius => 18 - (Stroke / 2);
+
+    private double Circumference => 2 * Math.PI * Radius;
+
+    private static string F(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+}

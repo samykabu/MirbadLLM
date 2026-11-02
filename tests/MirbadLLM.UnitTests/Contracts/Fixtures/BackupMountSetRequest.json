@@ -1,0 +1,16 @@
+{
+  "settings": {
+    "type": "smb",
+    "server": "nas.lan",
+    "share": "backups",
+    "subfolder": "mirbadllm",
+    "username": "spark",
+    "password": "s3cret-share-password",
+    "domain": "WORKGROUP",
+    "smbVersion": "3.1.1",
+    "nfsVersion": null
+  },
+  "operationId": "op-201",
+  "issuedAt": "2026-10-03T10:00:00+00:00",
+  "expiresAt": "2026-10-04T10:00:00+00:00"
+}

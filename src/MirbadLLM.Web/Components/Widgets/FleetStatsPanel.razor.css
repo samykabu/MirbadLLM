@@ -1,0 +1,47 @@
+.fleet-stats {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ss-sp-3);
+    min-width: 0;
+    padding: var(--ss-sp-4);
+}
+
+.fleet-stats-title {
+    margin: 0;
+    font-family: var(--ss-font-display);
+    font-size: var(--ss-fs-300);
+    font-weight: 600;
+}
+
+.fleet-counters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--ss-sp-2);
+    margin: 0;
+}
+
+.fleet-counters > div {
+    display: grid;
+    gap: 2px;
+    align-content: start;
+    min-width: 0;
+    padding: var(--ss-sp-3);
+    background: var(--ss-sunken);
+    border-radius: var(--ss-radius);
+}
+
+.fleet-counters dt {
+    color: var(--ss-text-muted);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.fleet-counters dd {
+    margin: 0;
+    font-size: var(--ss-fs-400);
+    font-weight: 600;
+}
+
+.fleet-counters .muted { font-size: 11px; }

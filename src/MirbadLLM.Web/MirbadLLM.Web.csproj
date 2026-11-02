@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MirbadLLM.Core\MirbadLLM.Core.csproj" />
+    <ProjectReference Include="..\MirbadLLM.Agent.Contracts\MirbadLLM.Agent.Contracts.csproj" />
+    <ProjectReference Include="..\MirbadLLM.Pki\MirbadLLM.Pki.csproj" />
+    <ProjectReference Include="..\MirbadLLM.NodeRuntime\MirbadLLM.NodeRuntime.csproj" />
+    <ProjectReference Include="..\MirbadLLM.Orchestration\MirbadLLM.Orchestration.csproj" />
+    <ProjectReference Include="..\MirbadLLM.Router\MirbadLLM.Router.csproj" />
+  </ItemGroup>
+</Project>

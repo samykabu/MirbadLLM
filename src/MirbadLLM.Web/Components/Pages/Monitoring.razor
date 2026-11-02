@@ -1,0 +1,24 @@
+@page "/monitoring"
+@inject NavigationManager Nav
+@* Monitoring merged into the Overview (the "Command Deck"): old links and bookmarks land there with their ?node= and
+   ?model= kept. *@
+
+@code {
+    protected override void OnInitialized() => Nav.NavigateTo(Target(Nav.Uri), replace: true);
+
+    /// <summary>The Overview with the node and model of <paramref name="uri"/>'s query, and nothing else.</summary>
+    public static string Target(string uri)
+    {
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(new Uri(uri).Query);
+        var kept = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (string key in new[] { NodeSelector.DefaultQueryKey, Dashboard.ModelQueryKey })
+        {
+            if (query.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value.FirstOrDefault()))
+            {
+                kept[key] = value.FirstOrDefault();
+            }
+        }
+
+        return Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString("/", kept);
+    }
+}

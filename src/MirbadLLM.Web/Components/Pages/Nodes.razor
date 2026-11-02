@@ -1,0 +1,674 @@
+@page "/nodes"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using System.Globalization
+@using MirbadLLM.Orchestration.Benchmarking
+@using MirbadLLM.Web.Api
+@inject IServiceProvider ServiceProvider
+@inject NavigationManager Nav
+
+<PageTitle>Nodes · MirbadLLM</PageTitle>
+
+<PageHeader Title="Nodes">
+    <Subtitle>
+        The machines this master runs models on: their state, the memory a new model can still get, and what needs attention.
+        Open a node for its GPUs, services, operations, agent and certificate.
+        <LiveStamp At="_loadedAt" TestId="nodes-updated" />
+    </Subtitle>
+    <Actions>
+        @if (_admin is not null && _caller is not null)
+        {
+            <button type="button" class="btn btn-primary" data-testid="nodes-add" data-tour="nodes-add" @onclick="OpenAdd"><Icon Name="plus" /> Add node</button>
+        }
+    </Actions>
+</PageHeader>
+
+@if (_status is not null)
+{
+    <div class="callout callout--ready page-alert" role="status" data-testid="nodes-status">
+        <Icon Name="state-ready" />
+        <div class="callout-body">@_status</div>
+    </div>
+}
+
+@if (_cache is null && _registry is null)
+{
+    <EmptyState Title="Node monitoring is not running" TestId="nodes-unavailable">
+        <ChildContent>
+            <p>This master has no node registry or status cache yet, so there are no nodes to show.</p>
+        </ChildContent>
+    </EmptyState>
+}
+else if (_rows is null)
+{
+    <p class="muted loading-line" role="status" data-testid="nodes-loading"><Icon Name="refresh" Class="icon--spin" /> Reading nodes…</p>
+}
+else
+{
+    @if (_error is not null)
+    {
+        <div class="callout callout--failed page-alert" role="alert" data-testid="nodes-error">
+            <Icon Name="state-failed" />
+            <div class="callout-body">@_error</div>
+        </div>
+    }
+
+    @if (_rows.Count > 0)
+    {
+        <AgentUpdatesCallout Admin="_admin" Caller="_caller" />
+    }
+
+    @if (_rows.Count == 0)
+    {
+        <EmptyState Title="No nodes yet" TestId="nodes-empty">
+            <ChildContent>
+                <p>
+                    A node appears here once its agent has enrolled with this master. The bootstrap node enrolls on first boot from its
+                    bundle; add any other machine with Add node.
+                </p>
+            </ChildContent>
+            <Actions>
+                @if (_admin is not null && _caller is not null)
+                {
+                    <button type="button" class="btn btn-outline-secondary" data-testid="nodes-empty-add" @onclick="OpenAdd"><Icon Name="plus" /> Add node</button>
+                }
+            </Actions>
+        </EmptyState>
+    }
+    else
+    {
+        var reporting = _rows.Where(r => r.IsServing && r.Memory is not null).ToList();
+        <div class="panel summary-band" data-testid="nodes-summary" data-count-up>
+            <StatTile Label="Nodes" Value="@_rows.Count.ToString(CultureInfo.InvariantCulture)" Detail="@($"{reporting.Count} reporting · {_rows.Count - reporting.Count} without a reading")" ShowTrend="false" TestId="nodes-summary-count" />
+            <StatTile Label="Models placed" Value="@(_models is null ? UiFormat.Missing : _rows.Sum(r => r.PlacedModels ?? 0).ToString(CultureInfo.InvariantCulture))" Detail="@($"{_rows.Sum(r => r.ReadyModels)} Ready now")" ShowTrend="false" TestId="nodes-summary-models" />
+            <StatTile Label="Memory free" Value="@(reporting.Count == 0 ? UiFormat.Missing : UiFormat.Number(reporting.Sum(r => r.Memory!.HostAvailableGiB)))" Unit="GiB" Detail="On reporting nodes" ShowTrend="false" TestId="nodes-summary-memory" />
+            <StatTile Label="GPUs" Value="@(_rows.All(r => r.Capabilities is null) ? UiFormat.Missing : _rows.Sum(r => r.Capabilities?.Gpus.Count ?? 0).ToString(CultureInfo.InvariantCulture))" Detail="@string.Join(", ", _rows.SelectMany(r => r.Capabilities?.Gpus ?? []).Select(g => g.Name).Distinct())" ShowTrend="false" TestId="nodes-summary-gpus" />
+        </div>
+        <div class="nodes-grid" data-testid="nodes-table" role="list" aria-label="Nodes">
+            @foreach (var row in Pager.Slice(_rows, _page, _size))
+            {
+                var alerts = Alerts(row, _now);
+                        <article role="listitem" class="panel node-fleet-card" data-testid="@($"nodes-row-{row.Id}")" data-state="@StateBadge.NodeLook(row.State, row.Draining).Slug">
+                            <div class="col-primary nodes-col-node">
+                                <a class="nodes-name" href="@($"nodes/{Uri.EscapeDataString(row.Id)}")" data-testid="@($"nodes-open-{row.Id}")">@row.Id</a>
+                                @if (!string.Equals(row.Name, row.Id, StringComparison.Ordinal))
+                                {
+                                    <div class="model-card-id">@row.Name</div>
+                                }
+                                @if (row.AgentVersion is { } agentVersion)
+                                {
+                                    <div class="muted nodes-agent-version" title="@($"Agent {agentVersion}")">agent <span class="num" data-testid="@($"nodes-agent-version-{row.Id}")">@ProductVersion.Display(agentVersion)</span></div>
+                                }
+                                @if (OsBadgeText(row.Capabilities) is { } os)
+                                {
+                                    <ul class="tag-list" aria-label="Operating system">
+                                        <li class="tag-chip" data-os="@row.Capabilities!.Os.Family.Trim().ToLowerInvariant()" data-testid="@($"nodes-os-badge-{row.Id}")">@os</li>
+                                    </ul>
+                                }
+                                <div class="node-runtime-chips">@foreach (var runtime in row.Capabilities?.Runtimes ?? []) { <span class="tag-chip">@FleetNodes.RuntimeLabel(runtime.Kind)</span> }</div>
+                            </div>
+                            <div data-label="State" class="nodes-col-state">
+                                <div class="nodes-cell">
+                                <div class="state-cell">
+                                    <StateBadge Node="row.State" Draining="BadgeDraining(row)" TestId="@($"nodes-state-{row.Id}")" />
+                                    @if (ShowDrainingChip(row))
+                                    {
+                                        <span class="chip chip--busy chip--inline" data-testid="@($"nodes-draining-{row.Id}")"><Icon Name="state-stopping" /> Draining</span>
+                                    }
+                                    @if (_jobs?.JobOnNode(row.Id) is { } job)
+                                    {
+                                        <a class="chip chip--busy chip--inline" href="@JobHref(job)" data-testid="@($"nodes-job-{row.Id}")"><Icon Name="gauge" /> @JobText(job)</a>
+                                    }
+                                </div>
+                                @if (row.Reasons.Count > 0)
+                                {
+                                    <div class="muted nodes-reasons" data-testid="@($"nodes-reasons-{row.Id}")">@string.Join("; ", row.Reasons)</div>
+                                }
+                                @if (!row.IsServing && row.State != NodeState.PendingApproval)
+                                {
+                                    <div class="muted nodes-seen">last seen <span class="num" data-testid="@($"nodes-seen-{row.Id}")">@LastSeenText(row.LastContact, _now)</span></div>
+                                }
+                                </div>
+                            </div>
+                            <div data-label="Headroom" class="nodes-col-headroom" data-testid="@($"nodes-memory-{row.Id}")">
+                                <div class="nodes-cell">@HeadroomCell(row)</div>
+                            </div>
+                            <div data-label="Models" data-testid="@($"nodes-models-{row.Id}")">
+                                <div class="nodes-cell"><span class="num">@row.ReadyModels</span> Ready<span class="muted"> / <span class="num">@(row.PlacedModels?.ToString(CultureInfo.InvariantCulture) ?? UiFormat.Missing)</span> placed</span></div>
+                            </div>
+                            <div class="node-model-pills" aria-label="Placed models">@foreach (var model in _models?.Where(m => m.Placement?.NodeId == row.Id) ?? []) { <a class="tag-chip" href="@($"models?model={Uri.EscapeDataString(model.Id)}")"><span class="node-model-dot" data-ready="@(row.Runtimes.Any(r => r.ModelId == model.Id && r.State == ModelState.Ready) ? "true" : "false")" aria-hidden="true"></span>@model.ServedName</a> }</div>
+                            <div data-label="Alerts" class="nodes-col-alerts" data-testid="@($"nodes-alerts-{row.Id}")">
+                                @if (alerts.Count == 0)
+                                {
+                                    <span class="muted">None</span>
+                                }
+                                else
+                                {
+                                    <ul class="nodes-alerts">
+                                        @foreach (var alert in alerts)
+                                        {
+                                            <li class="nodes-alert nodes-alert--@alert.Tone" data-testid="@($"nodes-alert-{alert.Key}-{row.Id}")">
+                                                <Icon Name="@alert.Icon" /> <span>@alert.Text</span>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                            <a class="node-open" href="@($"nodes/{Uri.EscapeDataString(row.Id)}")">Open <Icon Name="chevron-right" /></a>
+                            <div class="col-actions">
+                                <span class="row-actions">
+                                    @if (_admin is not null && _caller is not null && NodeActionRules.CanApprove(row))
+                                    {
+                                        <button type="button" class="btn btn-sm btn-primary" data-testid="@($"nodes-approve-open-{row.Id}")"
+                                                aria-label="@($"Approve {row.Name}")" @onclick="() => Pick(new NodeActionRequest(NodeAction.Approve, row))">
+                                            <Icon Name="check" /> Approve…
+                                        </button>
+                                    }
+                                    @if (_admin is not null && _caller is not null && NodeRowMenu.HasAny(row))
+                                    {
+                                        <NodeRowMenu Row="row" OnPick="Pick" CanRotate="_canRotate" />
+                                    }
+                                </span>
+                            </div>
+                        </article>
+            }
+        </div>
+        <Pager Total="_rows.Count" @bind-Page="_page" @bind-Size="_size" Noun="nodes" TestId="nodes-pager" />
+    }
+}
+
+@if (_admin is not null && _caller is not null)
+{
+    <AddNodeDialog @bind-Open="_adding" Caller="_caller" OnChanged="OnAddChangedAsync" />
+    <NodeActionDialogs @bind-Request="_action" Caller="_caller" Models="_models" OnDone="OnActionDoneAsync" />
+}
+
+@code {
+    private INodeStatusCache? _cache;
+    private INodeRegistry? _registry;
+    private TimeProvider _time = TimeProvider.System;
+    private List<NodeRow>? _rows;
+    private string? _error;
+    private DateTimeOffset? _loadedAt;
+    private DateTimeOffset _now;
+    private int _page = 1;
+    private int? _size;
+    private LiveDataService? _live;
+    private bool _ownsLive;
+    private IDisposable? _subscription;
+    private NodeAdminService? _admin;
+    private ModelJobService? _jobs;
+    private NodeApiCaller? _caller;
+    private bool _canRotate;
+    private bool _adding;
+    private NodeActionRequest? _action;
+    private IReadOnlyList<ModelDefinition>? _models;
+    private string? _status;
+
+    // The page reads the node cache itself; the shared refresh only paces it (and supplies the placed models).
+    private const LiveNeeds Needs = LiveNeeds.Models;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _cache = ServiceProvider.GetService<INodeStatusCache>();
+        _registry = ServiceProvider.GetService<INodeRegistry>();
+        _time = ServiceProvider.GetService<TimeProvider>() ?? TimeProvider.System;
+        if (_cache is null && _registry is null)
+        {
+            return;
+        }
+
+        _admin = ServiceProvider.GetService<NodeAdminService>();
+        _jobs = ServiceProvider.GetService<ModelJobService>();
+        _canRotate = ServiceProvider.GetService<MirbadLLM.Orchestration.Pki.CertificateRotationService>() is not null;
+        if (_admin is not null)
+        {
+            _caller = await NodeActionDialogs.ResolveCallerAsync(ServiceProvider, PageHost(Nav), Nav.BaseUri);
+        }
+
+        _live = LiveDataService.Resolve(ServiceProvider, out _ownsLive);
+        await LoadAsync(await _live.GetAsync(Needs));
+        _subscription = _live.Subscribe(Needs, snapshot => InvokeAsync(async () =>
+        {
+            await LoadAsync(snapshot);
+            StateHasChanged();
+        }));
+    }
+
+    private async Task LoadAsync(LiveSnapshot snapshot)
+    {
+        try
+        {
+            _models = snapshot.Models;
+            _rows = await BuildRowsAsync(_cache, _registry, _models);
+            _error = null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _error = $"Could not read the nodes: {ex.Message}";
+            _rows ??= [];
+        }
+
+        _now = _time.GetUtcNow();
+        _loadedAt = _now;
+    }
+
+    private void OpenAdd()
+    {
+        _status = null;
+        _adding = true;
+    }
+
+    private void Pick(NodeActionRequest request)
+    {
+        _status = null;
+        _action = request;
+    }
+
+    private async Task OnActionDoneAsync(NodeActionResult result)
+    {
+        _status = result.Message;
+        await ReloadAsync();
+    }
+
+    private async Task OnAddChangedAsync(string? message)
+    {
+        if (message is not null)
+        {
+            _status = message;
+        }
+
+        await ReloadAsync();
+    }
+
+    /// <summary>Reads the nodes again right after an action, without waiting for the shared refresh.</summary>
+    private async Task ReloadAsync()
+    {
+        if (_live is not null)
+        {
+            await LoadAsync(await _live.RefreshAsync());
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _subscription?.Dispose();
+        if (_ownsLive && _live is not null)
+        {
+            await _live.DisposeAsync();
+        }
+    }
+
+    // ---- Shared with NodeDetail ----
+
+    /// <summary>
+    /// One node as the Nodes pages show it: the persisted record merged with the live status. The live view wins;
+    /// the record fills in what a node without live status (pending, offline, monitor not started) still has.
+    /// </summary>
+    public sealed record NodeRow
+    {
+        public required string Id { get; init; }
+
+        public required string Name { get; init; }
+
+        public required NodeState State { get; init; }
+
+        public bool Draining { get; init; }
+
+        public IReadOnlyList<string> Reasons { get; init; } = [];
+
+        public string? Address { get; init; }
+
+        public IReadOnlyList<string> AltAddresses { get; init; } = [];
+
+        public NodeCapabilities? Capabilities { get; init; }
+
+        public NodeMemorySnapshot? Memory { get; init; }
+
+        public string? AgentVersion { get; init; }
+
+        public ProtocolRange? AgentProtocol { get; init; }
+
+        public int? SelectedProtocol { get; init; }
+
+        public DateTimeOffset? CertNotAfter { get; init; }
+
+        public CertificateRotationStage? RotationStage { get; init; }
+
+        public string? RotationError { get; init; }
+
+        public IReadOnlyList<NodeOperationSummary> OpenOperations { get; init; } = [];
+
+        public IReadOnlyList<NodeModelRuntime> Runtimes { get; init; } = [];
+
+        public DateTimeOffset? LastContact { get; init; }
+
+        public double ReserveGiB { get; init; } = 8;
+
+        public int ReadyModels { get; init; }
+
+        /// <summary>Models whose placement names this node; null when the model list is not available.</summary>
+        public int? PlacedModels { get; init; }
+
+        /// <summary>The persisted record; null for a node the cache knows but the registry does not (yet).</summary>
+        public NodeRecord? Record { get; init; }
+
+        public bool IsServing => State is NodeState.Online or NodeState.Degraded;
+    }
+
+    /// <summary>
+    /// The badge reads "Draining" only for an Online node (it still serves); any other state keeps its own badge plus a
+    /// Draining chip, so both are visible (W3 review MN-094: a draining node that is Degraded or Offline).
+    /// </summary>
+    public static bool BadgeDraining(NodeRow row) => row.Draining && row.State == NodeState.Online;
+
+    /// <summary>The Draining chip beside a badge that does not already say it.</summary>
+    public static bool ShowDrainingChip(NodeRow row) => row.Draining && row.State != NodeState.Online;
+
+    /// <summary>"Benchmark running", "Tuning running".</summary>
+    public static string JobText(JobSnapshot job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        return job.Kind == JobKind.Tuning ? "Tuning running" : "Benchmark running";
+    }
+
+    /// <summary>The progress page of a job.</summary>
+    public static string JobHref(JobSnapshot job)
+    {
+        ArgumentNullException.ThrowIfNull(job);
+        return $"models/{Uri.EscapeDataString(job.ModelId)}/{(job.Kind == JobKind.Tuning ? "tune" : "benchmark")}";
+    }
+
+    /// <summary>The host of the page, for the enroll URL default (the node API's own rule uses the request host).</summary>
+    public static string? PageHost(NavigationManager nav)
+    {
+        ArgumentNullException.ThrowIfNull(nav);
+        return Uri.TryCreate(nav.BaseUri, UriKind.Absolute, out Uri? uri) ? uri.Host : null;
+    }
+
+    // ---- List cells ----
+
+    /// <summary>Days before expiry from which the list flags a node's certificate (the master renews well before that).</summary>
+    public const int CertificateSoonDays = 30;
+
+    /// <summary>One alert on a node's row: what needs attention, never colour alone (icon + words).</summary>
+    public sealed record NodeAlert(string Key, string Text, string Icon, string Tone);
+
+    /// <summary>
+    /// What needs attention on a node besides its state: an expired or soon-expiring certificate, a failed rotation, an agent
+    /// older than this master's protocol or from another build than <paramref name="controllerVersion"/> (default: this
+    /// master's), and open operations (MN critique 2026-10-15: the list keeps state, headroom, models
+    /// and alerts; the facts behind them live on the node's page).
+    /// </summary>
+    public static List<NodeAlert> Alerts(NodeRow row, DateTimeOffset now, string? controllerVersion = null)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        var alerts = new List<NodeAlert>();
+        if (row.CertNotAfter is { } notAfter && row.State != NodeState.PendingApproval)
+        {
+            var left = notAfter - now;
+            if (left <= TimeSpan.Zero)
+            {
+                alerts.Add(new("cert", "Certificate expired: re-pair the node", "state-failed", "failed"));
+            }
+            else if (left.TotalDays < CertificateSoonDays)
+            {
+                int days = (int)Math.Floor(left.TotalDays);
+                string when = days switch
+                {
+                    0 => "today",
+                    1 => "in 1 day",
+                    _ => string.Create(CultureInfo.InvariantCulture, $"in {days} days"),
+                };
+                alerts.Add(new("cert", $"Certificate expires {when}", "clock", "busy"));
+            }
+        }
+
+        int failed = row.Runtimes.Count(r => r.State == ModelState.Failed);
+        if (failed > 0)
+        {
+            alerts.Add(new("models", failed == 1 ? "1 model failed" : $"{failed} models failed", "state-failed", "failed"));
+        }
+
+        if (row.RotationError is not null)
+        {
+            alerts.Add(new("rotation", "Certificate rotation failed", "warning", "failed"));
+        }
+
+        if (AgentOutdated(row))
+        {
+            alerts.Add(new("agent", row.State == NodeState.Incompatible ? "Agent incompatible: update it" : "Agent outdated: update it", "warning", row.State == NodeState.Incompatible ? "failed" : "busy"));
+        }
+        else if (AgentBuildDiffers(row, controllerVersion))
+        {
+            alerts.Add(new("build", "Agent from another build: update it", "refresh", "busy"));
+        }
+
+        if (row.OpenOperations.Count > 0)
+        {
+            alerts.Add(new("ops", row.OpenOperations.Count == 1 ? "1 operation running" : $"{row.OpenOperations.Count} operations running", "refresh", "neutral"));
+        }
+
+        return alerts;
+    }
+
+    /// <summary>
+    /// True when the agent runs another commit than this master (<see cref="ProductVersion.SameBuild"/>) while its protocol
+    /// is current: it works, but misses what the master's bundles carry. Never for a node waiting for approval, nor when
+    /// either version does not name its commit.
+    /// </summary>
+    public static bool AgentBuildDiffers(NodeRow row, string? controllerVersion = null)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return row.State != NodeState.PendingApproval && ProductVersion.SameBuild(row.AgentVersion, controllerVersion) == false;
+    }
+
+    /// <summary>True when the agent speaks an older protocol than this master's current one, or none in common.</summary>
+    public static bool AgentOutdated(NodeRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return row.State == NodeState.Incompatible
+            || (row.AgentProtocol is { } range && range.Current < MirbadLLM.Agent.Contracts.Protocol.CurrentVersion);
+    }
+
+    /// <summary>The memory a node can still give: unified, free of total; discrete, free per GPU (host RAM beside).</summary>
+    private static RenderFragment HeadroomCell(NodeRow row) => __builder =>
+    {
+        var model = row.Memory?.Model ?? row.Capabilities?.Memory.Model;
+        if (model == MemoryModel.Discrete && row.Memory is { Gpus.Count: > 0 } discrete)
+        {
+            <ul class="nodes-gpu-free">
+                @foreach (var gpu in discrete.Gpus.OrderBy(g => g.Index))
+                {
+                    <li data-testid="@($"nodes-gpu-free-{row.Id}-{gpu.Index}")">
+                        <span class="muted">GPU <span class="num">@gpu.Index</span></span><progress class="node-gpu-bar" value="@gpu.FreeGiB" max="@gpu.TotalGiB" aria-label="@($"GPU {gpu.Index} memory free")"></progress>
+                        <span><span class="num">@UiFormat.GiB(gpu.FreeGiB)</span> <span class="muted">free of</span> <span class="num">@UiFormat.GiB(gpu.TotalGiB)</span></span>
+                    </li>
+                }
+            </ul>
+            <div class="muted">Host RAM <span class="num">@UiFormat.GiB(discrete.HostAvailableGiB)</span> free</div>
+        }
+        else if (row.Memory is { } memory)
+        {
+            <RingGauge Percent="@(memory.HostTotalGiB > 0 ? 100 * (1 - memory.HostAvailableGiB / memory.HostTotalGiB) : null)" Size="56" ShowValue="true" Label="Memory used" TestId="@($"nodes-ring-{row.Id}")" />
+            <div><span class="num">@UiFormat.GiB(memory.HostAvailableGiB)</span> <span class="muted">free of</span> <span class="num">@UiFormat.GiB(memory.HostTotalGiB)</span></div>
+            <div class="muted">@(model == MemoryModel.Discrete ? "Host RAM, no GPU reading" : "Unified memory")</div>
+        }
+        else
+        {
+            <div><span class="num">@UiFormat.Missing</span></div>
+            <div class="muted">@(model switch { MemoryModel.Unified => "Unified memory, no reading yet", MemoryModel.Discrete => "No GPU reading yet", _ => "No memory reading yet" })</div>
+        }
+    };
+
+    /// <summary>Every non-revoked node, merged from the registry and the cache, ordered by name then id.</summary>
+    public static async Task<List<NodeRow>> BuildRowsAsync(
+        INodeStatusCache? cache, INodeRegistry? registry, IReadOnlyList<ModelDefinition>? models, CancellationToken ct = default)
+    {
+        var records = registry is null ? [] : await registry.ListAsync(ct);
+        var live = (cache?.ListNodes() ?? []).ToDictionary(n => n.NodeId, StringComparer.Ordinal);
+        var ids = records.Where(r => !r.Revoked).Select(r => r.Id)
+            .Concat(live.Keys)
+            .Distinct(StringComparer.Ordinal);
+        var recordById = records.ToDictionary(r => r.Id, StringComparer.Ordinal);
+        return ids
+            .Select(id => Merge(recordById.GetValueOrDefault(id), live.GetValueOrDefault(id), models))
+            .Where(r => r.State != NodeState.Revoked)
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.Id, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    /// <summary>One node from its record and live status (at least one must be given).</summary>
+    public static NodeRow Merge(NodeRecord? record, NodeLiveStatus? live, IReadOnlyList<ModelDefinition>? models)
+    {
+        string id = live?.NodeId ?? record?.Id ?? throw new ArgumentException("A record or a live status is required.", nameof(record));
+        var capabilities = live?.Capabilities ?? record?.LastCapabilities;
+        NodeState state = live?.State ?? (record!.Revoked ? NodeState.Revoked : !record.Approved ? NodeState.PendingApproval : NodeState.Offline);
+        IReadOnlyList<string> reasons = live?.Reasons
+            ?? (state == NodeState.Offline ? ["The master has no live status for this node yet."] : []);
+        DateTimeOffset? lastContact = (live?.LastContact, record?.LastContact) switch
+        {
+            ({ } a, { } b) => a > b ? a : b,
+            (var a, var b) => a ?? b,
+        };
+        var runtimes = live?.Runtimes ?? [];
+        return new NodeRow
+        {
+            Id = id,
+            Name = FirstText(live?.DisplayName, record?.DisplayName) ?? id,
+            State = state,
+            Draining = live?.Draining ?? record?.Draining ?? false,
+            Reasons = reasons,
+            Address = FirstText(live?.Address, record?.Address),
+            AltAddresses = record?.AltAddresses ?? [],
+            Capabilities = capabilities,
+            Memory = live?.Memory,
+            AgentVersion = FirstText(live?.AgentVersion, capabilities?.AgentVersion),
+            AgentProtocol = live?.AgentProtocol ?? capabilities?.Protocol,
+            SelectedProtocol = live?.SelectedProtocol,
+            CertNotAfter = live?.CertNotAfter ?? record?.CertNotAfter,
+            RotationStage = live?.RotationStage ?? record?.Rotation?.Stage,
+            RotationError = record?.Rotation?.Error,
+            OpenOperations = live?.OpenOperations ?? [],
+            Runtimes = runtimes,
+            LastContact = lastContact,
+            ReserveGiB = record?.MemoryReserveGiB ?? 8,
+            ReadyModels = runtimes.Count(r => r.State == ModelState.Ready),
+            PlacedModels = models?.Count(m => string.Equals(m.Placement?.NodeId, id, StringComparison.Ordinal)),
+            Record = record,
+        };
+    }
+
+    private static string? FirstText(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
+
+    /// <summary>The OS badge's word for a node's OS family ("Windows", "Linux", "macOS"); null when unknown (design-p3p4 §A.7).</summary>
+    public static string? OsBadgeText(NodeCapabilities? capabilities) => capabilities?.Os.Family?.Trim().ToLowerInvariant() switch
+    {
+        "windows" => "Windows",
+        "linux" => "Linux",
+        "macos" => "macOS",
+        _ => null,
+    };
+
+    /// <summary>
+    /// True when the nodes run more than one OS family: only then does each row carry an OS badge, so a Linux-only fleet
+    /// (the DGX) renders exactly as before (MN-227).
+    /// </summary>
+    public static bool MixedOs(IEnumerable<NodeRow> rows) =>
+        rows.Select(r => OsBadgeText(r.Capabilities)).Where(o => o is not null).Distinct(StringComparer.Ordinal).Skip(1).Any();
+
+    /// <summary>"Ubuntu 24.04 LTS · arm64", or "—".</summary>
+    public static string OsText(NodeCapabilities? capabilities) =>
+        capabilities is null ? UiFormat.Missing : $"{capabilities.Os.Description} · {capabilities.Arch}";
+
+    /// <summary>"Unified · 119.7 GiB", "Discrete · 64.0 GiB RAM", or "—".</summary>
+    public static string MemoryModelText(NodeRow row)
+    {
+        var model = row.Memory?.Model ?? row.Capabilities?.Memory.Model;
+        double? total = row.Memory?.HostTotalGiB ?? row.Capabilities?.Memory.TotalGiB;
+        return model switch
+        {
+            MemoryModel.Unified => $"Unified · {UiFormat.GiB(total)}",
+            MemoryModel.Discrete => $"Discrete · {UiFormat.GiB(total)} RAM",
+            _ => UiFormat.Missing,
+        };
+    }
+
+    /// <summary>GPUs grouped by product: "1 × NVIDIA GB10", "2 × RTX 4060 Ti 16.0 GiB"; "None" on a CPU-only node; "—" unknown.</summary>
+    public static string GpuText(NodeCapabilities? capabilities)
+    {
+        if (capabilities is null)
+        {
+            return UiFormat.Missing;
+        }
+
+        if (capabilities.Gpus.Count == 0)
+        {
+            return "None";
+        }
+
+        return string.Join(", ", capabilities.Gpus
+            .GroupBy(g => (g.Name, g.MemoryTotalGiB))
+            .Select(g => g.Key.MemoryTotalGiB is { } vram && UiFormat.HasValue(vram)
+                ? $"{g.Count()} × {g.Key.Name} {UiFormat.GiB(vram)}"
+                : $"{g.Count()} × {g.Key.Name}"));
+    }
+
+    /// <summary>"protocol 1 (agent 1–2)", "agent protocol 1–2, none in common", or "—".</summary>
+    public static string ProtocolText(NodeRow row) => (row.SelectedProtocol, row.AgentProtocol) switch
+    {
+        ({ } selected, { } range) => $"protocol {selected} (agent {RangeText(range)})",
+        ({ } selected, null) => $"protocol {selected}",
+        (null, { } range) when row.State == NodeState.Incompatible => $"agent protocol {RangeText(range)}, none in common",
+        (null, { } range) => $"agent protocol {RangeText(range)}",
+        _ => UiFormat.Missing,
+    };
+
+    private static string RangeText(ProtocolRange range) =>
+        range.Min == range.Current
+            ? range.Current.ToString(CultureInfo.InvariantCulture)
+            : string.Create(CultureInfo.InvariantCulture, $"{range.Min}–{range.Current}");
+
+    /// <summary>"2027-01-04 (in 92 days)", "2026-10-01 (expired)", or "—".</summary>
+    public static string CertExpiryText(DateTimeOffset? notAfter, DateTimeOffset now)
+    {
+        if (notAfter is not { } at)
+        {
+            return UiFormat.Missing;
+        }
+
+        string date = at.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var left = at - now;
+        if (left <= TimeSpan.Zero)
+        {
+            return $"{date} (expired)";
+        }
+
+        int days = (int)Math.Floor(left.TotalDays);
+        return days switch
+        {
+            0 => $"{date} (today)",
+            1 => $"{date} (in 1 day)",
+            _ => string.Create(CultureInfo.InvariantCulture, $"{date} (in {days} days)"),
+        };
+    }
+
+    /// <summary>The rotation state in words: "No rotation", "Rotating: CSR received", "Last rotation committed", ….</summary>
+    public static string RotationText(CertificateRotationStage? stage) => stage switch
+    {
+        null => "No rotation",
+        CertificateRotationStage.Committed => "Last rotation committed",
+        CertificateRotationStage.Aborted => "Last rotation aborted",
+        CertificateRotationStage.Requested => "Rotating: requested",
+        CertificateRotationStage.CsrReceived => "Rotating: CSR received",
+        CertificateRotationStage.CertIssued => "Rotating: certificate issued",
+        CertificateRotationStage.CertInstalled => "Rotating: certificate installed",
+        CertificateRotationStage.Committing => "Rotating: committing",
+        _ => $"Rotating: {stage}",
+    };
+
+    /// <summary>"12s ago", "4m 05s ago", or "—" when the node was never seen.</summary>
+    public static string LastSeenText(DateTimeOffset? lastContact, DateTimeOffset now) =>
+        lastContact is { } at ? $"{UiFormat.Elapsed(at, now)} ago" : UiFormat.Missing;
+}

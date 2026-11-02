@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in MirbadLLM does not work as documented.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Security problems do not belong here: use private vulnerability reporting (see SECURITY.md).
+        Remove API keys, tokens, passwords and private addresses from anything you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Models and choose Add model
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: MirbadLLM version
+      description: Shown at the bottom of the sidebar, for example 1.0.0+abc1234.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Single machine (deploy/compose.multinode.yaml)
+        - Multi-node
+        - Development fleet (tools/dev-multinode)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: node
+    attributes:
+      label: Node operating system and runtime involved
+      multiple: true
+      options:
+        - Linux, vLLM container
+        - Windows, llama.cpp
+        - macOS, llama.cpp
+        - macOS, MLX
+        - Not node-specific
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The model's Logs tab (last 20 lines), the master's or agent's log around the failure.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Hardware, GPU model, model and quantization, concurrency, screenshots.

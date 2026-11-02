@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- PKI library (design §3.2, §4.2, §10.2): CA, issuance from CSRs, SPKI pins, TLS peer validators for both sides.
+       Filled by MN-004. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\MirbadLLM.Agent.Contracts\MirbadLLM.Agent.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MirbadLLM.UnitTests" />
+  </ItemGroup>
+</Project>

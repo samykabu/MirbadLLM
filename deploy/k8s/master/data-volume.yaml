@@ -1,0 +1,45 @@
+# /data: models.json, nodes.json, keys, pki/, master.lock, ... (design §11.3). A local volume on one node: the master's
+# flock() lock (master.lock) needs a local filesystem, so NFS is out (owner decision). The pod follows the volume to that
+# node; if the node dies, /data is restored from a backup into a new volume (P5 runbook), not failed over.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: mirbadllm-local
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mirbadllm-data
+spec:
+  capacity:
+    storage: 10Gi
+  volumeMode: Filesystem
+  # One pod, not just one node; master.lock and Recreate carry the guarantee where RWOP is not enforced.
+  accessModes: [ReadWriteOncePod]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: mirbadllm-local
+  local:
+    # Create it on the node first: install -d -o 1654 -g 1654 -m 0750 /srv/mirbadllm/data
+    path: /srv/mirbadllm/data
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [CHANGE-ME-node-name]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mirbadllm-data
+spec:
+  accessModes: [ReadWriteOncePod]
+  storageClassName: mirbadllm-local
+  volumeName: mirbadllm-data
+  resources:
+    requests:
+      storage: 10Gi

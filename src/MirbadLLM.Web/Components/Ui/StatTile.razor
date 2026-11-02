@@ -1,0 +1,63 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* One fleet or host measurement: label, value with unit (or "—"), an optional trend and a detail line. *@
+<div class="tile" role="group" aria-labelledby="@LabelId" data-testid="@TestId">
+    <div class="tile-label" id="@LabelId">@Label</div>
+    <p class="tile-value">
+        @if (HasValue)
+        {
+            <span class="tile-number num" data-testid="@($"{TestId}-value")">@Value</span>
+            @if (!string.IsNullOrEmpty(Unit))
+            {
+                <span class="tile-unit" data-testid="@($"{TestId}-unit")">@Unit</span>
+            }
+        }
+        else
+        {
+            <span class="tile-number tile-number--empty num" data-testid="@($"{TestId}-value")">@UiFormat.Missing</span>
+        }
+    </p>
+    <div class="tile-foot@(ShowTrend ? "" : " tile-foot--no-trend")">
+        @if (ShowTrend)
+        {
+            <Sparkline Values="Trend ?? []" Label="@($"{Label}, {TrendWindow}")" TestId="@($"{TestId}-trend")" EmptyText="@TrendEmptyText" />
+        }
+        <div class="tile-detail" data-testid="@($"{TestId}-detail")">@Detail</div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Label { get; set; } = "";
+
+    /// <summary>The formatted number. Null, empty or "—" renders the missing-value dash and hides the unit.</summary>
+    [Parameter]
+    public string? Value { get; set; }
+
+    [Parameter]
+    public string? Unit { get; set; }
+
+    [Parameter]
+    public string? Detail { get; set; }
+
+    /// <summary>Samples for the sparkline; null means this measurement keeps no history (no sparkline).</summary>
+    [Parameter]
+    public IReadOnlyList<double?>? Trend { get; set; }
+
+    [Parameter]
+    public string TrendWindow { get; set; } = "last 15 minutes";
+
+    /// <summary>False when a full chart for the same metric sits right below the tile; removes the trend slot.</summary>
+    [Parameter]
+    public bool ShowTrend { get; set; } = true;
+
+    /// <summary>Shown in the sparkline's slot when <see cref="Trend"/> has fewer than two samples.</summary>
+    [Parameter]
+    public string TrendEmptyText { get; set; } = "Not enough data yet";
+
+    [Parameter]
+    public string TestId { get; set; } = "tile";
+
+    private bool HasValue => !string.IsNullOrEmpty(Value) && Value != UiFormat.Missing;
+
+    private string LabelId => $"{TestId}-label";
+}

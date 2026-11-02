@@ -1,0 +1,9 @@
+{
+  "scenario": "get_models",
+  "method": "GET",
+  "path": "/v1/models",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "retryAfter": null,
+  "body": "{\u0022object\u0022:\u0022list\u0022,\u0022data\u0022:[{\u0022id\u0022:\u0022ready-model\u0022,\u0022object\u0022:\u0022model\u0022,\u0022created\u0022:0,\u0022owned_by\u0022:\u0022mirbadllm\u0022,\u0022max_model_len\u0022:8192,\u0022capabilities\u0022:{\u0022chat\u0022:true,\u0022embeddings\u0022:false,\u0022tool_calling\u0022:true,\u0022vision\u0022:false}}]}"
+}

@@ -1,0 +1,168 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using System.Globalization
+@using MirbadLLM.Orchestration.Benchmarking
+@* Two benchmark runs side by side (A = the earlier one): the headline metrics, what changed in the settings,
+   and the change in percent. "Better" is spelled out in words with an arrow, never colour alone, and it knows
+   which metrics are better lower (latencies). *@
+<div class="panel compare" data-testid="benchmark-compare">
+    <div class="compare-head">
+        <h3>Compare runs</h3>
+        <span class="muted">A = @UiFormat.RunTime(A.StartedAt) · B = @UiFormat.RunTime(B.StartedAt)</span>
+    </div>
+    @if (Changes.Count > 0)
+    {
+        <p class="compare-settings" data-testid="compare-settings">
+            Settings changed: @string.Join("; ", Changes.Select(c => c.ToString()))
+        </p>
+    }
+    else
+    {
+        <p class="compare-settings muted">Same settings in both runs.</p>
+    }
+    @if (BenchmarkComparisons.Label(A.Provenance, B.Provenance, BootstrapNodeId) is { } label)
+    {
+        <p class="compare-noisy" data-testid="compare-hardware"><Icon Name="warning" /> The runs were measured on @label (@Where(A) vs @Where(B)); the numbers are not comparable.</p>
+    }
+    @if (A.Result?.Noise.Noisy == true || B.Result?.Noise.Noisy == true)
+    {
+        <p class="compare-noisy" data-testid="compare-noisy"><Icon Name="warning" /> At least one run is marked noisy; small differences may be noise.</p>
+    }
+    <div class="panel--scroll-x">
+        <table class="data-table data-table--stack" data-testid="compare-table">
+            <caption class="visually-hidden">Benchmark run A compared with run B</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Metric</th>
+                    <th scope="col">A</th>
+                    <th scope="col">B</th>
+                    <th scope="col">Change</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in Rows)
+                {
+                    var delta = Delta(row.A, row.B);
+                    var verdict = Verdict(delta, row.HigherIsBetter);
+                    <tr>
+                        <td class="col-primary">@row.Label</td>
+                        <td data-label="A" class="num">@row.Format(row.A)</td>
+                        <td data-label="B" class="num">@row.Format(row.B)</td>
+                        <td data-label="Change" class="num">
+                            <span class="delta delta--@verdict" data-testid="@($"compare-delta-{row.Key}")">
+                                @UiFormat.SignedPercent(delta)@(verdict switch { "better" => " better", "worse" => " worse", _ => "" })
+                            </span>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public BenchmarkRun A { get; set; } = null!;
+
+    [Parameter, EditorRequired]
+    public BenchmarkRun B { get; set; } = null!;
+
+    /// <summary>The node runs stored before provenance existed were measured on (MN-112).</summary>
+    [Parameter]
+    public string BootstrapNodeId { get; set; } = MirbadLLM.Orchestration.RegistryMigrationOptions.DefaultBootstrapNodeId;
+
+    private string Where(BenchmarkRun run) =>
+        BenchmarkComparisons.Of(run, BootstrapNodeId) is var p && p.Gpus.Count > 0
+            ? $"{p.NodeId}, {string.Join(" + ", p.Gpus.Select(g => g.Name ?? g.Uuid))}"
+            : p.NodeId;
+
+    private IReadOnlyList<SettingChange> Changes => SettingChanges.RestartNeeded(A.Settings, B.Settings);
+
+    /// <summary>One compared metric. <see cref="HigherIsBetter"/> false for latencies.</summary>
+    public sealed record CompareRow(string Key, string Label, double? A, double? B, bool HigherIsBetter, Func<double?, string> Format);
+
+    private IReadOnlyList<CompareRow> Rows => BuildRows(A.Result, B.Result);
+
+    /// <summary>The compared metrics; public so tests can check the deltas without rendering.</summary>
+    public static IReadOnlyList<CompareRow> BuildRows(BenchmarkResult? a, BenchmarkResult? b)
+    {
+        static string TokS(double? v) => UiFormat.HasValue(v) ? $"{UiFormat.Number(v)} tok/s" : UiFormat.Missing;
+        var rows = new List<CompareRow>();
+        if (a?.Embeddings is not null || b?.Embeddings is not null)
+        {
+            var ea = a?.Embeddings;
+            var eb = b?.Embeddings;
+            foreach (int n in (ea?.Levels ?? []).Select(l => l.Concurrency).Union((eb?.Levels ?? []).Select(l => l.Concurrency)).Order())
+            {
+                string ns = n.ToString(CultureInfo.InvariantCulture);
+                rows.Add(new($"n{ns}-input", $"N = {ns} input", ea?.Level(n)?.InputTokS, eb?.Level(n)?.InputTokS, true, TokS));
+            }
+
+            rows.Add(new("n1-latency-p50", "Latency p50 at N = 1", ea?.Level(1)?.LatencyP50, eb?.Level(1)?.LatencyP50, false, UiFormat.LatencyText));
+            rows.Add(new("n16-latency-p95", "Latency p95 at N = 16", ea?.Level(16)?.LatencyP95, eb?.Level(16)?.LatencyP95, false, UiFormat.LatencyText));
+            return rows;
+        }
+
+        var keys = (a?.Levels ?? []).Select(l => (l.Concurrency, l.OutputTokens))
+            .Union((b?.Levels ?? []).Select(l => (l.Concurrency, l.OutputTokens)))
+            .OrderBy(k => k.OutputTokens).ThenBy(k => k.Concurrency);
+        foreach (var (n, tokens) in keys)
+        {
+            string ns = n.ToString(CultureInfo.InvariantCulture);
+
+            // Classic (v1) levels are all 256 tokens and keep their keys; longer outputs (v2) say so.
+            string key = tokens == 256 ? $"n{ns}" : string.Create(CultureInfo.InvariantCulture, $"t{tokens}-n{ns}");
+            string label = tokens == 256 ? $"N = {ns}" : string.Create(CultureInfo.InvariantCulture, $"{tokens:N0} tokens, N = {ns}");
+            if (n == 1)
+            {
+                rows.Add(new($"{key}-per-request", $"{label} per-request", a?.Level(n, tokens)?.PerRequestTokS, b?.Level(n, tokens)?.PerRequestTokS, true, TokS));
+            }
+
+            rows.Add(new($"{key}-aggregate", $"{label} aggregate", a?.Level(n, tokens)?.AggregateTokS, b?.Level(n, tokens)?.AggregateTokS, true, TokS));
+        }
+
+        foreach (int t in (a?.LongPrompts ?? []).Select(l => l.TargetTokens).Union((b?.LongPrompts ?? []).Select(l => l.TargetTokens)).Order())
+        {
+            rows.Add(new(string.Create(CultureInfo.InvariantCulture, $"long-{t}"), string.Create(CultureInfo.InvariantCulture, $"Cold {t / 1024}K prompt TTFT"),
+                a?.LongPrompts?.FirstOrDefault(l => l.TargetTokens == t)?.TtftMedian, b?.LongPrompts?.FirstOrDefault(l => l.TargetTokens == t)?.TtftMedian, false, UiFormat.Seconds));
+        }
+
+        if (a?.SharedPrefix is not null || b?.SharedPrefix is not null)
+        {
+            rows.Add(new("shared-prefix", "Shared-prefix TTFT", a?.SharedPrefix?.TtftMedian, b?.SharedPrefix?.TtftMedian, false, UiFormat.Seconds));
+        }
+
+        if (a?.Mixed is not null || b?.Mixed is not null)
+        {
+            rows.Add(new("mixed-short-ttft", "Short TTFT p95 under a long request", a?.Mixed?.ShortTtftP95, b?.Mixed?.ShortTtftP95, false, UiFormat.Seconds));
+        }
+
+        if (a?.Tools is not null || b?.Tools is not null)
+        {
+            rows.Add(new("tools", "Valid tool calls", a?.Tools?.Validity * 100, b?.Tools?.Validity * 100, true,
+                v => UiFormat.HasValue(v) ? $"{UiFormat.Whole(v)} %" : UiFormat.Missing));
+        }
+
+        rows.Add(new("n1-ttft-p50", "TTFT p50 at N = 1", a?.Level(1)?.TtftP50, b?.Level(1)?.TtftP50, false, UiFormat.LatencyText));
+        rows.Add(new("n16-ttft-p95", "TTFT p95 at N = 16", a?.Level(16)?.TtftP95, b?.Level(16)?.TtftP95, false, UiFormat.LatencyText));
+        rows.Add(new("prefill-cold", "Long prompt, cold", a?.Prefill?.ColdSeconds, b?.Prefill?.ColdSeconds, false, UiFormat.Seconds));
+        rows.Add(new("prefill-cached", "Long prompt, cached", a?.Prefill?.CachedSeconds, b?.Prefill?.CachedSeconds, false, UiFormat.Seconds));
+        rows.Add(new("qa", "Objective answers", a?.Guardrails.QaCorrect, b?.Guardrails.QaCorrect, true,
+            v => UiFormat.HasValue(v) ? $"{UiFormat.Whole(v)} / {a?.Guardrails.QaTotal ?? b?.Guardrails.QaTotal}" : UiFormat.Missing));
+        return rows;
+    }
+
+    /// <summary>(B − A) ÷ A in percent; null when either is missing or A is zero.</summary>
+    public static double? Delta(double? a, double? b) =>
+        UiFormat.HasValue(a) && UiFormat.HasValue(b) && Math.Abs(a!.Value) > 1e-9 ? (b!.Value - a.Value) / a.Value * 100 : null;
+
+    /// <summary>"better", "worse" or "same" (within ±1 %), accounting for lower-is-better metrics.</summary>
+    public static string Verdict(double? delta, bool higherIsBetter)
+    {
+        if (delta is not { } d || Math.Abs(d) < 1)
+        {
+            return "same";
+        }
+
+        return (d > 0) == higherIsBetter ? "better" : "worse";
+    }
+}

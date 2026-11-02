@@ -1,0 +1,11 @@
+{
+  "token": "cmVrZXktZml4dHVyZS10b2tlbi1ub3QtcmVhbA",
+  "nodeId": "pc-office",
+  "nodeUid": "7d1e5b0c9a2f4e3d8c6b5a4f3e2d1c0b",
+  "csrPem": "-----BEGIN CERTIFICATE REQUEST-----\nMIHzMIGaAgEAMAAwWTATBgcqhkjOPQIBfixture\n-----END CERTIFICATE REQUEST-----\n",
+  "addresses": [
+    "192.0.2.50",
+    "pc-office.lan"
+  ],
+  "capabilities": null
+}

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
+    <PackageReference Include="bunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MirbadLLM.Web\MirbadLLM.Web.csproj" />
+    <ProjectReference Include="..\..\src\MirbadLLM.HostAgent\MirbadLLM.HostAgent.csproj" />
+    <ProjectReference Include="..\..\src\MirbadLLM.Agent.Contracts\MirbadLLM.Agent.Contracts.csproj" />
+    <ProjectReference Include="..\..\src\MirbadLLM.Pki\MirbadLLM.Pki.csproj" />
+    <ProjectReference Include="..\..\src\MirbadLLM.NodeRuntime\MirbadLLM.NodeRuntime.csproj" />
+    <ProjectReference Include="..\..\src\MirbadLLM.Agent\MirbadLLM.Agent.csproj" />
+    <!-- The fake llama-server (P3, MN-202 creates it, MN-211 implements it): built next to the tests so process-driver
+         and dev-setup tests can start it as a child process. -->
+    <ProjectReference Include="..\MirbadLLM.FakeLlamaServer\MirbadLLM.FakeLlamaServer.csproj" />
+  </ItemGroup>
+</Project>

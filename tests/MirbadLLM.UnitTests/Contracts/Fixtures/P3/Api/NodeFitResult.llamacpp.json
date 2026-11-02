@@ -1,0 +1,36 @@
+{
+  "nodeId": "win-1",
+  "model": "discrete",
+  "fits": true,
+  "needGiB": 8.9,
+  "freeGiB": 10.9,
+  "reserveGiB": 8,
+  "gpus": [
+    {
+      "uuid": "GPU-7c1e9a52-3f60-4d2b-9a8e-5b0f2c6d1e44",
+      "index": 1,
+      "needGiB": 8.9,
+      "freeGiB": 10.9,
+      "reserveGiB": 2.5,
+      "fits": true
+    }
+  ],
+  "host": {
+    "needGiB": 2,
+    "freeGiB": 96.4,
+    "estimated": false,
+    "fits": true
+  },
+  "message": "Fits on GPU 1: needs 8.9 GiB, 10.9 GiB free after the 2.5 GiB reserve.",
+  "measuredAt": "2026-10-07T10:00:00+00:00",
+  "estimate": {
+    "weightsGiB": 3.99,
+    "kvGiB": 2.25,
+    "ssmStateGiB": 0,
+    "computeGiB": 1.41,
+    "cudaContextGiB": 0.45,
+    "budgetGiB": 8.9,
+    "hostGiB": 0,
+    "perGpuGiB": []
+  }
+}

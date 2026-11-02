@@ -1,0 +1,96 @@
+@namespace MirbadLLM.Web.Components.ModelEditor
+@using MirbadLLM.Orchestration.Multinode
+@inject IServiceProvider Services
+@* "Unplace" (design §5.6; MN-118) over MoveService.UnplaceAsync: the model is stopped on its node (when it runs, which
+   requires a signed-in session) and confirmed gone, then it is placed on no node. It cannot start or serve until it is
+   moved to a node again; its checkpoint stays on the node's disk. A refusal stays in the dialog. *@
+<ConfirmDialog Open="_open" OpenChanged="OnOpenChanged" Title="@($"Unplace {Model.ServedName}?")" ConfirmLabel="Unplace" Destructive="true"
+               CloseOnConfirm="false" OnConfirm="UnplaceAsync" OnCancel="Clear"
+               TestId="unplace-dialog" ConfirmTestId="confirm-unplace">
+    <p data-testid="unplace-consequence">
+        @if (Running)
+        {
+            <span>@Model.ServedName is stopped on @NodeId and then placed on no node.</span>
+        }
+        else
+        {
+            <span>@Model.ServedName is placed on no node.</span>
+        }
+        It can't start or serve until you move it to a node again. Its checkpoint folder stays on @NodeId.
+    </p>
+
+    @if (_error is not null)
+    {
+        <div class="callout callout--failed" role="alert" data-testid="unplace-error">
+            <Icon Name="state-failed" />
+            <div class="callout-body">@_error.Text</div>
+        </div>
+    }
+</ConfirmDialog>
+
+@code {
+    private bool _open;
+    private EditorMessage? _error;
+
+    [Parameter, EditorRequired]
+    public ModelDefinition Model { get; set; } = default!;
+
+    /// <summary>True when the model is Starting or Ready.</summary>
+    [Parameter]
+    public bool Running { get; set; }
+
+    /// <summary>Raised after the model was unplaced.</summary>
+    [Parameter]
+    public EventCallback OnUnplaced { get; set; }
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationState { get; set; }
+
+    private string NodeId => Model.Placement?.NodeId ?? "its node";
+
+    /// <summary>Opens the dialog.</summary>
+    public void Open()
+    {
+        Clear();
+        _open = true;
+        StateHasChanged();
+    }
+
+    private void OnOpenChanged(bool open)
+    {
+        _open = open;
+        if (!open)
+        {
+            Clear();
+        }
+    }
+
+    private void Clear()
+    {
+        _error = null;
+    }
+
+    private async Task UnplaceAsync()
+    {
+        if (Services.GetService<MoveService>() is not { } moves)
+        {
+            _error = EditorMessage.Of("Unplacing is not available on this master.");
+            return;
+        }
+
+        _error = null;
+
+        try
+        {
+            var caller = await AdminCallers.ResolveAsync(Services, AuthenticationState);
+            await moves.UnplaceAsync(Model.Id, new ModelUnplaceRequest(), new MoveCaller(caller.Actor, caller.ClientKey) { User = caller.User });
+            _open = false;
+            await OnUnplaced.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is MoveRefusedException or ModelBusyException or TimeoutException or KeyNotFoundException
+            or PlacementConflictException or InvalidOperationException)
+        {
+            _error = EditorRefusals.Unplace(ex, Model.Id);
+        }
+    }
+}

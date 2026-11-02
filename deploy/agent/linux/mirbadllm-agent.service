@@ -1,0 +1,74 @@
+# mirbadllm-agent on a Linux PC with NVIDIA GPUs (P2; design D7: a systemd service, not a container). Installed,
+# upgraded and removed by install-agent.sh (README.md next to this file).
+# Runs as the dedicated system user mirbadllm-agent (no login, no home; member of the docker group because it creates
+# the model containers, which makes it root-equivalent on this host: design §10.3). Identity, fencing state and the
+# operation log live in /var/lib/mirbadllm-agent (StateDirectory, 0700); the configuration is
+# /etc/mirbadllm-agent/agent.json (root:mirbadllm-agent 0640). install-agent.sh adds the drop-in
+# mirbadllm-agent.service.d/10-install.conf with the model and cache roots of agent.json (ReadWritePaths).
+# The node must be enrolled first (mirbadllm-agent join ..., done by install-agent.sh when given the join
+# parameters): until agent.crt and node-uid exist the unit is skipped ("condition failed") instead of crash-looping.
+# Listens on TCP 9443 (mTLS, HTTP/2) for the master; allow it in the host firewall from the master only (README.md).
+[Unit]
+Description=mirbadllm node agent
+Documentation=https://github.com/samykabu/MirbadLLM/blob/main/deploy/agent/linux/README.md
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+ConditionPathExists=/var/lib/mirbadllm-agent/agent.crt
+ConditionPathExists=/var/lib/mirbadllm-agent/node-uid
+# A bad identity (1) or configuration (2) would otherwise restart forever.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=mirbadllm-agent
+Group=mirbadllm-agent
+SupplementaryGroups=docker
+ExecStart=/usr/local/lib/mirbadllm-agent/mirbadllm-agent --config /etc/mirbadllm-agent/agent.json
+StateDirectory=mirbadllm-agent
+StateDirectoryMode=0700
+UMask=0077
+Environment=DOTNET_NOLOGO=1
+Environment=DOTNET_gcServer=0
+Restart=on-failure
+RestartSec=5
+# Exit code 2 = bad command line or agent.json: fix the file, then systemctl restart.
+RestartPreventExitStatus=2
+# The agent drains running operations for up to ShutdownTimeout (30 s) after SIGTERM. Model containers are not this
+# unit's processes: they keep running across agent restarts and upgrades and are adopted at the next start.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+SyslogIdentifier=mirbadllm-agent
+
+# Hardening (defence in depth; the Docker socket stays the real boundary). Writable: the state directory and the
+# model/cache roots (downloads land there, folders are deleted from there), from the drop-in; the defaults below match
+# agent.linux.example.json. No MemoryDenyWriteExecute: the .NET JIT needs W+X pages. No PrivateDevices/DevicePolicy:
+# nvidia-smi (GPU telemetry) opens /dev/nvidia*. ProtectHome=yes also hides /run/user: native process delivery
+# (systemd-run --user under the lingering user manager the installer enables, design §6.6) relaxes it to read-only
+# together with that feature.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=-/srv/mirbadllm/models -/srv/mirbadllm/cache
+ProtectHome=yes
+PrivateTmp=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

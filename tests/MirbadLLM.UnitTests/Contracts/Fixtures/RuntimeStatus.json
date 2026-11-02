@@ -1,0 +1,21 @@
+{
+  "modelId": "qwen36-35b",
+  "state": "ready",
+  "instanceId": "abc123def456",
+  "hostPort": 8101,
+  "since": "2026-10-03T10:00:00+00:00",
+  "error": null,
+  "restartCount": 0,
+  "labels": {
+    "mirbadllm.model": "qwen36-35b"
+  },
+  "servedName": "qwen36-35b",
+  "configHash": "9f2c1a3b",
+  "executionFingerprint": "41ab5c8d",
+  "tuning": false,
+  "gpus": [],
+  "operationId": "op-001",
+  "measuredGpuGiB": 24.5,
+  "runtime": "vllm",
+  "delivery": "container"
+}

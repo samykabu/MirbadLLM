@@ -1,0 +1,35 @@
+@namespace MirbadLLM.Web.Components.Ui
+<header class="page-header@(BackHref is null ? " page-header--compact" : "")" data-od-id="page-header">
+    <div class="page-header-text">
+        @if (BackHref is not null)
+        {
+            <a class="page-header-back" href="@BackHref"><Icon Name="back" /> @BackLabel</a>
+        }
+        <h1 tabindex="-1" data-testid="page-title">@Title</h1>
+        @if (Subtitle is not null)
+        {
+            <div class="page-header-subtitle">@Subtitle</div>
+        }
+    </div>
+    @if (Actions is not null)
+    {
+        <div class="page-header-actions">@Actions</div>
+    }
+</header>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = "";
+
+    [Parameter]
+    public RenderFragment? Subtitle { get; set; }
+
+    [Parameter]
+    public RenderFragment? Actions { get; set; }
+
+    [Parameter]
+    public string? BackHref { get; set; }
+
+    [Parameter]
+    public string BackLabel { get; set; } = "Back";
+}

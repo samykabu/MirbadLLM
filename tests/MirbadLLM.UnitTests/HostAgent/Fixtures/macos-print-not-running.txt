@@ -1,0 +1,56 @@
+system/com.docker.socket = {
+	active count = 0
+	path = /Library/LaunchDaemons/com.docker.socket.plist
+	type = LaunchDaemon
+	state = not running
+
+	program = /Library/PrivilegedHelperTools/com.docker.socket
+	arguments = {
+		/Library/PrivilegedHelperTools/com.docker.socket
+		macuser
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		XPC_SERVICE_NAME => com.docker.socket
+	}
+
+	domain = system
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 1
+	last exit code = 0
+
+	resource coalition = {
+		ID = 1212
+		type = resource
+		state = active
+		active count = 1
+		name = com.docker.socket
+	}
+
+	jetsam coalition = {
+		ID = 1213
+		type = jetsam
+		state = active
+		active count = 1
+		name = com.docker.socket
+	}
+
+	spawn type = background (5)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	submitted job. ignore execute allowed
+	jetsam thread limit = 32
+	cpumon = default
+	job state = exited
+	sanitizer flags = 0x0
+
+	properties = partial import | runatload
+}

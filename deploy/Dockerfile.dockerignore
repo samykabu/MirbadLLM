@@ -1,0 +1,23 @@
+# Build context of deploy/Dockerfile (BuildKit reads <Dockerfile>.dockerignore): the master's sources, plus the agent's
+# sources and the Linux, Windows and macOS packaging files for the agent-bundles stage (the Windows README once it exists),
+# and the host agent's sources, which the macOS bundle carries (mirbadllm-hostd for launchd, Phase 4).
+**
+!global.json
+!Directory.Build.props
+!Directory.Packages.props
+!MirbadLLM.slnx
+!src/**
+!deploy/agent/agent.linux.example.json
+!deploy/agent/agent-update-helper.sh
+!deploy/agent/linux/install-agent.sh
+!deploy/agent/linux/mirbadllm-agent.service
+!deploy/agent/linux/README.md
+!deploy/agent/agent.windows.example.json
+!deploy/agent/windows/install-agent.ps1
+!deploy/agent/windows/llama-cpp.lock.json
+!deploy/agent/windows/README.md
+!deploy/agent/agent.macos.example.json
+!deploy/agent/macos/**
+!deploy/release-notes.json
+**/bin
+**/obj

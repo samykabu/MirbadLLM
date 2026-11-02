@@ -1,0 +1,152 @@
+# Build, test and deploy MirbadLLM. Every job runs on one of the repository's own
+# self-hosted runners: a Linux arm64 machine (label dgx-spark, for example a DGX Spark), where the controller image is
+# built natively and deployed in place, a Windows PC (label mirbadllm-win) and a Mac (label mirbadllm-mac).
+# No job ever runs on a GitHub-hosted runner.
+#
+# Security: this is a public repository, and a self-hosted runner must never run code from a fork. Every job is gated
+# on `github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository`, so a
+# pull request from a fork gets no runner. A maintainer reviews it and pushes the branch to this repository to run CI.
+#
+# Repository variables (Settings > Secrets and variables > Actions > Variables), all optional:
+#   CI_DOTNET_SDK_IMAGE  container image of the Linux build (default mcr.microsoft.com/dotnet/sdk:10.0)
+#   CI_NUGET_CACHE_DIR   folder on the Linux runner's host mounted as the NuGet cache (default /tmp/mirbadllm-ci-nuget)
+#   WINDOWS_CI           1 = run the Windows leg
+#   MAC_CI               1 = run the macOS leg
+#   DEPLOY_ENABLED       1 = deploy main to the Linux runner's host after the tests pass
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: Build and test
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, dgx-spark]
+    timeout-minutes: 20
+    container:
+      # Set CI_DOTNET_SDK_IMAGE to pull the SDK through a local registry mirror.
+      image: ${{ vars.CI_DOTNET_SDK_IMAGE || 'mcr.microsoft.com/dotnet/sdk:10.0' }}
+      # The runner's user, so the workspace never gets root-owned files the next checkout can't clean.
+      # Memory is capped because the runner shares the machine's unified memory with the model containers:
+      # an uncapped build plus a model start can run the host out of memory, and the kernel then kills the model.
+      # With the cap, a runaway build is OOM-killed inside its own container instead.
+      options: --user 1000:1000 --memory=16g --memory-swap=16g
+      volumes:
+        - ${{ vars.CI_NUGET_CACHE_DIR || '/tmp/mirbadllm-ci-nuget' }}:/nuget
+      env:
+        HOME: /tmp/home
+        NUGET_PACKAGES: /nuget
+        DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+        DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build (warnings are errors)
+        run: dotnet build MirbadLLM.slnx -c Debug
+      - name: Unit tests
+        run: dotnet artifacts/bin/MirbadLLM.UnitTests/debug/MirbadLLM.UnitTests.dll
+
+  # The Windows leg, on a self-hosted Windows runner (label mirbadllm-win). Without it every test that skips itself
+  # off Windows never runs anywhere: WindowsProcessHostTests, the DPAPI half of InstanceKeyTests, the powershell.exe and
+  # Pester parts of WindowsInstallerTests, WindowsServiceHostingTests and WindowsDevSetupTests.
+  #
+  # Gated on the repository variable WINDOWS_CI so an unregistered label cannot block a merge: a job whose label no
+  # runner carries stays queued forever and holds up every required check, while a job skipped by `if:` reports as
+  # successful. Set WINDOWS_CI=1 once a runner with the label is registered.
+  # Nothing here needs a GPU, Docker, elevation or a model file: the Windows tests use fakes and temp folders.
+  test-windows:
+    name: Build and test (Windows)
+    if: vars.WINDOWS_CI == '1' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, windows, mirbadllm-win]
+    timeout-minutes: 30
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build (warnings are errors)
+        run: dotnet build MirbadLLM.slnx -c Debug
+      - name: Unit tests
+        run: dotnet artifacts/bin/MirbadLLM.UnitTests/debug/MirbadLLM.UnitTests.dll
+
+  # The macOS leg (docs/macos/implementation-plan.md), on a self-hosted Apple Silicon Mac (label mirbadllm-mac).
+  # The .NET SDK and uv live in the runner's home (~/.dotnet, ~/.local/bin, on the runner's .path), installed once on
+  # the host, never per job. Gated on MAC_CI for the same reason as WINDOWS_CI; one job at a time, because a small Mac
+  # has little memory and the macOS integration tests start real (tiny) models.
+  test-macos:
+    name: Build and test (macOS)
+    if: vars.MAC_CI == '1' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, macOS, mirbadllm-mac]
+    timeout-minutes: 30
+    concurrency:
+      group: mac-mirbadllm
+      cancel-in-progress: false
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build (warnings are errors)
+        run: dotnet build MirbadLLM.slnx -c Debug
+      - name: Unit tests
+        run: dotnet artifacts/bin/MirbadLLM.UnitTests/debug/MirbadLLM.UnitTests.dll
+
+  # Checks the packaging artifacts without building images or touching a container (seconds; no memory to speak of):
+  # script syntax, the multinode compose model, and the multinode deploy script's dry run. Images are built only by the
+  # deploy job (and locally), so a PR never competes with a model start for the host's memory.
+  deploy-artifacts:
+    name: Deploy artifacts (lint)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, dgx-spark]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Shell syntax
+        run: for f in deploy/ci-deploy.sh deploy/ci-deploy-multinode.sh deploy/hostd/install-hostd.sh deploy/agent/agent-update-helper.sh deploy/agent/linux/install-agent.sh deploy/agent/macos/install-agent.sh; do bash -n "$f"; done
+      - name: Compose model (multinode)
+        run: DOCKER_GID=0 docker compose -f deploy/compose.multinode.yaml config -q
+      - name: Multinode deploy script (dry run)
+        run: DRY_RUN=1 MIRBADLLM_ENV_FILE=/nonexistent bash deploy/ci-deploy-multinode.sh
+      - name: Multinode deploy script, rename cut-over (dry run)
+        run: DRY_RUN=1 MIRBADLLM_RENAME_CUTOVER=1 MIRBADLLM_ENV_FILE=/nonexistent bash deploy/ci-deploy-multinode.sh
+
+  # Deploys main to the Linux runner's host. Off unless the repository variable DEPLOY_ENABLED is 1, so a fork or a
+  # new clone never tries to deploy anywhere.
+  deploy:
+    name: Deploy to the DGX Spark
+    needs: test
+    if: vars.DEPLOY_ENABLED == '1' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: [self-hosted, dgx-spark]
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-dgx-spark
+      cancel-in-progress: false
+    # pull-requests: read for the release notes (the merged PRs), nothing else.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # The portal's What's new, Releases and agent-update notes (docs/multinode/agent-updates.md U1). Never fails the
+      # deploy: without GitHub it writes empty notes and a warning.
+      - name: Release notes from the merged pull requests
+        run: python3 deploy/release-notes.py --repo "${{ github.repository }}" --head "${{ github.sha }}" --output deploy/release-notes.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Every push redeploys master then agent, rolling back as a pair if either fails its health check.
+      - name: Build, start and health-check master and agent (rolls back on failure)
+        run: bash deploy/ci-deploy-multinode.sh
+        env:
+          BEFORE_SHA: ${{ github.event.before }}

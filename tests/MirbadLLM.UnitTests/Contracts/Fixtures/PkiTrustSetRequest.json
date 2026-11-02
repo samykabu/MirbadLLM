@@ -1,0 +1,8 @@
+{
+  "anchors": [
+    "-----BEGIN CERTIFICATE-----\nMIIC7TCCAlagAwIBAgIBADANBgkqhkiG9w0BAQ0FADCBkjELMAkGA1UEBhMCVVMxDzANBgNVBAgT\n-----END CERTIFICATE-----"
+  ],
+  "operationId": "op-204",
+  "issuedAt": "2026-10-03T10:00:00+00:00",
+  "expiresAt": "2026-10-04T10:00:00+00:00"
+}

@@ -1,0 +1,6 @@
+{
+  "restartPolicy": "unless-stopped",
+  "operationId": "op-106",
+  "issuedAt": "2026-10-03T10:00:00+00:00",
+  "expiresAt": "2026-10-04T10:00:00+00:00"
+}

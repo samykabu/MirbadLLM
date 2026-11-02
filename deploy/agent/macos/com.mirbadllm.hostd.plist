@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  mirbadllm-hostd on an Apple Silicon Mac (Phase 4; plan docs/macos/implementation-plan.md M10): the root helper that
+  lists launchd jobs and starts, stops, restarts and enables/disables the whitelisted ones for the agent, which stays
+  unprivileged (_mirbadllm). Installed by "install-agent.sh install-hostd" as
+  /Library/LaunchDaemons/com.mirbadllm.hostd.plist (root:wheel 0644). README.md next to this file has the walk-through.
+  Runs as root (launchctl bootstrap/bootout into the system domain and the users' gui domains needs it) and listens
+  only on the Unix socket /var/run/mirbadllm-hostd/hostd.sock: it creates the directory at every start (root:_mirbadllm
+  0750, socket 0660), so only root and the agent's group reach it. No TCP port. Configuration:
+  "/Library/Application Support/mirbadllm-hostd/hostd.json" (root:wheel 0644, seeds the whitelist once); the
+  admin-managed whitelist: "/Library/Application Support/mirbadllm-hostd/state/whitelist.json" (root 0600). A
+  compiled-in deny list (Apple's jobs, mirbadllm's own, the GitHub Actions runners, Docker, SSH) can never be
+  managed. stdout and stderr go to /Library/Logs/mirbadllm-hostd/hostd.log.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mirbadllm.hostd</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/lib/mirbadllm-hostd/mirbadllm-hostd</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>MIRBADLLM_HOSTD_CONFIG</key>
+        <string>/Library/Application Support/mirbadllm-hostd/hostd.json</string>
+        <key>DOTNET_NOLOGO</key>
+        <string>1</string>
+        <key>DOTNET_gcServer</key>
+        <string>0</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>/Library/Application Support/mirbadllm-hostd/state</string>
+    <key>Umask</key>
+    <integer>63</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>ExitTimeOut</key>
+    <integer>20</integer>
+    <key>StandardOutPath</key>
+    <string>/Library/Logs/mirbadllm-hostd/hostd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Library/Logs/mirbadllm-hostd/hostd.log</string>
+</dict>
+</plist>

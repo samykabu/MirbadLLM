@@ -1,0 +1,17 @@
+{
+  "nodeId": "win-1",
+  "nodeUid": "4f0c2a9e7b1d4c3e8a6f5b2d0e9c7a14",
+  "gpus": [
+    {
+      "uuid": "GPU-7c1e9a52-3f60-4d2b-9a8e-5b0f2c6d1e44",
+      "name": "NVIDIA GeForce RTX 5060 Ti",
+      "index": 1
+    }
+  ],
+  "runtime": "llamacpp",
+  "delivery": "process",
+  "executionFingerprint": "5e0c7a91d2b34f68",
+  "executableVersion": "b11476",
+  "proxy": "agent-mtls-lan",
+  "noise": "quiet"
+}

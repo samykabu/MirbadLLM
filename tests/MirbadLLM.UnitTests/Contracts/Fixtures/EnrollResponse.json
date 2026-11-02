@@ -1,0 +1,7 @@
+{
+  "caCertPem": "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIQfixture\n-----END CERTIFICATE-----\n",
+  "agentCertPem": "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIQfixture\n-----END CERTIFICATE-----\n",
+  "nodeUid": "0f9a1b2c3d4e5f60718293a4b5c6d7e8",
+  "masterSpiffeId": "spiffe://mirbadllm/master",
+  "pendingApproval": false
+}

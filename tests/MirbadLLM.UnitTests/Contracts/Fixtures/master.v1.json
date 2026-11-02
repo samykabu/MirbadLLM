@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "masterInstanceId": "5b1f0c9e2d8a4f6b9e3c7a1d0f2e4b6c",
+  "epoch": 4,
+  "createdAt": "2026-10-03T08:00:00+00:00",
+  "updatedAt": "2026-10-05T07:30:00+00:00",
+  "takeovers": [
+    {
+      "takeoverId": "c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8",
+      "epoch": 4,
+      "previousEpoch": 2,
+      "at": "2026-10-05T07:30:00+00:00",
+      "operator": "admin:9f86d081",
+      "answered": [
+        { "nodeId": "dgx", "nodeUid": "0f9a6c2e4b7d41a8b3c5d6e7f8091a2b", "acceptedEpoch": 3 }
+      ],
+      "unreachable": [ "pc-office" ],
+      "continuations": []
+    }
+  ]
+}

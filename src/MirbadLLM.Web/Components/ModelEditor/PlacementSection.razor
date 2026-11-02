@@ -1,0 +1,273 @@
+@namespace MirbadLLM.Web.Components.ModelEditor
+@using MirbadLLM.Orchestration.Multinode
+@* The model editor's Placement section (design §12.2; MN-118), shown only when the master has more than one node. A
+   new model picks its node (with a fit hint per node) and, on a discrete node, its GPUs; an existing model shows its
+   node read-only with "Move to another node…" and "Unplace…" (changing the node is a move, §6.3, never a side effect of
+   saving), and may change its GPUs on the same node (a normal edit that needs a restart). The fit preview is the
+   master's immediate answer from the node's last telemetry; the agent decides at start. *@
+<section class="panel form-section" aria-labelledby="sec-placement" data-testid="placement-section">
+    <div class="form-section-intro">
+        <h2 id="sec-placement">Placement</h2>
+        <p>The node decides the memory, the GPUs and the checkpoint folders for the rest of this page.</p>
+    </div>
+    <div class="field-grid">
+        @if (IsNew)
+        {
+            <div class="field field--wide">
+                <FieldHelp Label="Node" For="field-node" Help="@ModelFieldHelp.Node" />
+                <select class="form-select" id="field-node" data-testid="field-node" value="@(NodeId ?? "")"
+                        aria-describedby="node-fit-hint" aria-invalid="@(NodeMissing ? "true" : null)" @onchange="OnNodeChangedAsync">
+                    <option value="">Choose a node</option>
+                    @foreach (var node in Nodes)
+                    {
+                        string? refusal = PlacementEditing.PlacementRefusal(node, needsServing: false);
+                        <option value="@node.Id" disabled="@(refusal is not null)" data-testid="@($"node-option-{node.Id}")">
+                            @node.Label — @PlacementEditing.StateText(node.State, node.Draining)@(refusal is null ? " · " + PlacementEditing.FitWord(NodeFit(node.Id)) : "")
+                        </option>
+                    }
+                </select>
+                <div class="field-hint" id="node-fit-hint" data-testid="node-fit-hint">
+                    @if (Selected is null)
+                    {
+                        <span>Pick the node first: the checkpoint folders, the download and the fit check below act on it.</span>
+                    }
+                    else if (NodeFit(Selected.Id) is { } nodeFit)
+                    {
+                        <span>@nodeFit.Message</span>
+                    }
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="field field--wide">
+                <span class="field-label" id="placement-node-label">Node</span>
+                <div class="placement-current" role="group" aria-labelledby="placement-node-label" data-testid="placement-node">
+                    @if (Selected is null)
+                    {
+                        <div class="placement-current-text">
+                            <strong data-testid="placement-unplaced">Unplaced</strong>
+                            <span class="muted">Not on any node, so it can't start or serve. Move it to a node to run it.</span>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="placement-current-text">
+                            <strong class="num" data-testid="placement-node-id">@Selected.Label</strong>
+                            @if (Selected.State is { } state)
+                            {
+                                <StateBadge Node="state" Draining="Selected.Draining" TestId="placement-node-state" />
+                            }
+                            <span class="muted">Changing the node is a move: the checkpoint is downloaded there first, then the model is stopped here and started there.</span>
+                        </div>
+                    }
+                    <div class="placement-actions">
+                        @if (MovesAvailable)
+                        {
+                            <button type="button" class="btn btn-outline-secondary" data-testid="move-button" disabled="@(MoveActive)" @onclick="OnMove">
+                                <Icon Name="arrow-right" /> @(Selected is null ? "Move to a node…" : "Move to another node…")
+                            </button>
+                            @if (Selected is not null)
+                            {
+                                <button type="button" class="btn btn-ghost" data-testid="unplace-button" disabled="@(MoveActive)" @onclick="OnUnplace">
+                                    Unplace…
+                                </button>
+                            }
+                        }
+                        else
+                        {
+                            <span class="muted" data-testid="moves-unavailable">Moves are not available on this master.</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+
+        @if (Move is { } move && move.Record.Move is { } details)
+        {
+            <div class="field field--wide" aria-live="polite">
+                @if (move.Active)
+                {
+                    <div class="callout callout--busy" role="status" data-testid="placement-move-active">
+                        <Icon Name="state-starting" />
+                        <div class="callout-body">
+                            <span>Moving to <strong>@details.TargetNodeId</strong>: @MoveProgress.Label(move.Record.Stage, details).ToLowerInvariant().</span>
+                            <div><button type="button" class="btn btn-sm btn-outline-secondary" data-testid="view-move" @onclick="OnViewMove">View progress</button></div>
+                        </div>
+                    </div>
+                }
+                else if (MoveProgress.DoneWithError(move.Record))
+                {
+                    <div class="callout callout--failed" role="alert" data-testid="placement-move-error">
+                        <Icon Name="state-failed" />
+                        <div class="callout-body">
+                            <span>Moved to <strong>@details.TargetNodeId</strong>, but it did not start there: @move.Record.Error</span>
+                            <div><button type="button" class="btn btn-sm btn-outline-secondary" data-testid="view-move" @onclick="OnViewMove">Start it…</button></div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+
+        @if (Selected is { Discrete: true } discrete)
+        {
+            <div class="field field--wide">
+                <FieldHelp Label="GPUs" For="placement-gpus" ShowLabel="false" Help="@ModelFieldHelp.Gpus">
+                    <Leading><span class="field-label">GPUs on @discrete.Id</span></Leading>
+                </FieldHelp>
+                <GpuPicker Gpus="discrete.Gpus" Selected="GpuUuids" SelectedChanged="GpuUuidsChanged" Stored="StoredGpus"
+                           Candidates="NodeFit(discrete.Id)" Node="@discrete.Id" Disabled="MoveActive" TestId="placement-gpus"
+                           AllowUnequal="IsLlamaCpp" Budgets="GpuBudgets" BudgetsChanged="GpuBudgetsChanged"
+                           TotalBudgetGiB="MemoryBudgetGiB" TensorSplit="@TensorSplit" />
+            </div>
+        }
+
+        @if (Selected is not null && Fit is { } fit && !(Selected.Discrete && GpuUuids.Count == 0 && !IsNew))
+        {
+            @* Room on the node is not a fit when the budget is below the model's own minimum (the Memory section says why). *@
+            bool roomButTooSmall = fit.Fits == true && BudgetTooSmall;
+            <div class="field field--wide" aria-live="polite">
+                <div class="budget-check @(fit.Fits == false || roomButTooSmall ? "budget-check--over" : fit.Fits == true ? "budget-check--ok" : null)" data-testid="placement-fit"
+                     data-fits="@(roomButTooSmall ? "too-small" : fit.Fits switch { true => "true", false => "false", _ => "unknown" })">
+                    <Icon Name="@(fit.Fits == true && !roomButTooSmall ? "check" : "warning")" />
+                    @if (roomButTooSmall)
+                    {
+                        <span>@Selected.Id has room for the budget, but the budget is below what this context needs, so the model won't start. See Memory and context.</span>
+                    }
+                    else
+                    {
+                        <span>@PlacementEditing.FitLine(fit)@(fit.Fits == false ? " You can still save it; starting asks you to confirm." : "")</span>
+                    }
+                </div>
+            </div>
+        }
+
+        @* The Runtime option is the node's, not the fleet's (MN-239 item 3): the same component serves the single-node
+           editor. On Add model it shows before a node is chosen too, so the choice is visible up front. *@
+        @if (Selected is not null)
+        {
+            <RuntimePicker Node="Selected" IsNew="IsNew" Runtime="Runtime" RuntimeChanged="RuntimeChanged" />
+        }
+        else if (IsNew)
+        {
+            <RuntimePicker Node="null" IsNew="true" Runtime="Runtime" ShowWithoutNode="true" />
+        }
+
+        <div class="field">
+            <FieldHelp Label="Keep serving during jobs" For="field-keep-serving" ShowLabel="false" Help="@ModelFieldHelp.KeepServing">
+                <Leading>
+                    <div class="form-check switch-row">
+                        <input type="checkbox" class="form-check-input" id="field-keep-serving" data-testid="field-keep-serving"
+                               checked="@KeepServing" @onchange="e => KeepServingChanged.InvokeAsync(e.Value is true)" />
+                        <label class="form-check-label" for="field-keep-serving">Keep serving during benchmarks and tuning</label>
+                    </div>
+                </Leading>
+            </FieldHelp>
+        </div>
+    </div>
+</section>
+
+@code {
+    /// <summary>The nodes offered (<see cref="PlacementEditing.Offered"/>).</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<PlacementNode> Nodes { get; set; } = [];
+
+    /// <summary>True on Add model (the node is chosen here); false when editing (the node is read-only).</summary>
+    [Parameter]
+    public bool IsNew { get; set; }
+
+    /// <summary>The selected node: chosen (new) or the model's own (edit); null when none / unplaced.</summary>
+    [Parameter]
+    public string? NodeId { get; set; }
+
+    [Parameter]
+    public EventCallback<string?> NodeIdChanged { get; set; }
+
+    /// <summary>True after a save attempt without a node.</summary>
+    [Parameter]
+    public bool NodeMissing { get; set; }
+
+    /// <summary>The selected GPU UUIDs (discrete node).</summary>
+    [Parameter]
+    public IReadOnlyList<string> GpuUuids { get; set; } = [];
+
+    [Parameter]
+    public EventCallback<IReadOnlyList<string>> GpuUuidsChanged { get; set; }
+
+    /// <summary>The stored GPUs (their order is kept when re-ticked).</summary>
+    [Parameter]
+    public IReadOnlyList<string>? StoredGpus { get; set; }
+
+    /// <summary>Fit per node without a GPU selection (every GPU a single-GPU option on discrete nodes).</summary>
+    [Parameter]
+    public IReadOnlyDictionary<string, NodeFitResult?> NodeFits { get; set; } = new Dictionary<string, NodeFitResult?>();
+
+    /// <summary>Fit of the current selection on the selected node.</summary>
+    [Parameter]
+    public NodeFitResult? Fit { get; set; }
+
+    [Parameter]
+    public bool KeepServing { get; set; }
+
+    [Parameter]
+    public EventCallback<bool> KeepServingChanged { get; set; }
+
+    /// <summary>The model's move (live, or the last finished one).</summary>
+    [Parameter]
+    public MoveStatusView? Move { get; set; }
+
+    /// <summary>True when the master composes moves (<c>MoveService</c>).</summary>
+    [Parameter]
+    public bool MovesAvailable { get; set; }
+
+    [Parameter]
+    public EventCallback OnMove { get; set; }
+
+    [Parameter]
+    public EventCallback OnUnplace { get; set; }
+
+    [Parameter]
+    public EventCallback OnViewMove { get; set; }
+
+    /// <summary>The model's runtime (MN-226): vLLM, or llama.cpp on a node that reports it.</summary>
+    [Parameter]
+    public RuntimeKind Runtime { get; set; } = RuntimeKind.Vllm;
+
+    /// <summary>Raised when another runtime is picked (new models only).</summary>
+    [Parameter]
+    public EventCallback<RuntimeKind> RuntimeChanged { get; set; }
+
+    /// <summary>The per-GPU budgets of a llama.cpp model (placement order; null = not typed).</summary>
+    [Parameter]
+    public IReadOnlyList<double?> GpuBudgets { get; set; } = [];
+
+    [Parameter]
+    public EventCallback<IReadOnlyList<double?>> GpuBudgetsChanged { get; set; }
+
+    /// <summary>The model's memory budget (what the per-GPU budgets add up to).</summary>
+    [Parameter]
+    public double MemoryBudgetGiB { get; set; }
+
+    /// <summary>The tensor split the builder would emit for the ticked GPUs; null when unknown.</summary>
+    [Parameter]
+    public string? TensorSplit { get; set; }
+
+    /// <summary>True when the vLLM budget is below the model's minimum for its context: room on the node is then no fit.</summary>
+    [Parameter]
+    public bool BudgetTooSmall { get; set; }
+
+    private bool IsLlamaCpp => Runtime == RuntimeKind.LlamaCpp;
+
+    private PlacementNode? Selected => NodeId is null ? null : Nodes.FirstOrDefault(n => string.Equals(n.Id, NodeId, StringComparison.Ordinal));
+
+    private bool MoveActive => Move is { Active: true };
+
+    private NodeFitResult? NodeFit(string nodeId) => NodeFits.TryGetValue(nodeId, out var fit) ? fit : null;
+
+    private async Task OnNodeChangedAsync(ChangeEventArgs e)
+    {
+        string? value = e.Value as string;
+        NodeId = string.IsNullOrEmpty(value) ? null : value;
+        await NodeIdChanged.InvokeAsync(NodeId);
+    }
+}

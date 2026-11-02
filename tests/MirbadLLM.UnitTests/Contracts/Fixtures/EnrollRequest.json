@@ -1,0 +1,11 @@
+{
+  "token": "dGhpcy1pcy1hLWZpeHR1cmUtdG9rZW4tbm90LXJlYWw",
+  "nodeId": "dgx",
+  "csrPem": "-----BEGIN CERTIFICATE REQUEST-----\nMIHzMIGaAgEAMAAwWTATBgcqhkjOPQIBfixture\n-----END CERTIFICATE REQUEST-----\n",
+  "addresses": [
+    "127.0.0.1",
+    "192.0.2.191",
+    "mirbadllm-agent"
+  ],
+  "capabilities": null
+}

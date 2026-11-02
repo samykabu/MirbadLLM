@@ -1,0 +1,5 @@
+{
+  "code": "gpu_capacity_mismatch",
+  "message": "GPU 0 (16 GiB) and GPU 1 (8 GiB) differ; tensor parallelism needs equal GPUs.",
+  "gpuUuid": "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f602"
+}

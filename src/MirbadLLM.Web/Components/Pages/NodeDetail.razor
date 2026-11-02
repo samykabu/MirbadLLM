@@ -1,0 +1,2018 @@
+@page "/nodes/{Id}"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using System.Globalization
+@using MirbadLLM.Orchestration
+@using MirbadLLM.Orchestration.Benchmarking
+@using MirbadLLM.Agent.Contracts
+@using MirbadLLM.Orchestration.Pki
+@using MirbadLLM.Web.Api
+@inject IServiceProvider ServiceProvider
+@inject NavigationManager Nav
+
+<PageTitle>@(_row?.Name ?? Id) · Nodes · MirbadLLM</PageTitle>
+
+<div class="node-identity">
+<PageHeader Title="@Id" BackHref="nodes" BackLabel="Nodes">
+    <Subtitle>
+        <div class="node-head-meta">
+            @if (!string.Equals(_row?.Name ?? Id, Id, StringComparison.Ordinal))
+            {
+                <span class="num node-head-id" data-testid="node-id">@Id</span><span>@_row?.Name</span>
+            }
+            @if (_row is { } head)
+            {
+                <StateBadge Node="head.State" Draining="Nodes.BadgeDraining(head)" TestId="node-state-badge" />
+                @if (Nodes.ShowDrainingChip(head))
+                {
+                    <span class="chip chip--busy chip--inline" data-testid="node-draining"><Icon Name="state-stopping" /> Draining</span>
+                }
+                @if (JobHere is { } headJob)
+                {
+                    <a class="chip chip--busy chip--inline" href="@Nodes.JobHref(headJob)" data-testid="node-job"><Icon Name="gauge" /> @Nodes.JobText(headJob) on @headJob.ModelId</a>
+                }
+                @if (Nodes.OsBadgeText(head.Capabilities) is { } os)
+                {
+                    <span class="tag-chip" data-testid="node-os-badge">@os</span><span class="muted">· @head.Capabilities?.Arch</span>
+                }
+                @foreach (var kind in RuntimeKinds(head.Capabilities))
+                {
+                    <span class="tag-chip" data-testid="@($"node-runtime-chip-{kind.ToString().ToLowerInvariant()}")">@RuntimeName(kind)</span>
+                }
+            }
+        </div>
+        @if (_row is { } line)
+        {
+            <div class="node-head-line">
+                @if (line.Reasons.Count > 0 && line.State != NodeState.Online)
+                {
+                    <span class="node-head-reason" data-testid="node-state-reason">@line.Reasons[0]@(line.Reasons.Count > 1 ? $" (+{line.Reasons.Count - 1} more on Overview)" : "")</span>
+                }
+                <span>last seen <span class="num" data-testid="node-last-seen">@Nodes.LastSeenText(line.LastContact, _now)</span></span>
+                <LiveStamp At="_loadedAt" TestId="node-updated" />
+            </div>
+        }
+    </Subtitle>
+    <Actions>
+        @if (_row is { } header && _admin is not null && _caller is not null)
+        {
+            <NodeRowMenu Row="header" OnPick="Pick" CanRotate="_rotation is not null" TestIdPrefix="node" Inline="true" ShowRevoke="false" />
+        }
+    </Actions>
+</PageHeader>
+</div>
+
+@if (_status is not null)
+{
+    <div class="callout callout--ready page-alert" role="status" data-testid="node-status">
+        <Icon Name="state-ready" />
+        <div class="callout-body">@_status</div>
+    </div>
+}
+
+@if (_cache is null && _registry is null)
+{
+    <EmptyState Title="Node monitoring is not running" TestId="node-unavailable">
+        <ChildContent>
+            <p>This master has no node registry or status cache yet, so there is nothing to show for this node.</p>
+        </ChildContent>
+    </EmptyState>
+}
+else if (!_loaded)
+{
+    <p class="muted loading-line" role="status" data-testid="node-loading"><Icon Name="refresh" Class="icon--spin" /> Reading the node…</p>
+}
+else if (_row is null)
+{
+    @if (_error is not null)
+    {
+        <div class="callout callout--failed page-alert" role="alert" data-testid="node-error">
+            <Icon Name="state-failed" />
+            <div class="callout-body">@_error</div>
+        </div>
+    }
+    else
+    {
+        <EmptyState Title="Node not found" TestId="node-not-found">
+            <ChildContent>
+                <p>No node has the id <code>@Id</code>. It may have been revoked or removed.</p>
+            </ChildContent>
+            <Actions>
+                <a class="btn btn-outline-secondary" href="nodes"><Icon Name="back" /> All nodes</a>
+            </Actions>
+        </EmptyState>
+    }
+}
+else
+{
+    var row = _row;
+    @if (_error is not null)
+    {
+        <div class="callout callout--failed page-alert" role="alert" data-testid="node-error">
+            <Icon Name="state-failed" />
+            <div class="callout-body">@_error</div>
+        </div>
+    }
+
+    @* The tour points at the tab bar (Overview · GPUs · Services · Operations · Settings). *@
+    <div class="node-tabs" data-tour="node-tabs">
+        <Tabs Items="TabItems" SelectedId="@_tab" SelectedIdChanged="OnTabChangedAsync" QueryKey="tab" AriaLabel="Node" TestId="node-tabs">
+            <ChildContent Context="tab">
+                @switch (tab)
+                {
+                    case "gpus":
+                        @GpusTab(row)
+                        break;
+                    case "services":
+                        @ServicesTab(row)
+                        break;
+                    case "operations":
+                        @OperationsTab(row)
+                        break;
+                    case "settings":
+                        @SettingsTab(row)
+                        break;
+                    default:
+                        @OverviewTab(row)
+                        break;
+                }
+            </ChildContent>
+        </Tabs>
+    </div>
+}
+
+@if (_admin is not null && _caller is not null)
+{
+    <NodeActionDialogs @bind-Request="_action" Caller="_caller" Models="_models" OnDone="OnActionDoneAsync" />
+}
+
+@code {
+    [Parameter]
+    public string Id { get; set; } = "";
+
+    private const int RecentOnOverview = 5;
+    private const int AuditLines = 200;
+
+    private INodeStatusCache? _cache;
+    private INodeRegistry? _registry;
+    private IAuditLog? _audit;
+    private IFencingCoordinator? _fencing;
+    private IMetricsHistory? _history;
+    private ModelJobService? _jobs;
+    private NodeAdminService? _admin;
+    private CertificateRotationService? _rotation;
+    private CaRotationService? _caRotation;
+    private MasterTrustStore? _trust;
+    private NodeApiCaller? _caller;
+    private TimeProvider _time = TimeProvider.System;
+    private Nodes.NodeRow? _row;
+    private IReadOnlyList<ModelDefinition>? _models;
+    private IReadOnlyList<AuditRecord>? _auditLines;
+    private string? _auditError;
+    private bool _loaded;
+    private string? _loadedId;
+    private string? _error;
+    private string? _status;
+    private string _tab = "overview";
+    private string _settingsSection = "general";
+    private static readonly IReadOnlyList<TabItem> SettingsSections =
+    [
+        new("general", "General"),
+        new("certificate", "Agent certificate"),
+        new("ca-rotation", "CA rotation"),
+        new("hardware", "Hardware and agent"),
+    ];
+    private DateTimeOffset? _loadedAt;
+    private DateTimeOffset _now;
+    private int _opsPage = 1;
+    private int? _opsSize;
+    private int _modelsPage = 1;
+    private int? _modelsSize;
+    private int _auditPage = 1;
+    private int? _auditSize;
+    private NodeActionRequest? _action;
+    private SettingsForm? _form;
+    private string? _formNodeId;
+    private string? _formError;
+    private bool _saving;
+    private LiveDataService? _live;
+    private bool _ownsLive;
+    private IDisposable? _subscription;
+    private IAgentClientFactory? _agents;
+    private AgentStatusRead? _agentStatus;
+    private string? _agentStatusError;
+    private int _agentReadVersion;
+
+    /// <summary>The node agent's own status snapshot (health codes, clock, downloads) and when the master read it.</summary>
+    private sealed record AgentStatusRead(string NodeId, StatusSnapshot Snapshot, DateTimeOffset ReadAt);
+
+    /// <summary>How long the page waits for a node's status snapshot before it shows the page without it.</summary>
+    private static readonly TimeSpan AgentStatusTimeout = TimeSpan.FromSeconds(5);
+
+    // Same pacing as the list: the shared 5 s refresh, then a direct read of the node cache and registry.
+    private const LiveNeeds Needs = LiveNeeds.Models;
+
+    private IReadOnlyList<TabItem> TabItems
+    {
+        get
+        {
+            var row = _row;
+            int? gpus = row?.Capabilities?.Gpus.Count is 0 && row is not null && IsMac(row) && LatestSample(row.Id)?.Gpu is not null
+                ? 1
+                : row?.Capabilities?.Gpus.Count;
+            return
+            [
+                new("overview", "Overview"),
+                new("gpus", "GPUs", Count: gpus, CountNoun: gpus == 1 ? "GPU" : "GPUs"),
+                new("services", "Services"),
+                new("operations", "Operations", Count: row is null ? null : row.OpenOperations.Count + (JobHere is null ? 0 : 1), CountNoun: "open"),
+                new("settings", "Settings", BadgeText: row is not null && CaPending(row.Id) ? "CA rotation" : null, BadgeIcon: "restart", BadgeClass: "starting"),
+            ];
+        }
+    }
+
+    /// <summary>
+    /// Tabs of the earlier layout and where their content lives now (Models on Overview, Recent commands under Operations,
+    /// Certificates under Settings), so an old link still opens the right place.
+    /// </summary>
+    public static string TabFor(string? requested) => requested switch
+    {
+        "models" => "overview",
+        "commands" => "operations",
+        "certificates" => "settings",
+        "gpus" or "services" or "operations" or "settings" => requested,
+        _ => "overview",
+    };
+
+    private JobSnapshot? JobHere => _jobs?.JobOnNode(Id);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _cache = ServiceProvider.GetService<INodeStatusCache>();
+        _registry = ServiceProvider.GetService<INodeRegistry>();
+        _time = ServiceProvider.GetService<TimeProvider>() ?? TimeProvider.System;
+        if (NodeSelector.FromQuery(Nav, "tab") is { } requestedTab)
+        {
+            _tab = TabFor(requestedTab);
+            if (!string.Equals(_tab, requestedTab, StringComparison.Ordinal))
+            {
+                UrlQuery.For(Nav).Replace("tab", _tab == "overview" ? null : _tab);
+            }
+            if (requestedTab == "certificates" && NodeSelector.FromQuery(Nav, "section") is null)
+            {
+                _settingsSection = "certificate";
+                UrlQuery.For(Nav).Replace("section", _settingsSection);
+            }
+        }
+
+        if (_cache is null && _registry is null)
+        {
+            return;
+        }
+
+        _audit = ServiceProvider.GetService<IAuditLog>();
+        _fencing = ServiceProvider.GetService<IFencingCoordinator>();
+        _history = ServiceProvider.GetService<IMetricsHistory>();
+        _jobs = ServiceProvider.GetService<ModelJobService>();
+        _admin = ServiceProvider.GetService<NodeAdminService>();
+        _rotation = ServiceProvider.GetService<CertificateRotationService>();
+        _caRotation = ServiceProvider.GetService<CaRotationService>();
+        _trust = ServiceProvider.GetService<MasterTrustStore>();
+        _agents = ServiceProvider.GetService<IAgentClientFactory>();
+        if (_admin is not null)
+        {
+            _caller = await NodeActionDialogs.ResolveCallerAsync(ServiceProvider, Nodes.PageHost(Nav), Nav.BaseUri);
+        }
+
+        _live = LiveDataService.Resolve(ServiceProvider, out _ownsLive);
+        await LoadAsync(await _live.GetAsync(Needs));
+        _subscription = _live.Subscribe(Needs, snapshot => InvokeAsync(async () =>
+        {
+            await LoadAsync(snapshot);
+            StateHasChanged();
+        }));
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // The router reuses this component for another /nodes/{id}: show that node at once.
+        if (_live?.Current is { } current && _loadedId is not null && !string.Equals(_loadedId, Id, StringComparison.Ordinal))
+        {
+            _status = null;
+            _form = null;
+            await LoadAsync(current);
+        }
+    }
+
+    private async Task LoadAsync(LiveSnapshot snapshot)
+    {
+        try
+        {
+            var record = _registry is null ? null : await _registry.GetAsync(Id);
+            var live = _cache?.GetNode(Id);
+            _models = snapshot.Models;
+            _row = (record is null || record.Revoked) && live is null ? null : Nodes.Merge(record, live, _models);
+            if (_row?.State == NodeState.Revoked)
+            {
+                _row = null;
+            }
+
+            _error = null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _error = $"Could not read the node: {ex.Message}";
+        }
+
+        if (_row is not null && _tab == "operations")
+        {
+            await LoadAuditAsync();
+        }
+
+        // Overview (reason help), Operations (downloads) and Settings (clock) all read it; it never holds the page back.
+        BeginAgentStatusRead(_row);
+
+        _loaded = true;
+        _loadedId = Id;
+        _now = _time.GetUtcNow();
+        _loadedAt = _now;
+    }
+
+    /// <summary>Recent audit lines about this node (design §12.1 "Recent commands", MN-116), newest first.</summary>
+    private async Task LoadAuditAsync()
+    {
+        if (_audit is null)
+        {
+            _auditLines = null;
+            return;
+        }
+
+        try
+        {
+            _auditLines = await _audit.ReadAsync(new AuditQuery { NodeId = Id, Max = AuditLines });
+            _auditError = null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _auditError = $"Could not read the audit log: {ex.Message}";
+        }
+    }
+
+    private async Task OnTabChangedAsync(string tab)
+    {
+        _tab = tab;
+        if (tab == "operations")
+        {
+            await LoadAuditAsync();
+        }
+
+        if (tab is "overview" or "operations" or "settings")
+        {
+            await LoadAgentStatusAsync(_row);
+        }
+    }
+
+    private async Task ViewUpdateOperationsAsync()
+    {
+        UrlQuery.For(Nav).Replace("tab", "operations");
+        await OnTabChangedAsync("operations");
+    }
+
+    // ---- Windows and native nodes (design-p3p4 §A.7, MN-227) -------------------------------------------------------
+
+    private static bool IsLinux(Nodes.NodeRow row) =>
+        string.Equals(row.Capabilities?.Os.Family?.Trim(), "linux", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsWindows(Nodes.NodeRow row) =>
+        string.Equals(row.Capabilities?.Os.Family?.Trim(), "windows", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True for a node whose detail page reads its agent's status snapshot (health codes, clock, downloads): a serving
+    /// Windows/native details, and structured health reasons for any reachable Degraded node.
+    /// </summary>
+    public static bool UsesAgentDetails(Nodes.NodeRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        if (!row.IsServing || row.Capabilities is not { } caps)
+        {
+            return false;
+        }
+
+        return row.State == NodeState.Degraded || IsWindows(row)
+            || caps.Features.Contains(AgentFeatures.DownloadsHfNative, StringComparer.Ordinal)
+            || caps.Features.Contains(AgentFeatures.RuntimeLlamaCppProcess, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Starts the agent-status read without waiting for it (MN-239 item 6, D131). The read is bounded by
+    /// <see cref="AgentStatusTimeout"/>, so an unreachable Windows node would otherwise hold the whole page back by up to
+    /// 5 s on first load and again on every 5 s tick of the live refresh; this way the page renders at once and the
+    /// Overview fills in when the read lands. <see cref="LoadAgentStatusAsync"/>'s version guard drops an answer a newer
+    /// read has overtaken, so the reads cannot cross. A tab click still waits: the operator asked for that tab.
+    /// </summary>
+    private void BeginAgentStatusRead(Nodes.NodeRow? row) => _ = InvokeAsync(async () =>
+    {
+        await LoadAgentStatusAsync(row);
+        try
+        {
+            StateHasChanged();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The page was left while the read was still out; nothing to render.
+        }
+    });
+
+    /// <summary>Reads the node agent's status snapshot for the Overview (one read per refresh, bounded); a failure only says so.</summary>
+    private async Task LoadAgentStatusAsync(Nodes.NodeRow? row)
+    {
+        int version = ++_agentReadVersion;
+        if (row is null || _agents is null || !UsesAgentDetails(row))
+        {
+            _agentStatus = null;
+            _agentStatusError = null;
+            return;
+        }
+
+        string nodeId = row.Id;
+        try
+        {
+            using var timeout = new CancellationTokenSource(AgentStatusTimeout);
+            StatusSnapshot snapshot = await _agents.GetClient(nodeId).GetStatusAsync(timeout.Token);
+            if (version == _agentReadVersion)
+            {
+                _agentStatus = new AgentStatusRead(nodeId, snapshot, _time.GetUtcNow());
+                _agentStatusError = null;
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            if (version == _agentReadVersion)
+            {
+                _agentStatus = null;
+                _agentStatusError = $"Could not read the agent's own status (downloads, clock): {ex.Message}";
+            }
+        }
+    }
+
+    /// <summary>What to do about the Degraded reasons the Windows and native agents add (design-p3p4 §A.4.3, §A.1.2, §A.4.7).</summary>
+    private List<(string Code, string Text)> ReasonHelp(Nodes.NodeRow row)
+    {
+        var help = new List<(string, string)>();
+        if (_agentStatus is not { } status || status.NodeId != row.Id)
+        {
+            return help;
+        }
+
+        var codes = status.Snapshot.Health.Reasons.Select(r => r.Code).ToHashSet(StringComparer.Ordinal);
+        if ((status.Snapshot.Time - status.ReadAt).Duration() > Protocol.DegradedClockSkew)
+        {
+            codes.Add(HealthReasonCodes.ClockSkew);
+        }
+
+        foreach (string code in HelpOrder)
+        {
+            if (codes.Contains(code) && ReasonHelpText(code, IsWindows(row)) is { } text)
+            {
+                help.Add((code, text));
+            }
+        }
+
+        return help;
+    }
+
+    private static readonly string[] HelpOrder =
+        [HealthReasonCodes.ModelRootLow, HealthReasonCodes.GpuExternalUseHigh, HealthReasonCodes.ExecutableUnverified, HealthReasonCodes.ClockSkew];
+
+    /// <summary>The help line for a Degraded reason code, or null for a code without one.</summary>
+    public static string? ReasonHelpText(string code, bool windows) => code switch
+    {
+        HealthReasonCodes.ModelRootLow =>
+            "Low disk space can prevent model downloads and agent state writes. Free space on the disk containing each affected volume until it meets the threshold in the warning. " +
+            "If models and cache share a disk, freeing space on that disk addresses both warnings.",
+        HealthReasonCodes.GpuExternalUseHigh =>
+            "Another program on this machine (a game, a 3D or video app, a browser) uses more GPU memory than the GPU's reserve. " +
+            "Models keep running, but new starts on that GPU may be refused. Close the program, or raise the GPU's reserve under Settings.",
+        HealthReasonCodes.ExecutableUnverified => windows
+            ? "An installed llama.cpp version no longer matches its install manifest, so launches that use it are refused; other versions keep working. " +
+              "Install it again on the PC: in Windows PowerShell run as administrator, run .\\install-agent.ps1 -LlamaCpp from the agent's folder."
+            : "An installed llama.cpp version no longer matches its install manifest, so launches that use it are refused; other versions keep working. " +
+              "Install it again on the node.",
+        HealthReasonCodes.ClockSkew => windows
+            ? "The PC's clock is off the master's. Above 5 minutes the agent refuses every change. Check the Windows Time service: w32tm /query /status, then w32tm /resync."
+            : "The node's clock is off the master's. Above 5 minutes the agent refuses every change. Check its time synchronization.",
+        _ => null,
+    };
+
+    /// <summary>"In step with the master (under 1 s apart)", "12 s ahead of the master", "45 s behind the master (Degraded above 30 s; …)".</summary>
+    public static string ClockText(TimeSpan agentMinusMaster)
+    {
+        double seconds = Math.Abs(agentMinusMaster.TotalSeconds);
+        if (seconds < 1)
+        {
+            return "In step with the master (under 1 s apart)";
+        }
+
+        string side = agentMinusMaster > TimeSpan.Zero ? "ahead of" : "behind";
+        string amount = seconds < 120
+            ? string.Create(CultureInfo.InvariantCulture, $"{seconds:0} s")
+            : string.Create(CultureInfo.InvariantCulture, $"{seconds / 60:0.#} min");
+        string text = $"{amount} {side} the master";
+        if (seconds > Protocol.DegradedClockSkew.TotalSeconds)
+        {
+            text += string.Create(CultureInfo.InvariantCulture,
+                $" (Degraded above {Protocol.DegradedClockSkew.TotalSeconds:0} s; above 5 min the agent refuses changes)");
+        }
+
+        return text;
+    }
+
+    private RenderFragment DownloadsSection(Nodes.NodeRow row, IReadOnlyList<NodeDownloadStatus> downloads) => __builder =>
+    {
+        <section class="section" aria-labelledby="node-downloads-title" data-testid="node-downloads">
+            <div class="section-head">
+                <h2 id="node-downloads-title">Downloads</h2>
+                <span class="section-note"><span class="num">@downloads.Count(d => d.State is DownloadState.Queued or DownloadState.Downloading)</span> running</span>
+            </div>
+            <div class="panel panel--scroll-x">
+                <table class="data-table data-table--stack" data-testid="node-downloads-table">
+                    <caption class="visually-hidden">Downloads on this node</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">Folder</th>
+                            <th scope="col">State</th>
+                            <th scope="col">Progress</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var download in downloads.OrderByDescending(d => d.NeedsToken).ThenByDescending(d => d.StartedAt))
+                        {
+                            var look = DownloadLook(download);
+                            <tr data-testid="@($"node-download-{download.Folder}")">
+                                <td class="col-primary">
+                                    <div>@download.Folder</div>
+                                    <div class="model-card-id">@download.RepoId</div>
+                                </td>
+                                <td data-label="State">
+                                    <span class="state state--@look.Tone" data-state="@download.State.ToString().ToLowerInvariant()"><Icon Name="@look.Icon" /> <span>@look.Label</span></span>
+                                    @if (download.NeedsToken)
+                                    {
+                                        <div data-testid="@($"node-download-needs-token-{download.Folder}")">
+                                            Paused: needs the Hugging Face token again.
+                                            @if (ModelForFolder(row, download.Folder) is { } model)
+                                            {
+                                                <span>Restart it with the token from <a href="@($"models/{Uri.EscapeDataString(model.Id)}")">@model.ServedName</a>'s download row.</span>
+                                            }
+                                            else
+                                            {
+                                                <span>Restart it with the token from the model editor's download row.</span>
+                                            }
+                                        </div>
+                                    }
+                                    else if (download.State == DownloadState.Failed && !string.IsNullOrWhiteSpace(download.Error))
+                                    {
+                                        <div class="muted">@UiFormat.FailureSummary(download.Error)</div>
+                                    }
+                                </td>
+                                <td data-label="Progress" class="num">@DownloadProgressText(download)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    };
+
+    private static Look DownloadLook(NodeDownloadStatus download) => download.State switch
+    {
+        DownloadState.Completed => new("Completed", "state-ready", "ready"),
+        DownloadState.Failed => new("Failed", "state-failed", "failed"),
+        DownloadState.Cancelled => new("Cancelled", "close", "stopped"),
+        DownloadState.Queued => new("Queued", "clock", "starting"),
+        _ => new("Downloading", "refresh", "starting"),
+    };
+
+    /// <summary>"3.2 GB of 8.0 GB", or "3.2 GB" when the size is unknown.</summary>
+    public static string DownloadProgressText(NodeDownloadStatus download)
+    {
+        ArgumentNullException.ThrowIfNull(download);
+        return download.TotalBytes > 0
+            ? $"{UiFormat.Bytes(download.BytesDownloaded)} of {UiFormat.Bytes(download.TotalBytes)}"
+            : UiFormat.Bytes(download.BytesDownloaded);
+    }
+
+    /// <summary>The model here whose checkpoint folder is <paramref name="folder"/> (case-insensitive on Windows, D125).</summary>
+    private ModelDefinition? ModelForFolder(Nodes.NodeRow row, string folder)
+    {
+        var comparison = IsWindows(row) ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return ModelsHere(row).FirstOrDefault(m => string.Equals(m.ModelPath?.Trim('/', '\\'), folder, comparison));
+    }
+
+    /// <summary>
+    /// A process instance's GPU memory as its agent measured it at start (design-p3p4 §A.4.3, D129 (1): WDDM reports no
+    /// per-process memory, so a Windows model is never shown "measured: 0"); null for a container instance or before the
+    /// start was measured.
+    /// </summary>
+    public static double? MeasuredAtStart(Nodes.NodeRow row, ModelDefinition model, NodeModelRuntime? runtime)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        ArgumentNullException.ThrowIfNull(model);
+        _ = row;
+        if (runtime?.MeasuredGpuGiB is not { } measured || !(measured > 0) || !UiFormat.HasValue(measured))
+        {
+            return null;
+        }
+
+        // The model's own delivery decides, exactly as the master's attribution does (MN-230): reading it off the node's
+        // runtime capabilities hid the figure on a node that reports both a container and a process runtime of that kind.
+        return MirbadLLM.Orchestration.ModelMemoryAttribution.IsProcessDelivery(model) ? measured : null;
+    }
+
+    private static string RuntimeSlug(RuntimeCapability runtime) =>
+        $"{runtime.Kind.ToString().ToLowerInvariant()}-{runtime.Delivery.ToString().ToLowerInvariant()}";
+
+    /// <summary>"CUDA 13.4 · default", "CUDA 13.4", "default", or "".</summary>
+    public static string VersionDetails(RuntimeVersion version)
+    {
+        ArgumentNullException.ThrowIfNull(version);
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(version.Cuda))
+        {
+            parts.Add($"CUDA {version.Cuda}");
+        }
+
+        if (version.Default)
+        {
+            parts.Add("default");
+        }
+
+        return string.Join(" · ", parts);
+    }
+
+    private void Pick(NodeActionRequest request)
+    {
+        _status = null;
+        _action = request;
+    }
+
+    private async Task OnActionDoneAsync(NodeActionResult result)
+    {
+        _status = result.Message;
+        _form = null; // the record changed: start the Settings form from the stored values again
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (_live is not null)
+        {
+            await LoadAsync(await _live.RefreshAsync());
+        }
+    }
+
+    // ---- Overview: attention, headroom and the models placed here ------------------------------------------------
+
+    private RenderFragment OverviewTab(Nodes.NodeRow row) => __builder =>
+    {
+        var help = ReasonHelp(row);
+        // Open operations have their tab and failed models are listed right below with their cause: not repeated here.
+        var alerts = Nodes.Alerts(row, _now).Where(a => a.Key is not ("ops" or "models")).ToList();
+        string? fencing = FencingText(row.Id);
+        bool pending = row.Record is { Approved: false, Revoked: false };
+        bool caPending = CaPending(row.Id);
+        bool detailsError = _agentStatusError is not null && UsesAgentDetails(row);
+        bool any = row.Reasons.Count > 0 || help.Count > 0 || row.Draining || fencing is not null || pending || alerts.Count > 0 || caPending || detailsError;
+
+        <div class="page-grid--two node-overview"><div>
+        <AgentUpdatePanel Row="row" Admin="_admin" Caller="_caller" OnViewOperations="ViewUpdateOperationsAsync" />
+
+        <section class="section" aria-labelledby="node-memory-title" data-testid="node-memory">
+            <div class="section-head">
+                <h2 id="node-memory-title">Headroom</h2>
+                @if (row.Memory is { } m)
+                {
+                    <span class="section-note">@(m.Model == MemoryModel.Discrete ? "Per GPU: what a new model can still get" : "Unified memory shared by CPU and GPU")</span>
+                }
+            </div>
+            @if (row.Memory is { } memory)
+            {
+                @if (memory.Model == MemoryModel.Discrete && memory.Gpus.Count > 0)
+                {
+                    <MemoryHeadroom Gpus="GpuHeadrooms(row, GpuRows(row))" HostTotalGiB="memory.HostTotalGiB" HostAvailableGiB="memory.HostAvailableGiB" IdPrefix="node" Title="VRAM" />
+                }
+                else
+                {
+                    <MemoryHeadroom TotalGiB="memory.HostTotalGiB" AvailableGiB="memory.HostAvailableGiB" ModelsGiB="ModelsGiB(row)" ReserveGiB="row.ReserveGiB" />
+                }
+            }
+            else
+            {
+                <p class="muted" data-testid="node-memory-missing">No memory reading from this node yet.</p>
+            }
+        </section>
+
+        @ModelsSection(row)
+        </div><div>
+        <section class="section section--first" aria-labelledby="node-attention-title" data-testid="node-attention">
+            <div class="section-head"><h2 id="node-attention-title" tabindex="-1">Attention</h2></div>
+            @if (!any)
+            {
+                <p class="muted" data-testid="node-attention-none">Nothing needs attention on this node.</p>
+            }
+            else
+            {
+                <div class="panel panel-body node-attention">
+                    @if (row.State == NodeState.Degraded)
+                    {
+                        <p data-testid="node-health-summary"><strong>Why this node is Degraded</strong></p>
+                    }
+                    @if (row.Reasons.Count > 0)
+                    {
+                        <ul class="node-attention-list" data-testid="node-reasons">
+                            @foreach (string reason in row.Reasons)
+                            {
+                                <li>@reason</li>
+                            }
+                        </ul>
+                    }
+                    @if (help.Count > 0)
+                    {
+                        <ul class="node-reason-help" data-testid="node-reason-help">
+                            @foreach ((string reasonCode, string text) in help)
+                            {
+                                <li data-code="@reasonCode" data-testid="@($"node-reason-help-{reasonCode}")"><Icon Name="info" /> <span>@text</span></li>
+                            }
+                        </ul>
+                    }
+                    @if (help.Any(h => h.Code == HealthReasonCodes.ModelRootLow))
+                    {
+                        <div class="node-disk-recovery" data-testid="node-disk-recovery">
+                            <h3>Free disk space on @row.Id</h3>
+                            <ol>
+                                <li>
+                                    @if (IsMac(row))
+                                    {
+                                        <span>On this Mac, open <strong>System Settings → General → Storage</strong>. Review large files and apps you no longer need.</span>
+                                    }
+                                    else if (IsWindows(row))
+                                    {
+                                        <span>On this PC, open <strong>Settings → System → Storage → Cleanup recommendations</strong>. Review the suggested files on the affected drive.</span>
+                                    }
+                                    else
+                                    {
+                                        <span>On this node, run <code>df -h</code> to find the full filesystem. Review large files on the disk holding the agent's configured models and cache folders.</span>
+                                    }
+                                </li>
+                                <li>Move unwanted files to another disk or delete files you have reviewed, then empty Trash or Recycle Bin. Keep model files that are still in use; stopping a model does not free disk space.</li>
+                                <li>Keep this page open. Health is checked every 5 seconds; each disk warning clears once free space meets its threshold. The node returns to Online when all health warnings are resolved.</li>
+                            </ol>
+                            @if (IsMac(row))
+                            {
+                                <a href="https://support.apple.com/102624" target="_blank" rel="noopener noreferrer" data-testid="node-disk-guide">Apple guide to freeing disk space <span class="visually-hidden">(opens a new tab)</span></a>
+                            }
+                            else if (IsWindows(row))
+                            {
+                                <a href="https://support.microsoft.com/en-us/windows/experience/storage-filemanagement/free-up-drive-space-in-windows" target="_blank" rel="noopener noreferrer" data-testid="node-disk-guide">Microsoft guide to freeing disk space <span class="visually-hidden">(opens a new tab)</span></a>
+                            }
+                        </div>
+                    }
+                    @if (alerts.Count > 0)
+                    {
+                        <ul class="node-alerts">
+                            @foreach (var alert in alerts)
+                            {
+                                <li class="node-alert node-alert--@alert.Tone" data-testid="@($"node-alert-{alert.Key}")"><Icon Name="@alert.Icon" /> <span>@AlertDetail(row, alert)</span></li>
+                            }
+                        </ul>
+                    }
+                    @if (caPending)
+                    {
+                        <p data-testid="node-ca-pending"><Icon Name="restart" /> CA rotation: this node is not yet rotated under the new CA (see Settings).</p>
+                    }
+                    @if (row.Draining)
+                    {
+                        <p class="muted" data-testid="node-draining-note">Draining: no new starts or placements here; running models keep serving.</p>
+                    }
+                    @if (fencing is not null)
+                    {
+                        <p data-testid="node-fencing"><Icon Name="lock" /> @fencing</p>
+                    }
+                    @if (pending)
+                    {
+                        <p class="muted" data-testid="node-pending-note">
+                            @(row.Record!.PendingCertSpkiSha256 is null
+                                ? "Waiting for the agent to enroll with its join token. Nothing is sent to this node until it is approved."
+                                : "The agent enrolled and waits for approval. Nothing is sent to this node until it is approved.")
+                        </p>
+                    }
+                    @if (detailsError)
+                    {
+                        <p class="muted" data-testid="node-agent-details-error">@_agentStatusError</p>
+                    }
+                </div>
+            }
+        </section>
+
+        @HardwareSection(row)
+        </div></div>
+
+    };
+
+    /// <summary>The alert line with its detail where the list's short form needs one.</summary>
+    private string AlertDetail(Nodes.NodeRow row, Nodes.NodeAlert alert) => alert.Key switch
+    {
+        "cert" => $"{alert.Text}: {Nodes.CertExpiryText(row.CertNotAfter, _now)}. The master renews it on its own; re-pair the node if it has expired.",
+        "rotation" => $"{alert.Text}: {row.RotationError}",
+        "agent" => $"{alert.Text}. It speaks {Nodes.ProtocolText(row)}; this master speaks protocol {MirbadLLM.Agent.Contracts.Protocol.CurrentVersion}.",
+        "build" => $"{alert.Text}. The agent is {ProductVersion.Display(row.AgentVersion)}, MirbadLLM is {ProductVersion.Display(ProductVersion.Controller)}. " +
+            "Use Update now in Agent update, or expand Update by hand for this node's commands.",
+        _ => alert.Text,
+    };
+
+    private string? FencingText(string nodeId)
+    {
+        if (_fencing?.GetStatus().Nodes.FirstOrDefault(n => string.Equals(n.NodeId, nodeId, StringComparison.Ordinal)) is not { } node)
+        {
+            return null;
+        }
+
+        string epoch = node.AgentEpoch is { } e ? e.ToString(CultureInfo.InvariantCulture) : UiFormat.Missing;
+        return node.State switch
+        {
+            NodeFencingState.Stale => $"Fencing: this agent follows another master with a higher epoch ({epoch}); it refuses this master's commands until a takeover.",
+            NodeFencingState.Competing => $"Fencing: another master drives this agent at the same epoch ({epoch}); it refuses this master's commands.",
+            NodeFencingState.PendingTakeover => "Fencing: unreachable during the last takeover; it accepts this master's epoch on its next command.",
+            NodeFencingState.NeedsContinuation => $"Fencing: returned holding epoch {epoch}, not below this master's; continue the takeover for this node from the banner.",
+            _ => null,
+        };
+    }
+
+    // ---- GPUs ------------------------------------------------------------------------------------------------------
+
+    private sealed record GpuRow(int Index, string Uuid, string? Name, double? TotalGiB, double? UsedGiB, double? FreeGiB,
+        double? ReserveGiB, double? UtilizationPercent, string Details, bool SharesHostMemory);
+
+    private List<GpuRow> GpuRows(Nodes.NodeRow row)
+    {
+        var caps = (row.Capabilities?.Gpus ?? []).ToDictionary(g => g.Uuid, StringComparer.Ordinal);
+        var memory = (row.Memory?.Gpus ?? []).ToDictionary(g => g.Uuid, StringComparer.Ordinal);
+        HostSample? latest = LatestSample(row.Id);
+        var util = (latest?.Gpus ?? []).GroupBy(g => g.Uuid, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Last(), StringComparer.Ordinal);
+        var reserves = row.Record?.GpuReserveGiB ?? new Dictionary<string, double>();
+        var result = new List<GpuRow>();
+        foreach (string uuid in caps.Keys.Concat(memory.Keys).Distinct(StringComparer.Ordinal))
+        {
+            caps.TryGetValue(uuid, out var cap);
+            memory.TryGetValue(uuid, out var mem);
+            util.TryGetValue(uuid, out var sample);
+            bool shares = cap?.SharesHostMemory ?? false;
+            double? utilization = sample?.UtilizationPercent
+                ?? (caps.Count == 1 && latest?.Gpus is null ? latest?.Gpu?.UtilizationPercent : null);
+            double? total = mem?.TotalGiB ?? sample?.MemoryTotalGiB ?? cap?.MemoryTotalGiB;
+            double? used = mem?.UsedGiB ?? sample?.MemoryUsedGiB;
+            double? free = mem?.FreeGiB ?? (total is { } t && used is { } u ? t - u : null);
+            result.Add(new GpuRow(
+                cap?.Index ?? mem?.Index ?? sample?.Index ?? -1,
+                uuid,
+                cap?.Name,
+                total,
+                used,
+                free,
+                shares ? null : reserves.TryGetValue(uuid, out double reserve) ? reserve : 0,
+                utilization,
+                cap is null ? "" : GpuDetails(cap).TrimStart(' ', '·'),
+                shares));
+        }
+
+        // An Apple Silicon Mac reports no GPU in its capabilities (Metal needs no GPU choice, so placement must not offer
+        // one) but samples its GPU's utilisation from IOKit (Phase 4, M8): one row from the telemetry, sharing host memory.
+        if (result.Count == 0 && latest?.Gpu is { } apple && IsMac(row))
+        {
+            string? chip = row.Capabilities?.Cpu?.Model;
+            result.Add(new GpuRow(0, "", string.IsNullOrWhiteSpace(chip) ? "Apple GPU" : $"{chip} GPU", null, null, null, null,
+                apple.UtilizationPercent, "Metal · utilisation from IOKit; power and temperature are not reported", SharesHostMemory: true));
+        }
+
+        return [.. result.OrderBy(g => g.Index)];
+    }
+
+    private static bool IsMac(Nodes.NodeRow row) =>
+        string.Equals(row.Capabilities?.Os.Family, "macos", StringComparison.Ordinal);
+
+    private HostSample? LatestSample(string nodeId)
+    {
+        try
+        {
+            var samples = _history?.GetHost(nodeId, TimeSpan.FromMinutes(1));
+            return samples is { Count: > 0 } ? samples[^1] : null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private RenderFragment GpusTab(Nodes.NodeRow row) => __builder =>
+    {
+        var gpus = GpuRows(row);
+        <section class="section section--first" aria-labelledby="node-gpus-title" data-testid="node-gpus-tab">
+            <div class="section-head"><h2 id="node-gpus-title">GPUs</h2></div>
+            @if (gpus.Count == 0)
+            {
+                <EmptyState Title="@(row.Capabilities is null ? "This node has not reported its GPUs yet." : "This node has no GPU.")" Inline="true" HeadingLevel="3" TestId="node-gpus-empty" />
+            }
+            else
+            {
+                @if (gpus.All(g => g.SharesHostMemory))
+                {
+                    <p class="muted" data-testid="node-gpus-unified">Unified memory: the GPU shares the host's memory, shown under Headroom on the Overview tab.</p>
+                }
+                <div class="panel panel--scroll-x">
+                    <table class="data-table data-table--stack" data-testid="node-gpus-table">
+                        <caption class="visually-hidden">GPUs of this node</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">GPU</th>
+                                <th scope="col">VRAM total</th>
+                                <th scope="col">Used</th>
+                                <th scope="col">Free</th>
+                                <th scope="col">Reserve</th>
+                                <th scope="col">Utilization</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var gpu in gpus)
+                            {
+                                <tr data-testid="@($"node-gpu-{gpu.Index}")">
+                                    <td class="col-primary">
+                                        <div><span class="num">@(gpu.Index >= 0 ? gpu.Index.ToString(CultureInfo.InvariantCulture) : UiFormat.Missing)</span>: @(gpu.Name ?? "Unknown GPU")</div>
+                                        @if (gpu.Uuid.Length > 0)
+                                        {
+                                            <div class="model-card-id">@gpu.Uuid</div>
+                                        }
+                                        @if (gpu.Details.Length > 0)
+                                        {
+                                            <div class="muted">@gpu.Details</div>
+                                        }
+                                    </td>
+                                    @if (gpu.SharesHostMemory)
+                                    {
+                                        <td data-label="VRAM total" class="muted" colspan="4">Shares host memory</td>
+                                    }
+                                    else
+                                    {
+                                        <td data-label="VRAM total" class="num">@UiFormat.GiB(gpu.TotalGiB)</td>
+                                        <td data-label="Used" class="num">@UiFormat.GiB(gpu.UsedGiB)</td>
+                                        <td data-label="Free" class="num">@UiFormat.GiB(gpu.FreeGiB)</td>
+                                        <td data-label="Reserve" class="num">@UiFormat.GiB(gpu.ReserveGiB)</td>
+                                    }
+                                    <td data-label="Utilization" class="num" data-testid="@($"node-gpu-{gpu.Index}-util")">@UiFormat.Percent(gpu.UtilizationPercent)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    };
+
+    /// <summary>Per-GPU headroom: the models segment from the collector's per-GPU model memory, else each running model's budget split over its GPUs.</summary>
+    private List<GpuHeadroom> GpuHeadrooms(Nodes.NodeRow row, List<GpuRow> gpus)
+    {
+        var measured = (LatestSample(row.Id)?.Gpus ?? []).Where(g => g.ModelMemoryGiB is not null)
+            .GroupBy(g => g.Uuid, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Last().ModelMemoryGiB!.Values.Sum(), StringComparer.Ordinal);
+        var active = ActiveModels(row);
+        return [.. gpus.Select(g => new GpuHeadroom(
+            g.Index,
+            g.Uuid,
+            g.Name,
+            g.TotalGiB,
+            g.FreeGiB,
+            measured.TryGetValue(g.Uuid, out double m) ? m : active.Sum(model => BudgetShare(model, g.Uuid, gpus.Count)),
+            g.ReserveGiB ?? 0))];
+    }
+
+    private static double BudgetShare(ModelDefinition model, string uuid, int nodeGpuCount)
+    {
+        var uuids = model.Placement?.GpuUuids;
+        if (uuids is not { Count: > 0 })
+        {
+            return nodeGpuCount > 0 ? model.MemoryBudgetGiB / nodeGpuCount : 0;
+        }
+
+        return uuids.Contains(uuid, StringComparer.Ordinal) ? model.MemoryBudgetGiB / uuids.Count : 0;
+    }
+
+    // ---- Models ----------------------------------------------------------------------------------------------------
+
+    /// <summary>Models placed on this node, plus models without a placement that this node runs (the bootstrap DGX).</summary>
+    private List<ModelDefinition> ModelsHere(Nodes.NodeRow row)
+    {
+        var running = row.Runtimes.Select(r => r.ModelId).ToHashSet(StringComparer.Ordinal);
+        return [.. (_models ?? [])
+            .Where(m => string.Equals(m.Placement?.NodeId, row.Id, StringComparison.Ordinal) || (m.Placement is null && running.Contains(m.Id)))
+            .OrderBy(m => m.ServedName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(m => m.Id, StringComparer.Ordinal)];
+    }
+
+    private RenderFragment ModelsSection(Nodes.NodeRow row) => __builder =>
+    {
+        var models = ModelsHere(row);
+        <section class="section" aria-labelledby="node-models-title" data-testid="node-models">
+            <div class="section-head">
+                <h2 id="node-models-title">Models on this node</h2>
+                <span class="section-note"><span class="num">@row.ReadyModels</span> Ready · <span class="num">@models.Count</span> placed</span>
+            </div>
+            @if (models.Count == 0)
+            {
+                <p class="muted" data-testid="node-models-empty">No model is placed on this node. Choose this node in a model's Placement section to run it here.</p>
+            }
+            else
+            {
+                var runtimes = row.Runtimes.ToDictionary(r => r.ModelId, StringComparer.Ordinal);
+                <div class="panel panel--scroll-x">
+                    <table class="data-table node-models-table" data-testid="node-models-table">
+                        <caption class="visually-hidden">Models on this node</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Served name</th>
+                                <th scope="col">State</th>
+                                <th scope="col">Runtime</th>
+                                <th scope="col">Budget</th>
+                                <th scope="col">GPUs</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var model in Pager.Slice(models, _modelsPage, _modelsSize))
+                            {
+                                var runtime = runtimes.GetValueOrDefault(model.Id);
+                                <tr data-testid="@($"node-model-{model.Id}")">
+                                    <td class="col-primary">
+                                        <a class="node-model-name" href="@($"models/{Uri.EscapeDataString(model.Id)}")" data-testid="@($"node-model-open-{model.Id}")">@model.ServedName</a>
+                                        @if (!string.Equals(model.ServedName, model.Id, StringComparison.Ordinal))
+                                        {
+                                            <div class="model-card-id">@model.Id</div>
+                                        }
+                                    </td>
+                                    <td data-label="State" class="node-model-state">
+                                        @if (runtime is not null)
+                                        {
+                                            <StateBadge State="runtime.State" Since="runtime.Since" Now="_now" TestId="@($"node-model-state-{model.Id}")" />
+                                            @if (runtime.State == ModelState.Failed && !string.IsNullOrWhiteSpace(runtime.Error))
+                                            {
+                                                <div class="node-model-error" data-testid="@($"node-model-error-{model.Id}")">@UiFormat.FailureSummary(runtime.Error)</div>
+                                            }
+                                            else if (runtime.State == ModelState.Ready && _history is not null
+                                                     && ModelProgress.Assess(_history.GetModel(model.Id, ModelProgress.Window), _now) is { } progress)
+                                            {
+                                                <div class="node-model-error" data-testid="@($"node-model-progress-{model.Id}")">@progress.Text</div>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <span class="muted" data-testid="@($"node-model-state-{model.Id}")">@UiFormat.Missing</span>
+                                        }
+                                    </td>
+                                    <td data-label="Runtime" data-testid="@($"node-model-runtime-{model.Id}")">@RuntimeName(model.Runtime)</td>
+                                    <td data-label="Budget">
+                                        <span class="num">@UiFormat.GiB(model.MemoryBudgetGiB)</span>
+                                        @if (MeasuredAtStart(row, model, runtime) is { } measured)
+                                        {
+                                            <div class="muted" data-testid="@($"node-model-measured-{model.Id}")">measured at start <span class="num">@UiFormat.GiB(measured)</span></div>
+                                        }
+                                    </td>
+                                    <td data-label="GPUs">@ModelGpusText(row, model)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <Pager Total="models.Count" @bind-Page="_modelsPage" @bind-Size="_modelsSize" QueryPrefix="models" Noun="models" TestId="node-models-pager" />
+            }
+        </section>
+    };
+
+    private static string ModelGpusText(Nodes.NodeRow row, ModelDefinition model)
+    {
+        if (model.Placement?.GpuUuids is { Count: > 0 } uuids)
+        {
+            var index = (row.Capabilities?.Gpus ?? []).ToDictionary(g => g.Uuid, g => g.Index, StringComparer.Ordinal);
+            return string.Join(", ", uuids.Select(u => index.TryGetValue(u, out int i) ? i.ToString(CultureInfo.InvariantCulture) : u));
+        }
+
+        if (model.Placement?.GpuIndices is { Count: > 0 } indices)
+        {
+            return string.Join(", ", indices.Select(i => i.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        return row.Capabilities?.Memory.Model == MemoryModel.Unified ? "Shared" : "All";
+    }
+
+    // ---- Services ----------------------------------------------------------------------------------------------------
+
+    private RenderFragment ServicesTab(Nodes.NodeRow row) => __builder =>
+    {
+        <section class="section section--first" aria-labelledby="node-services-title" data-testid="node-services-tab">
+            <div class="section-head">
+                <h2 id="node-services-title">Services</h2>
+                <span class="section-note">Daemons, containers and Windows services that share this node's memory with the models.</span>
+            </div>
+            @if (row.Record is { Approved: false, Revoked: false })
+            {
+                <p class="muted" data-testid="node-services-pending">This node waits for approval. Its services can be listed and managed once it is approved.</p>
+            }
+            else
+            {
+                <NodeServices NodeId="@row.Id" ShowHeadroom="false" TabQueryKey="services" TabsVariant="TabsVariant.Segmented" />
+            }
+        </section>
+    };
+
+    // ---- Operations: what runs now, the agent's downloads, and the recent commands -------------------------------------
+
+    private RenderFragment OperationsTab(Nodes.NodeRow row) => __builder =>
+    {
+        var job = JobHere;
+        <section class="section section--first" aria-labelledby="node-ops-tab-title" data-testid="node-operations-tab">
+            <div class="section-head">
+                <h2 id="node-ops-tab-title">Running now</h2>
+                <span class="section-note"><span class="num">@(row.OpenOperations.Count + (job is null ? 0 : 1))</span> open</span>
+            </div>
+            @if (job is not null)
+            {
+                <div class="panel panel-body node-job" data-testid="node-job-panel">
+                    <dl class="kv kv--wide">
+                        <dt>Job</dt>
+                        <dd><a href="@Nodes.JobHref(job)">@Nodes.JobText(job)</a> on <code>@job.ModelId</code></dd>
+                        <dt>Phase</dt>
+                        <dd>@(string.IsNullOrWhiteSpace(job.Phase) ? UiFormat.Missing : job.Phase)</dd>
+                        <dt>Running for</dt>
+                        <dd><span class="num">@UiFormat.Elapsed(job.StartedAt, _now)</span></dd>
+                        <dt>Ends about</dt>
+                        <dd><span class="num">@UiFormat.ClockTimeUtc(job.EstimatedEnd)</span></dd>
+                    </dl>
+                </div>
+            }
+            @if (row.OpenOperations.Count > 0 || job is null)
+            {
+                @OperationsTable(row)
+            }
+        </section>
+
+        @if (_agentStatus is { } downloadsStatus && downloadsStatus.NodeId == row.Id && downloadsStatus.Snapshot.Downloads.Count > 0)
+        {
+            @DownloadsSection(row, downloadsStatus.Snapshot.Downloads)
+        }
+
+        <section class="section" aria-labelledby="node-commands-title" data-testid="node-commands">
+            <div class="section-head">
+                <h2 id="node-commands-title">Recent commands</h2>
+                <span class="section-note">Every change made to or on this node, newest first, from the audit log.</span>
+            </div>
+            @if (_audit is null)
+            {
+                <p class="muted" data-testid="node-commands-unavailable">The audit log is not running on this master.</p>
+            }
+            else
+            {
+                @AuditTable(_auditLines ?? [], paged: true)
+            }
+        </section>
+    };
+
+    private RenderFragment OperationsTable(Nodes.NodeRow row) => __builder =>
+    {
+        @if (row.OpenOperations.Count == 0)
+        {
+            <EmptyState Title="Nothing is running on this node right now." Inline="true" HeadingLevel="3" TestId="node-ops-empty" />
+        }
+        else
+        {
+            var ops = row.OpenOperations.OrderByDescending(o => o.StartedAt).ToList();
+            <div class="panel panel--scroll-x">
+                <table class="data-table data-table--stack" data-testid="node-ops-table">
+                    <caption class="visually-hidden">Open operations</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">Operation</th>
+                            <th scope="col">Target</th>
+                            <th scope="col">State</th>
+                            <th scope="col">Stage</th>
+                            <th scope="col">Running for</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var op in Pager.Slice(ops, _opsPage, _opsSize))
+                        {
+                            <tr data-testid="@($"node-op-{op.OperationId}")">
+                                <td class="col-primary">
+                                    <div>@op.Kind</div>
+                                    <div class="model-card-id">@op.OperationId</div>
+                                </td>
+                                <td data-label="Target"><span class="num">@op.Target</span></td>
+                                <td data-label="State">@op.State</td>
+                                <td data-label="Stage">@(op.Stage ?? UiFormat.Missing)</td>
+                                <td data-label="Running for"><span class="num">@UiFormat.Elapsed(op.StartedAt, _now)</span></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <Pager Total="ops.Count" @bind-Page="_opsPage" @bind-Size="_opsSize" QueryPrefix="ops" Noun="operations" TestId="node-ops-pager" />
+        }
+    };
+
+    private RenderFragment AuditTable(IReadOnlyList<AuditRecord> lines, bool paged) => __builder =>
+    {
+        @if (_auditError is not null)
+        {
+            <div class="callout callout--failed" role="alert" data-testid="node-audit-error">
+                <Icon Name="state-failed" />
+                <div class="callout-body">@_auditError</div>
+            </div>
+        }
+        else if (lines.Count == 0)
+        {
+            <p class="muted" data-testid="node-audit-empty">No commands recorded for this node yet.</p>
+        }
+        else
+        {
+            <div class="panel panel--scroll-x">
+                <table class="data-table data-table--stack" data-testid="@(paged ? "node-audit-table" : "node-recent-table")">
+                    <caption class="visually-hidden">Recent commands</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">Command</th>
+                            <th scope="col">Result</th>
+                            <th scope="col">When</th>
+                            <th scope="col">Who</th>
+                            <th scope="col">Detail</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var line in paged ? Pager.Slice(lines, _auditPage, _auditSize) : lines)
+                        {
+                            var look = ResultLook(line.Result);
+                            <tr data-testid="node-audit-row" data-action="@line.Action">
+                                <td class="col-primary">
+                                    <div>@ActionText(line.Action)</div>
+                                    @if (TargetText(line) is { } target)
+                                    {
+                                        <div class="model-card-id">@target</div>
+                                    }
+                                </td>
+                                <td data-label="Result">
+                                    <span class="state state--@look.Tone" data-state="@line.Result"><Icon Name="@look.Icon" /> <span>@look.Label</span></span>
+                                </td>
+                                <td data-label="When">
+                                    <span class="num" title="@UiFormat.IsoUtc(line.Time)">@Nodes.LastSeenText(line.Time, _now)</span>
+                                </td>
+                                <td data-label="Who"><span title="@line.Actor">@ActorText(line.Actor)</span></td>
+                                <td data-label="Detail"><span class="node-break">@DetailText(line)</span></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            @if (paged)
+            {
+                <Pager Total="lines.Count" @bind-Page="_auditPage" @bind-Size="_auditSize" QueryPrefix="audit" Noun="commands" TestId="node-audit-pager" />
+            }
+        }
+    };
+
+    private sealed record Look(string Label, string Icon, string Tone);
+
+    private static Look ResultLook(string result) => result switch
+    {
+        AuditResults.Succeeded => new("Succeeded", "state-ready", "ready"),
+        AuditResults.Refused => new("Refused", "close", "failed"),
+        AuditResults.Failed => new("Failed", "state-failed", "failed"),
+        AuditResults.Accepted => new("Accepted", "clock", "starting"),
+        _ => new("Unknown", "info", "stopped"),
+    };
+
+    /// <summary>"node.drain" → "Drain", "model.start" → "Model start"; unknown actions as recorded.</summary>
+    public static string ActionText(string action) => action switch
+    {
+        AuditActions.NodeJoinToken => "Join token",
+        AuditActions.NodeEnroll => "Enroll",
+        AuditActions.NodeApprove => "Approve",
+        AuditActions.NodeReject => "Reject",
+        AuditActions.NodeDrain => "Drain",
+        AuditActions.NodeUndrain => "Undrain",
+        AuditActions.NodeUpdate => "Settings change",
+        AuditActions.NodeRevoke => "Revoke",
+        AuditActions.NodeRotateCert => "Certificate rotation",
+        AuditActions.ModelStart => "Model start",
+        AuditActions.ModelStop => "Model stop",
+        AuditActions.ModelRestart => "Model restart",
+        AuditActions.ModelUnplace => "Model unplace",
+        AuditActions.ModelMove => "Model move",
+        AuditActions.FencingTakeover => "Takeover",
+        AuditActions.FencingContinue => "Takeover continued",
+        AuditActions.PkiCaRotation => "CA rotation",
+        AuditActions.Download => "Download",
+        AuditActions.FolderDelete => "Folder delete",
+        AuditActions.HostService => "Host service",
+        AuditActions.Job => "Benchmark or tuning job",
+        _ => action,
+    };
+
+    /// <summary>"Admin (session 1a2b3c)", "System (pki)", "API 192.0.2.10", "Configuration".</summary>
+    public static string ActorText(string actor)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        if (actor.StartsWith("admin:", StringComparison.Ordinal))
+        {
+            string hash = actor["admin:".Length..];
+            return $"Admin (session {hash[..Math.Min(6, hash.Length)]})";
+        }
+
+        if (actor.StartsWith("system:", StringComparison.Ordinal))
+        {
+            return $"System ({actor["system:".Length..]})";
+        }
+
+        if (actor.StartsWith("api:", StringComparison.Ordinal))
+        {
+            return $"API {actor["api:".Length..]}";
+        }
+
+        return actor == AuditActors.Config ? "Configuration" : actor;
+    }
+
+    private static string? TargetText(AuditRecord line) =>
+        string.Join(" · ", new[] { line.ModelId, line.Target, line.OperationId }.Where(v => !string.IsNullOrEmpty(v))) is { Length: > 0 } text ? text : null;
+
+    private static string DetailText(AuditRecord line) => (line.Detail, line.ErrorCode) switch
+    {
+        ({ Length: > 0 } detail, { Length: > 0 } code) => $"{detail} ({code})",
+        ({ Length: > 0 } detail, _) => detail,
+        (_, { Length: > 0 } code) => code,
+        _ => UiFormat.Missing,
+    };
+
+    // ---- Certificates ----------------------------------------------------------------------------------------------
+
+    private CaRotationRecord? CaRotation => _caRotation?.Rotation ?? _trust?.Document.Rotation;
+
+    private bool CaPending(string nodeId) => MasterTrustStore.IsPending(CaRotation, nodeId);
+
+    private RenderFragment AgentCertificateSection(Nodes.NodeRow row) => __builder =>
+    {
+        var record = row.Record;
+        var rotation = record?.Rotation;
+        <section class="section" aria-labelledby="node-agent-cert-title" data-testid="node-certs">
+            <div class="section-head">
+                <h2 id="node-agent-cert-title">Agent certificate</h2>
+            </div>
+            <div class="panel panel-body">
+                <dl class="kv kv--wide">
+                    <dt>Expires</dt>
+                    <dd><span class="num" data-testid="node-certs-expiry">@Nodes.CertExpiryText(row.CertNotAfter, _now)</span></dd>
+                    <dt>Renewal due</dt>
+                    <dd><span class="num" data-testid="node-certs-renewal">@(record is null || CertificateRotationService.RenewalDue(record) is not { } due ? UiFormat.Missing : UiFormat.IsoUtc(due))</span></dd>
+                    <dt>Key fingerprint</dt>
+                    <dd><code class="num node-fingerprint" data-testid="node-certs-pin">@PendingNodeFacts.Fingerprint(record?.CertSpkiSha256)</code></dd>
+                    @if (record?.PendingCertSpkiSha256 is { } pendingPin)
+                    {
+                        <dt>Pending key</dt>
+                        <dd><code class="num node-fingerprint" data-testid="node-certs-pending-pin">@PendingNodeFacts.Fingerprint(pendingPin)</code> <span class="muted">awaiting approval</span></dd>
+                    }
+                    <dt>Rotation</dt>
+                    <dd data-testid="node-certs-rotation">@Nodes.RotationText(row.RotationStage)</dd>
+                    @if (rotation is not null)
+                    {
+                        <dt>Rotation id</dt>
+                        <dd><code class="num">@rotation.RotationId</code></dd>
+                        <dt>Last step</dt>
+                        <dd><span class="num">@UiFormat.IsoUtc(rotation.UpdatedAt)</span></dd>
+                        @if (rotation.NewCertNotAfter is { } until)
+                        {
+                            <dt>New certificate</dt>
+                            <dd>expires <span class="num">@until.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)</span></dd>
+                        }
+                        @if (rotation.Error is { } rotationError)
+                        {
+                            <dt>Last error</dt>
+                            <dd data-testid="node-certs-error">@rotationError</dd>
+                        }
+                    }
+                </dl>
+            </div>
+            <p class="muted">The master renews this certificate on its own before it expires. Rotate it by hand after a suspected key leak; re-pair the node when its key is lost or the certificate expired. Both are among the node's actions at the top of this page.</p>
+        </section>
+
+    };
+
+    private RenderFragment CaRotationSection(Nodes.NodeRow row) => __builder =>
+    {
+        <section class="section" aria-labelledby="node-ca-title" data-testid="node-ca">
+            <div class="section-head"><h2 id="node-ca-title">CA rotation</h2></div>
+            @if (CaRotation is not { } ca)
+            {
+                <p class="muted" data-testid="node-ca-none">No CA rotation has run on this master.</p>
+            }
+            else
+            {
+                var progress = ca.Nodes.FirstOrDefault(n => string.Equals(n.NodeId, row.Id, StringComparison.Ordinal));
+                bool open = MasterTrustStore.IsOpen(ca.Stage);
+                <div class="panel panel-body">
+                    <dl class="kv kv--wide">
+                        <dt>Rotation</dt>
+                        <dd><code class="num">@ca.RotationId</code> <span data-testid="node-ca-stage">@CaStageText(ca.Stage)</span></dd>
+                        <dt>Started</dt>
+                        <dd><span class="num">@UiFormat.IsoUtc(ca.StartedAt)</span></dd>
+                        <dt>This node</dt>
+                        <dd data-testid="node-ca-progress">@CaProgressText(ca, progress, row.Id)</dd>
+                        @if (progress?.Error is { } caError)
+                        {
+                            <dt>Last error</dt>
+                            <dd data-testid="node-ca-error">@caError</dd>
+                        }
+                    </dl>
+                </div>
+                <p class="muted" data-testid="node-ca-backups">
+                    @(open
+                        ? "Backups made before this rotation hold the old CA key: delete them once it closes."
+                        : "Backups made before this rotation hold the old CA key: delete them.")
+                </p>
+            }
+        </section>
+    };
+
+    private static string CaStageText(CaRotationStage stage) => stage switch
+    {
+        CaRotationStage.Started => "Started: the master trusts both CAs",
+        CaRotationStage.AgentsTrusting => "Adding the new CA to the agents",
+        CaRotationStage.MasterReissued => "Master certificates re-issued under the new CA",
+        CaRotationStage.AgentsRotating => "Rotating the agent certificates",
+        CaRotationStage.Closing => "Closing: removing the old CA",
+        CaRotationStage.Closed => "Closed",
+        CaRotationStage.ClosedEarly => "Closed early",
+        _ => stage.ToString(),
+    };
+
+    private static string CaProgressText(CaRotationRecord ca, CaRotationNodeProgress? progress, string nodeId)
+    {
+        if (progress is null)
+        {
+            return MasterTrustStore.IsPending(ca, nodeId) ? "Not reached yet" : "Not part of this rotation";
+        }
+
+        if (progress.OldTrustRemoved)
+        {
+            return "Done: certificate under the new CA, old CA removed";
+        }
+
+        if (progress.CertificateRotated)
+        {
+            return "Certificate rotated under the new CA";
+        }
+
+        if (ca.Stage == CaRotationStage.ClosedEarly)
+        {
+            return "Not rotated before the rotation was closed early: re-pair it (rekey)";
+        }
+
+        return progress.TrustAdded ? "Trusts the new CA; certificate not rotated yet" : "Waiting to trust the new CA";
+    }
+
+    // ---- Settings --------------------------------------------------------------------------------------------------
+
+    private sealed class SettingsForm
+    {
+        public string DisplayName { get; set; } = "";
+
+        public string Address { get; set; } = "";
+
+        public string AltAddresses { get; set; } = "";
+
+        public string MemoryReserve { get; set; } = "";
+
+        public Dictionary<string, string> GpuReserves { get; } = new(StringComparer.Ordinal);
+
+        public string MaxConcurrentStarts { get; set; } = "";
+
+        public string VllmImage { get; set; } = "";
+
+        public string VllmDigest { get; set; } = "";
+
+        public string LlamaImage { get; set; } = "";
+
+        public string LlamaDigest { get; set; } = "";
+
+        public string Labels { get; set; } = "";
+    }
+
+    private static SettingsForm FormOf(NodeRecord record, NodeCapabilities? caps)
+    {
+        var form = new SettingsForm
+        {
+            DisplayName = record.DisplayName ?? "",
+            Address = record.Address,
+            AltAddresses = string.Join("\n", record.AltAddresses),
+            MemoryReserve = record.MemoryReserveGiB.ToString("0.###", CultureInfo.InvariantCulture),
+            MaxConcurrentStarts = record.MaxConcurrentStarts?.ToString(CultureInfo.InvariantCulture) ?? "",
+            VllmImage = record.DefaultVllmImage ?? "",
+            VllmDigest = record.DefaultVllmImageDigest ?? "",
+            LlamaImage = record.DefaultLlamaCppImage ?? "",
+            LlamaDigest = record.DefaultLlamaCppImageDigest ?? "",
+            Labels = string.Join(" ", record.Labels),
+        };
+        foreach (var gpu in (caps?.Gpus ?? []).Where(g => !g.SharesHostMemory))
+        {
+            form.GpuReserves[gpu.Uuid] = record.GpuReserveGiB.TryGetValue(gpu.Uuid, out double v) ? v.ToString("0.###", CultureInfo.InvariantCulture) : "";
+        }
+
+        return form;
+    }
+
+    private RenderFragment SettingsTab(Nodes.NodeRow row) => __builder =>
+    {
+        <Tabs Items="SettingsSections" SelectedId="@_settingsSection" SelectedIdChanged="section => _settingsSection = section"
+              QueryKey="section" Variant="TabsVariant.Segmented" AriaLabel="Node settings" TestId="node-settings-tabs">
+            <ChildContent Context="section">
+                @switch (section)
+                {
+                    case "certificate":
+                        @AgentCertificateSection(row)
+                        break;
+                    case "ca-rotation":
+                        @CaRotationSection(row)
+                        break;
+                    case "hardware":
+                        @HardwareSection(row)
+                        break;
+                    default:
+                        @GeneralSettingsSection(row)
+                        break;
+                }
+            </ChildContent>
+        </Tabs>
+    };
+
+    private RenderFragment GeneralSettingsSection(Nodes.NodeRow row) => __builder =>
+    {
+        @SettingsFormSection(row)
+        @if (NodeActionRules.CanRevoke(row))
+        {
+            @* Revoke sits alone at the end of the node's Settings, never in the header beside routine actions. *@
+            <section class="danger-zone" aria-labelledby="sec-node-danger" data-testid="node-danger-zone">
+                <div class="danger-zone-text">
+                    <h2 class="panel-label" id="sec-node-danger">Revoke this node</h2>
+                    <p class="muted">
+                        The agent keeps running, but the master stops talking to it, and a revoked id cannot be used again.
+                        The confirmation lets you stop and unplace the models placed on it first.
+                    </p>
+                </div>
+                <button type="button" class="btn btn-outline-danger" data-testid="@($"node-revoke-{row.Id}")"
+                        @onclick="() => Pick(new NodeActionRequest(NodeAction.Revoke, row))"><Icon Name="trash" /> Revoke…</button>
+            </section>
+        }
+    };
+
+    private RenderFragment HardwareSection(Nodes.NodeRow row) => __builder =>
+    {
+        <section class="section" aria-labelledby="node-caps-title" data-testid="node-capabilities">
+            <div class="section-head"><h2 id="node-caps-title">@(_tab == "settings" ? "Hardware and agent" : "At a glance")</h2></div>
+            <div class="panel panel-body">
+                <dl class="kv kv--wide">
+                    <dt>Address</dt>
+                    <dd><span class="num" data-testid="node-address">@(row.Address ?? UiFormat.Missing)</span></dd>
+                    @if (row.AltAddresses.Count > 0)
+                    {
+                        <dt>Other addresses</dt>
+                        <dd><span class="num">@string.Join(", ", row.AltAddresses)</span></dd>
+                    }
+                    <dt>Operating system</dt>
+                    <dd data-testid="node-os">@Nodes.OsText(row.Capabilities)@(row.Capabilities?.Os.Kernel is { } kernel ? $" · {kernel}" : null)</dd>
+                    <dt>CPU</dt>
+                    <dd data-testid="node-cpu">@CpuText(row.Capabilities)</dd>
+                    <dt>Memory</dt>
+                    <dd data-testid="node-memory-model">@Nodes.MemoryModelText(row)</dd>
+                    <dt>GPUs</dt>
+                    <dd data-testid="node-gpus">
+                        @if (row.Capabilities is { Gpus.Count: > 0 } caps)
+                        {
+                            <ul>
+                                @foreach (var gpu in caps.Gpus.OrderBy(g => g.Index))
+                                {
+                                    <li>
+                                        <span>@gpu.Name</span>
+                                        @if (gpu.MemoryTotalGiB is { } vram)
+                                        {
+                                            @: &#160;
+                                            <span class="num">@UiFormat.GiB(vram)</span>
+                                        }
+                                        <span class="muted">@GpuDetails(gpu)</span>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                        else
+                        {
+                            @Nodes.GpuText(row.Capabilities)
+                        }
+                    </dd>
+                    <dt>Runtimes</dt>
+                    <dd data-testid="node-runtimes">@RuntimesText(row.Capabilities)</dd>
+                    @foreach (var runtime in (row.Capabilities?.Runtimes ?? []).Where(r => r.Versions is not null))
+                    {
+                        string slug = RuntimeSlug(runtime);
+                        <dt>@RuntimeName(runtime.Kind) versions</dt>
+                        <dd data-testid="@($"node-runtime-versions-{slug}")">
+                            @if (runtime.Versions!.Count == 0)
+                            {
+                                <span class="muted">None installed</span>
+                            }
+                            else
+                            {
+                                <ul class="node-versions">
+                                    @foreach (var version in runtime.Versions.OrderByDescending(v => v.Default).ThenBy(v => v.Version, StringComparer.Ordinal))
+                                    {
+                                        <li data-testid="@($"node-runtime-version-{slug}-{version.Version}")" data-verified="@(version.Verified ? "true" : "false")">
+                                            <span class="num">@version.Version</span>
+                                            @if (VersionDetails(version) is { Length: > 0 } details)
+                                            {
+                                                <span class="muted"> · @details</span>
+                                            }
+                                            @if (!version.Verified)
+                                            {
+                                                <span class="state state--failed node-version-state"><Icon Name="state-failed" /> <span>Not verified: launches with it are refused</span></span>
+                                            }
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                        </dd>
+                    }
+                    @if (_agentStatus is { } agentStatus && agentStatus.NodeId == row.Id)
+                    {
+                        <dt>Clock</dt>
+                        <dd data-testid="node-clock">@ClockText(agentStatus.Snapshot.Time - agentStatus.ReadAt)</dd>
+                    }
+                    <dt>Cache</dt><dd>@foreach (var root in row.Capabilities?.ModelRoots ?? []) { <div>@root.Name <span class="num">@UiFormat.GiB(root.FreeBytes / 1073741824.0)</span> free</div> }@if (row.Capabilities?.ModelRoots.Count is not > 0) { @UiFormat.Missing }</dd>
+                    <dt>UID</dt><dd class="num node-break">@(row.Record?.Uid ?? UiFormat.Missing)</dd>
+                    <dt>Agent version</dt>
+                    <dd>
+                        <span class="num node-break" data-testid="node-agent-version">@(row.AgentVersion ?? UiFormat.Missing)</span>
+                        @if (Nodes.AgentBuildDiffers(row))
+                        {
+                            <div class="muted node-break" data-testid="node-agent-build">MirbadLLM is <span class="num">@ProductVersion.Controller</span>: update the agent from this master's bundle.</div>
+                        }
+                    </dd>
+                    <dt>Protocol</dt>
+                    <dd data-testid="node-protocol">@Nodes.ProtocolText(row)</dd>
+                </dl>
+            </div>
+        </section>
+
+    };
+
+    private RenderFragment SettingsFormSection(Nodes.NodeRow row) => __builder =>
+    {
+        <section class="section section--first" aria-labelledby="node-settings-title" data-testid="node-settings">
+            <div class="section-head"><h2 id="node-settings-title">General</h2></div>
+            @if (row.Record is not { } record)
+            {
+                <p class="muted" data-testid="node-settings-unavailable">This node has no stored record yet, so there is nothing to edit.</p>
+            }
+            else if (_admin is null || _caller is null)
+            {
+                <p class="muted" data-testid="node-settings-readonly">Node settings can't be changed here: the node admin service is not running on this master.</p>
+            }
+            else
+            {
+                if (_form is null || _formNodeId != record.Id)
+                {
+                    _form = FormOf(record, row.Capabilities);
+                    _formNodeId = record.Id;
+                }
+
+                var form = _form;
+                var gpus = (row.Capabilities?.Gpus ?? []).Where(g => !g.SharesHostMemory).OrderBy(g => g.Index).ToList();
+                <form class="panel panel-body node-settings-form" @onsubmit="SaveAsync" @onsubmit:preventDefault data-testid="node-settings-form">
+                    <section class="node-settings-group"><h3>Identity</h3><div class="field-grid">
+                        <div class="field">
+                            <label class="field-label" for="ns-name">Display name</label>
+                            <input id="ns-name" class="form-control" maxlength="100" data-testid="node-settings-name" value="@form.DisplayName"
+                                   @oninput="e => form.DisplayName = e.Value?.ToString() ?? string.Empty" aria-describedby="ns-name-hint" />
+                            <span class="field-hint" id="ns-name-hint">Empty = the node id.</span>
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="ns-labels">Labels</label>
+                            <input id="ns-labels" class="form-control" spellcheck="false" data-testid="node-settings-labels" value="@form.Labels"
+                                   @oninput="e => form.Labels = e.Value?.ToString() ?? string.Empty" aria-describedby="ns-labels-hint" />
+                            <span class="field-hint" id="ns-labels-hint">Separated by spaces, e.g. <code>gpu-large office</code>.</span>
+                        </div>
+                    </div></section>
+                    <section class="node-settings-group"><h3>Network</h3><div class="field-grid">
+                        <div class="field">
+                            <label class="field-label" for="ns-address">Agent address</label>
+                            <input id="ns-address" class="form-control" autocomplete="off" spellcheck="false" data-testid="node-settings-address" value="@form.Address"
+                                   @oninput="e => form.Address = e.Value?.ToString() ?? string.Empty" aria-describedby="ns-address-hint" />
+                            <span class="field-hint" id="ns-address-hint">Where the master reaches the agent, <code>https://host:9443</code>.</span>
+                        </div>
+                        <div class="field">
+                            <label class="field-label" for="ns-alt">Other addresses</label>
+                            <textarea id="ns-alt" class="form-control" rows="2" spellcheck="false" data-testid="node-settings-alt" value="@form.AltAddresses"
+                                      @oninput="e => form.AltAddresses = e.Value?.ToString() ?? string.Empty" aria-describedby="ns-alt-hint"></textarea>
+                            <span class="field-hint" id="ns-alt-hint">One per line, tried in order when the address fails.</span>
+                        </div>
+                    </div></section>
+                    <section class="node-settings-group"><h3>Memory</h3><div class="field-grid">
+                        <div class="field">
+                            <label class="field-label" for="ns-reserve">@(row.Capabilities?.Memory.Model == MemoryModel.Discrete ? "Host RAM reserve (GiB)" : "Memory reserve (GiB)")</label>
+                            <input id="ns-reserve" class="form-control" inputmode="decimal" data-testid="node-settings-reserve" value="@form.MemoryReserve"
+                                   @oninput="e => form.MemoryReserve = e.Value?.ToString() ?? string.Empty" aria-describedby="ns-reserve-hint" />
+                            <span class="field-hint" id="ns-reserve-hint">Kept free for other work; admission never gives it to a model.</span>
+                        </div>
+                        @foreach (var gpu in gpus)
+                        {
+                            string fieldId = $"ns-gpu-{gpu.Index}";
+                            string uuid = gpu.Uuid;
+                            <div class="field">
+                                <label class="field-label" for="@fieldId">GPU <span class="num">@gpu.Index</span> reserve (GiB)</label>
+                                <input id="@fieldId" class="form-control" inputmode="decimal" data-testid="@($"node-settings-gpu-{gpu.Index}")"
+                                       value="@form.GpuReserves.GetValueOrDefault(uuid)" @oninput="e => form.GpuReserves[uuid] = e.Value?.ToString() ?? string.Empty" />
+                                <span class="field-hint">@gpu.Name. Empty = no reserve.</span>
+                            </div>
+                        }
+                        <div class="field">
+                            <label class="field-label" for="ns-starts">Concurrent starts</label>
+                            <input id="ns-starts" class="form-control" inputmode="numeric" data-testid="node-settings-starts" value="@form.MaxConcurrentStarts"
+                                   @oninput="e => form.MaxConcurrentStarts = e.Value?.ToString() ?? string.Empty" aria-describedby="ns-starts-hint" />
+                            <span class="field-hint" id="ns-starts-hint" data-testid="node-settings-starts-hint">Saved with the node, not applied yet: the agent limits starts with <code>Agent:MaxConcurrentStarts</code> in its <code>agent.json</code> (default one at a time, one per GPU on a discrete node).</span>
+                        </div>
+                    </div></section>
+                    <section class="node-settings-group"><h3>Images</h3><div class="field-grid">
+                        <div class="field field--wide">
+                            <label class="field-label" for="ns-vllm">Default vLLM image</label>
+                            <input id="ns-vllm" class="form-control" spellcheck="false" data-testid="node-settings-vllm" value="@form.VllmImage"
+                                   @oninput="e => form.VllmImage = e.Value?.ToString() ?? string.Empty" aria-describedby="ns-vllm-hint" />
+                            <span class="field-hint" id="ns-vllm-hint">Used by models on this node that name no image. Empty = the master's default.</span>
+                        </div>
+                        <div class="field field--wide">
+                            <label class="field-label" for="ns-vllm-digest">Approved vLLM image digest</label>
+                            <input id="ns-vllm-digest" class="form-control" spellcheck="false" data-testid="node-settings-vllm-digest" value="@form.VllmDigest"
+                                   @oninput="e => form.VllmDigest = e.Value?.ToString() ?? string.Empty" aria-describedby="ns-vllm-digest-hint" />
+                            <span class="field-hint" id="ns-vllm-digest-hint"><code>sha256:</code> + 64 hex digits; an agent that refuses tag pulls runs only this digest.</span>
+                        </div>
+                        <div class="field field--wide">
+                            <label class="field-label" for="ns-llama">Default llama.cpp image</label>
+                            <input id="ns-llama" class="form-control" spellcheck="false" data-testid="node-settings-llama" value="@form.LlamaImage"
+                                   @oninput="e => form.LlamaImage = e.Value?.ToString() ?? string.Empty" />
+                        </div>
+                        <div class="field field--wide">
+                            <label class="field-label" for="ns-llama-digest">Approved llama.cpp image digest</label>
+                            <input id="ns-llama-digest" class="form-control" spellcheck="false" data-testid="node-settings-llama-digest" value="@form.LlamaDigest"
+                                   @oninput="e => form.LlamaDigest = e.Value?.ToString() ?? string.Empty" />
+                        </div>
+                    </div></section>
+                    @if (_formError is not null)
+                    {
+                        <div class="callout callout--failed" role="alert" data-testid="node-settings-error">
+                            <Icon Name="state-failed" />
+                            <div class="callout-body">@_formError</div>
+                        </div>
+                    }
+                    @if (SettingsDirty(row))
+                    {
+                    <div class="node-settings-actions" role="status">
+                        <button type="submit" class="btn btn-primary" data-testid="node-settings-save" disabled="@_saving"><Icon Name="check" /> Save</button>
+                        <button type="button" class="btn btn-outline-secondary" data-testid="node-settings-reset" disabled="@_saving" @onclick="ResetForm">Discard changes</button>
+                    </div>
+                    }
+                </form>
+            }
+        </section>
+    };
+
+    private bool SettingsDirty(Nodes.NodeRow row)
+    {
+        if (_form is null || row.Record is null) return false;
+        try { return !IsEmpty(BuildPatch(_form, row.Record)); }
+        catch (FormatException) { return true; }
+    }
+
+    private void ResetForm()
+    {
+        _form = null;
+        _formError = null;
+    }
+
+    /// <summary>Sends only the fields that differ from the stored record (absent = keep), as one PATCH.</summary>
+    private async Task SaveAsync()
+    {
+        if (_admin is null || _caller is null || _form is not { } form || _row?.Record is not { } record)
+        {
+            return;
+        }
+
+        _formError = null;
+        NodePatchRequest patch;
+        try
+        {
+            patch = BuildPatch(form, record);
+        }
+        catch (FormatException ex)
+        {
+            _formError = ex.Message;
+            return;
+        }
+
+        if (IsEmpty(patch))
+        {
+            _status = "Nothing to save: the settings are unchanged.";
+            return;
+        }
+
+        _saving = true;
+        try
+        {
+            await _admin.PatchAsync(record.Id, patch, _caller);
+            _status = $"Saved the settings of {_row.Name}.";
+            _form = null;
+            await ReloadAsync();
+        }
+        catch (NodeApiException ex)
+        {
+            _formError = ex.Message;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
+        {
+            _formError = $"The master could not complete this: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private static NodePatchRequest BuildPatch(SettingsForm form, NodeRecord record)
+    {
+        static string? Changed(string value, string? stored) =>
+            string.Equals(value.Trim(), stored ?? "", StringComparison.Ordinal) ? null : value.Trim();
+
+        static double ParseGiB(string text, string field) =>
+            double.TryParse(text.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double v)
+                ? v
+                : throw new FormatException($"{field} must be a number of GiB, e.g. 8 or 4.5.");
+
+        var alt = form.AltAddresses.Split(['\n', '\r', ',', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        var labels = form.Labels.Split([' ', ',', '\n', '\r', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+        double? reserve = null;
+        if (form.MemoryReserve.Trim().Length == 0)
+        {
+            throw new FormatException("Memory reserve is required (0 for none).");
+        }
+
+        double parsedReserve = ParseGiB(form.MemoryReserve, "Memory reserve");
+        if (parsedReserve != record.MemoryReserveGiB)
+        {
+            reserve = parsedReserve;
+        }
+
+        Dictionary<string, double>? gpuReserves = null;
+        if (form.GpuReserves.Count > 0)
+        {
+            var map = new Dictionary<string, double>(record.GpuReserveGiB, StringComparer.Ordinal);
+            foreach ((string uuid, string text) in form.GpuReserves)
+            {
+                if (text.Trim().Length == 0)
+                {
+                    map.Remove(uuid);
+                }
+                else
+                {
+                    map[uuid] = ParseGiB(text, "A GPU reserve");
+                }
+            }
+
+            bool same = map.Count == record.GpuReserveGiB.Count && map.All(kv => record.GpuReserveGiB.TryGetValue(kv.Key, out double v) && v == kv.Value);
+            gpuReserves = same ? null : map;
+        }
+
+        int? starts = null;
+        string startsText = form.MaxConcurrentStarts.Trim();
+        int parsedStarts = startsText.Length == 0
+            ? 0
+            : int.TryParse(startsText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int s) && s > 0
+                ? s
+                : throw new FormatException("Concurrent starts must be a whole number of 1 or more (empty = the default).");
+        if (parsedStarts != (record.MaxConcurrentStarts ?? 0))
+        {
+            starts = parsedStarts;
+        }
+
+        return new NodePatchRequest
+        {
+            DisplayName = Changed(form.DisplayName, record.DisplayName),
+            Address = Changed(form.Address, record.Address),
+            AltAddresses = alt.SequenceEqual(record.AltAddresses, StringComparer.Ordinal) ? null : alt,
+            MemoryReserveGiB = reserve,
+            GpuReserveGiB = gpuReserves,
+            MaxConcurrentStarts = starts,
+            DefaultVllmImage = Changed(form.VllmImage, record.DefaultVllmImage),
+            DefaultVllmImageDigest = Changed(form.VllmDigest, record.DefaultVllmImageDigest),
+            DefaultLlamaCppImage = Changed(form.LlamaImage, record.DefaultLlamaCppImage),
+            DefaultLlamaCppImageDigest = Changed(form.LlamaDigest, record.DefaultLlamaCppImageDigest),
+            Labels = labels.SequenceEqual(record.Labels, StringComparer.Ordinal) ? null : labels,
+        };
+    }
+
+    private static bool IsEmpty(NodePatchRequest patch) =>
+        patch is
+        {
+            DisplayName: null, Address: null, AltAddresses: null, MemoryReserveGiB: null, GpuReserveGiB: null, MaxConcurrentStarts: null,
+            DefaultVllmImage: null, DefaultVllmImageDigest: null, DefaultLlamaCppImage: null, DefaultLlamaCppImageDigest: null, Labels: null,
+        };
+
+    // ---- Shared helpers --------------------------------------------------------------------------------------------
+
+    private List<ModelDefinition> ActiveModels(Nodes.NodeRow row)
+    {
+        var active = row.Runtimes
+            .Where(r => r.State is ModelState.Starting or ModelState.Ready or ModelState.Stopping)
+            .Select(r => r.ModelId)
+            .ToHashSet(StringComparer.Ordinal);
+        return [.. (_models ?? []).Where(m => active.Contains(m.Id))];
+    }
+
+    /// <summary>Budgets of the models placed here whose instance is Starting, Ready or Stopping (as the Dashboard counts them).</summary>
+    private double ModelsGiB(Nodes.NodeRow row) => ActiveModels(row).Sum(m => m.MemoryBudgetGiB);
+
+    private static string GpuName(Nodes.NodeRow row, GpuMemorySnapshot gpu)
+    {
+        string? name = row.Capabilities?.Gpus.FirstOrDefault(g => string.Equals(g.Uuid, gpu.Uuid, StringComparison.Ordinal))?.Name;
+        return string.Create(CultureInfo.InvariantCulture, $"{gpu.Index}: {name ?? gpu.Uuid}");
+    }
+
+    private static string GpuDetails(GpuCapability gpu)
+    {
+        var parts = new List<string>();
+        if (gpu.ComputeCapability is { } cc)
+        {
+            parts.Add($"compute {cc}");
+        }
+
+        if (gpu.Driver is { } driver)
+        {
+            parts.Add($"driver {driver}");
+        }
+
+        if (gpu.SharesHostMemory)
+        {
+            parts.Add("shares host memory");
+        }
+
+        return parts.Count == 0 ? "" : $" · {string.Join(" · ", parts)}";
+    }
+
+    private static string CpuText(NodeCapabilities? capabilities) => capabilities?.Cpu switch
+    {
+        null => UiFormat.Missing,
+        { Model: { } model } cpu => string.Create(CultureInfo.InvariantCulture, $"{model} · {cpu.LogicalCores} logical cores"),
+        var cpu => string.Create(CultureInfo.InvariantCulture, $"{cpu.LogicalCores} logical cores"),
+    };
+
+    private static string RuntimesText(NodeCapabilities? capabilities)
+    {
+        if (capabilities is null)
+        {
+            return UiFormat.Missing;
+        }
+
+        if (capabilities.Runtimes.Count == 0)
+        {
+            return "None";
+        }
+
+        return string.Join(", ", capabilities.Runtimes.Select(r =>
+            $"{RuntimeName(r.Kind)} ({(r.Delivery == LaunchDelivery.Container ? "container" : "process")}{(r.Available ? "" : ", unavailable")})"));
+    }
+
+    /// <summary>The runtimes a node can launch (vLLM, llama.cpp…), once each, in a stable order, for the header chips.</summary>
+    public static IReadOnlyList<RuntimeKind> RuntimeKinds(NodeCapabilities? capabilities) =>
+        [.. (capabilities?.Runtimes ?? []).Where(r => r.Available).Select(r => r.Kind).Distinct().Order()];
+
+    private static string RuntimeName(RuntimeKind kind) => kind switch
+    {
+        RuntimeKind.Vllm => "vLLM",
+        RuntimeKind.LlamaCpp => "llama.cpp",
+        RuntimeKind.Mlx => "MLX",
+        _ => kind.ToString(),
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        _subscription?.Dispose();
+        if (_ownsLive && _live is not null)
+        {
+            await _live.DisposeAsync();
+        }
+    }
+}

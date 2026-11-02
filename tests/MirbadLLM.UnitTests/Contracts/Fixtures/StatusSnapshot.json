@@ -1,0 +1,26 @@
+{
+  "bootId": "b11ac10b-58cc-4372-a567-0e02b2c3d479",
+  "seq": 42,
+  "time": "2026-10-03T10:05:00+00:00",
+  "health": {
+    "reasons": []
+  },
+  "memory": {
+    "model": "unified",
+    "hostTotalGiB": 121,
+    "hostAvailableGiB": 45,
+    "gpus": [
+      {
+        "index": 0,
+        "uuid": "GPU-550e8400-e29b-41d4-a716-446655440000",
+        "totalGiB": 24,
+        "usedGiB": 10,
+        "freeGiB": 14
+      }
+    ]
+  },
+  "reservations": [],
+  "runtimes": [],
+  "downloads": [],
+  "operations": []
+}

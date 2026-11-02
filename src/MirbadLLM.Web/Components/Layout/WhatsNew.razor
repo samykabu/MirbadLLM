@@ -1,0 +1,92 @@
+@namespace MirbadLLM.Web.Components.Layout
+@inject IJSRuntime JS
+@inject IServiceProvider Services
+@* After MirbadLLM's build changes, the first visit shows what the merged PRs added, fixed and changed since the build this
+   browser last saw (docs/multinode/agent-updates.md, §3). A first visit ever only remembers the build. Per browser, in
+   localStorage: a convenience, so an unreadable store just shows nothing. *@
+
+@if (_range is { Entries.Count: > 0 } range)
+{
+    <section class="callout whats-new" role="status" aria-labelledby="whats-new-title" data-testid="whats-new">
+        <Icon Name="info" />
+        <div class="callout-body">
+            <span class="callout-title" id="whats-new-title">MirbadLLM was updated to <span class="num">@ProductVersion.Display(ProductVersion.Controller)</span></span>
+            <span class="muted">
+                @(range.Entries.Count == 1 ? "1 change" : $"{range.Entries.Count} changes") since this browser last saw it@(range.Truncated ? " (the latest ones; the full list is on Releases)" : "").
+            </span>
+            <ReleaseSummary Entries="range.Entries" Limit="6" TestId="whats-new-notes" />
+            <div class="whats-new-actions">
+                <a class="btn btn-sm btn-outline-secondary" href="releases" data-testid="whats-new-releases">All releases</a>
+                <button type="button" class="btn btn-sm btn-primary" data-testid="whats-new-dismiss" @onclick="DismissAsync">Got it</button>
+            </div>
+        </div>
+    </section>
+}
+
+@code {
+    // Optional, so a host (or a test) without it renders nothing instead of failing.
+    private ReleaseNotes Notes => Services.GetService<ReleaseNotes>() ?? Empty;
+
+    private static readonly ReleaseNotes Empty = new([], available: false);
+
+    public const string StorageKey = "mirbadllm.seenBuild";
+
+    private ReleaseNotesRange? _range;
+    private string? _current;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        _current = ProductVersion.RevisionOf(ProductVersion.Controller);
+        if (_current is null || !Notes.Available)
+        {
+            return;
+        }
+
+        string? seen;
+        try
+        {
+            seen = await JS.InvokeAsync<string?>("localStorage.getItem", StorageKey);
+        }
+        catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException)
+        {
+            return;
+        }
+
+        if (seen is null)
+        {
+            await RememberAsync();
+            return;
+        }
+
+        if (ProductVersion.SameBuild("x+" + seen, "x+" + _current) == true)
+        {
+            return;
+        }
+
+        _range = Notes.Between(seen, _current);
+        StateHasChanged();
+    }
+
+    private async Task DismissAsync()
+    {
+        _range = null;
+        await RememberAsync();
+    }
+
+    private async Task RememberAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("localStorage.setItem", StorageKey, _current);
+        }
+        catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException)
+        {
+            // Per-browser convenience only.
+        }
+    }
+}

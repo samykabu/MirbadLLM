@@ -1,0 +1,9 @@
+{
+  "scenario": "maintenance_mode",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "status": 503,
+  "contentType": "application/json; charset=utf-8",
+  "retryAfter": "30",
+  "body": "{\u0022error\u0022:{\u0022message\u0022:\u0022mirbadllm is running a benchmark on qwen; API paused until ~HH:MM UTC\u0022,\u0022type\u0022:\u0022service_unavailable_error\u0022,\u0022code\u0022:\u0022maintenance\u0022}}"
+}

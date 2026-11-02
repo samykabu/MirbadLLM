@@ -1,0 +1,9 @@
+{
+  "scenario": "body_too_large",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "status": 413,
+  "contentType": "application/json; charset=utf-8",
+  "retryAfter": null,
+  "body": "{\u0022error\u0022:{\u0022message\u0022:\u0022Request body exceeds the 67108864 byte limit.\u0022,\u0022type\u0022:\u0022invalid_request_error\u0022,\u0022code\u0022:\u0022request_too_large\u0022}}"
+}

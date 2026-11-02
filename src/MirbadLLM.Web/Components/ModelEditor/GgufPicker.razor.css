@@ -1,0 +1,57 @@
+/* The GGUF picker (MN-226): the variants table stacks by its own width (it sits in a field, not a whole panel), the
+   file row keeps its button beside the field, and the fit lines are the editor's budget checks, one per GPU. */
+.gguf-picker {
+    display: grid;
+    gap: var(--ss-sp-3);
+    min-width: 0;
+}
+
+.gguf-table-wrap {
+    container-type: inline-size;
+    min-width: 0;
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius);
+}
+
+.gguf-row--on td { background: var(--ss-accent-subtle); }
+
+.gguf-file-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-2);
+    align-items: center;
+}
+
+.gguf-file-row .form-select,
+.gguf-file-row .form-control {
+    flex: 1 1 260px;
+    min-width: 0;
+}
+
+.gguf-fit-list {
+    display: grid;
+    gap: var(--ss-sp-1);
+    margin: 0;
+}
+
+.gguf-summary {
+    max-width: 520px;
+}
+
+.gguf-summary dd { white-space: normal; overflow-wrap: anywhere; }
+
+.gguf-projectors {
+    display: grid;
+    gap: var(--ss-sp-1);
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.gguf-projectors legend {
+    float: none;
+    width: auto;
+    margin: 0 0 2px;
+    padding: 0;
+    font-size: inherit;
+}

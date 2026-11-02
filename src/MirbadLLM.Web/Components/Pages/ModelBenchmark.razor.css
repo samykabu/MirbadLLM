@@ -1,0 +1,7 @@
+/* One line under the model header saying what this page measures, at a readable measure. */
+.job-lede {
+    max-width: 78ch;
+    margin: calc(-1 * var(--ss-sp-2)) 0 var(--ss-sp-4);
+    color: var(--ss-text-muted);
+    text-wrap: pretty;
+}

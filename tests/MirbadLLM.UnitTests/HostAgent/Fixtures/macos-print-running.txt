@@ -1,0 +1,81 @@
+system/com.carriez.RustDesk_service = {
+	active count = 1
+	path = /Library/LaunchDaemons/com.carriez.RustDesk_service.plist
+	type = LaunchDaemon
+	state = running
+
+	program = /bin/sh
+	arguments = {
+		/bin/sh
+		-c
+		/Applications/RustDesk.app/Contents/MacOS/service
+	}
+
+	working directory = /Applications/RustDesk.app/Contents/MacOS/
+
+	stdout path = /tmp/rustdesk_service.out
+	stderr path = /tmp/rustdesk_service.err
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		XPC_SERVICE_NAME => com.carriez.RustDesk_service
+	}
+
+	LWCR = {
+		"reqs" => {
+			"signing-identifier" => "com.apple.sh"
+			"validation-category" => 1
+		}
+		"vers" => 1
+		"comp" => 1
+		"ccat" => 0
+	}
+
+	domain = system
+	minimum runtime = 1
+	exit timeout = 5
+	runs = 1
+	pid = 311
+	immediate reason = speculative
+	forks = 3
+	execs = 3
+	initialized = 1
+	trampolined = 1
+	started suspended = 0
+	proxy started suspended = 0
+	checked allocations = 0 (queried = 1)
+	checked allocations reason = no host
+	checked allocations flags = 0x0
+	last exit code = (never exited)
+
+	resource coalition = {
+		ID = 303
+		type = resource
+		state = active
+		active count = 1
+		name = com.carriez.RustDesk_service
+	}
+
+	jetsam coalition = {
+		ID = 304
+		type = jetsam
+		state = active
+		active count = 1
+		name = com.carriez.RustDesk_service
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	job state = running
+	sanitizer flags = 0x0
+
+	properties = keepalive | runatload | inferred program | managed LWCR | has LWCR
+}

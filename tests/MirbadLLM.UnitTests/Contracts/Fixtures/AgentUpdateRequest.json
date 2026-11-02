@@ -1,0 +1,13 @@
+{
+  "rid": "linux-x64",
+  "version": "826bc75fc222",
+  "sha256": "5b1f0c4e9a7d3b2e8f6a1c0d9e8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b",
+  "size": 41234567,
+  "bundlePath": "/agent/bundles/linux-x64.tar.gz",
+  "bundlePort": 8080,
+  "order": "mirbadllm-agent-update 1\nnode-uid=pc-linux-uid\nrid=linux-x64\nversion=826bc75fc222\nsha256=5b1f0c4e9a7d3b2e8f6a1c0d9e8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d1c0b\nsize=41234567\nissued=1792238400\nexpires=1792242000\n",
+  "signature": "MEUCIQDc0FAKEc2lnbmF0dXJlAiBmYWtlLXNpZ25hdHVyZS1ieXRlcy1oZXJl",
+  "operationId": "op-021",
+  "issuedAt": "2026-10-17T12:00:00+00:00",
+  "expiresAt": "2026-10-18T12:00:00+00:00"
+}

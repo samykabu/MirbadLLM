@@ -1,0 +1,9 @@
+{
+  "scenario": "model_not_ready",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "status": 503,
+  "contentType": "application/json; charset=utf-8",
+  "retryAfter": "30",
+  "body": "{\u0022error\u0022:{\u0022message\u0022:\u0022Model \u0027chat-model\u0027 is not ready (state: Starting).\u0022,\u0022type\u0022:\u0022service_unavailable_error\u0022,\u0022code\u0022:\u0022model_not_ready\u0022}}"
+}

@@ -1,0 +1,110 @@
+.signal {
+    display: grid;
+    gap: var(--ss-sp-2);
+    min-width: 0;
+}
+
+.signal-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-1) var(--ss-sp-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--ss-text-muted);
+    font-size: var(--ss-fs-100);
+}
+
+.signal-legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.signal-swatch {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+}
+
+/* The heat strip's key: the well to amber to orange, the same ramp the strip uses. */
+.signal-heat-key {
+    flex: none;
+    width: 28px;
+    height: 8px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--ss-sunken), var(--ss-accent) 75%, var(--ss-busy));
+    box-shadow: inset 0 0 0 1px var(--ss-border);
+}
+
+.signal-plot {
+    position: relative;
+    min-width: 0;
+    overflow: hidden;
+    border-radius: var(--ss-radius);
+}
+
+.signal-canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.signal-axis {
+    position: absolute;
+    left: 6px;
+    padding: 0 4px;
+    color: var(--ss-text-muted);
+    font-size: 11px;
+    background: color-mix(in srgb, var(--ss-panel) 80%, transparent);
+    border-radius: 3px;
+}
+
+.signal-rows {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    grid-auto-rows: 1fr;
+    pointer-events: none;
+}
+
+.signal-row-label {
+    align-self: center;
+    justify-self: start;
+    max-width: 60%;
+    margin-left: 6px;
+    padding: 0 4px;
+    overflow: hidden;
+    color: var(--ss-text);
+    font-family: var(--ss-font-mono);
+    font-size: 11px;
+    line-height: 16px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    background: color-mix(in srgb, var(--ss-panel) 82%, transparent);
+    border-radius: 3px;
+}
+
+.signal-time {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+}
+
+.signal-empty {
+    display: grid;
+    place-items: center;
+    min-height: 160px;
+    margin: 0;
+    padding: var(--ss-sp-4);
+    text-align: center;
+    background: var(--ss-sunken);
+    border-radius: var(--ss-radius);
+}

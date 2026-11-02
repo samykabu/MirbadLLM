@@ -1,0 +1,37 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* A model's tags as small neutral chips (labels, not states: no state colour). Renders nothing without tags.
+   With Max set, only the first Max chips show and a "+N" chip stands for the rest: its title lists them for
+   pointer users and a visually hidden phrase ("and 2 more: Vision, Code") reads them out, so a long tag list
+   never blows up a table row's height. *@
+@if (Tags is { Count: > 0 })
+{
+    var visible = Max is int max && Tags.Count > max ? Tags.Take(Math.Max(1, max - 1)).ToList() : Tags.ToList();
+    var hidden = Tags.Skip(visible.Count).ToList();
+    <ul class="tag-list" aria-label="Tags" data-testid="@TestId">
+        @foreach (string tag in visible)
+        {
+            <li class="tag-chip" title="@Describe(tag)">@ModelTags.Label(tag)</li>
+        }
+        @if (hidden.Count > 0)
+        {
+            string rest = string.Join(", ", hidden.Select(ModelTags.Label));
+            <li class="tag-chip tag-chip--more" title="@rest" data-testid="@(TestId is null ? null : $"{TestId}-more")">
+                <span aria-hidden="true">+@hidden.Count</span><span class="visually-hidden">and @hidden.Count more: @rest</span>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    [Parameter]
+    public IReadOnlyList<string>? Tags { get; set; }
+
+    /// <summary>Most chips to draw, counting the "+N" chip; null shows every tag.</summary>
+    [Parameter]
+    public int? Max { get; set; }
+
+    [Parameter]
+    public string? TestId { get; set; }
+
+    private static string? Describe(string tag) => ModelTags.BuiltIn.FirstOrDefault(t => t.Id == tag)?.Description;
+}

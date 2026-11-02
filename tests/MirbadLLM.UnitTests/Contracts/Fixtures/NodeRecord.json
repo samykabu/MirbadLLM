@@ -1,0 +1,93 @@
+{
+  "id": "pc-office",
+  "uid": "7d1e5b0c9a2f4e3d8c6b5a4f3e2d1c0b",
+  "displayName": "Office PC",
+  "address": "https://192.0.2.50:9443",
+  "altAddresses": [],
+  "approved": true,
+  "draining": false,
+  "revoked": false,
+  "certSpkiSha256": "q3vYc2ZpeHR1cmUtc3BraS1oYXNoLW5vdC1yZWFsMDE=",
+  "pendingCertSpkiSha256": null,
+  "certNotAfter": "2027-01-04T09:00:00+00:00",
+  "memoryReserveGiB": 4,
+  "gpuReserveGiB": {
+    "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f601": 1
+  },
+  "maxConcurrentStarts": 2,
+  "defaultVllmImage": "vllm/vllm-openai:v0.11.0",
+  "defaultVllmImageDigest": "sha256:5b0c9a2f4e3d8c6b5a4f3e2d1c0b7d1e5b0c9a2f4e3d8c6b5a4f3e2d1c0b7d1e",
+  "labels": [
+    "amd64",
+    "rtx4060ti"
+  ],
+  "lastCapabilities": {
+    "protocol": {
+      "min": 1,
+      "current": 1
+    },
+    "agentVersion": "1.1.0+fixture",
+    "features": [
+      "runtime.vllm.container",
+      "downloads.hf-container",
+      "telemetry.v1",
+      "gpus.uuids",
+      "launch.env",
+      "admission.discrete",
+      "images.digest-pinned"
+    ],
+    "os": {
+      "family": "linux",
+      "description": "Ubuntu 24.04 LTS",
+      "kernel": "6.8.0-45-generic"
+    },
+    "arch": "amd64",
+    "cpu": {
+      "logicalCores": 16,
+      "model": "AMD Ryzen 7 7700"
+    },
+    "memory": {
+      "model": "discrete",
+      "totalGiB": 62.7
+    },
+    "gpus": [
+      {
+        "index": 0,
+        "uuid": "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f601",
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "memoryTotalGiB": 16,
+        "computeCapability": "8.9",
+        "driver": "580.65",
+        "sharesHostMemory": false
+      },
+      {
+        "index": 1,
+        "uuid": "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f602",
+        "name": "NVIDIA GeForce RTX 4060 Ti",
+        "memoryTotalGiB": 16,
+        "computeCapability": "8.9",
+        "driver": "580.65",
+        "sharesHostMemory": false
+      }
+    ],
+    "runtimes": [
+      {
+        "kind": "vllm",
+        "delivery": "container",
+        "available": true,
+        "images": null
+      }
+    ],
+    "images": [],
+    "modelRoots": [],
+    "hostServices": null,
+    "backupMount": null
+  },
+  "lastContact": "2026-10-06T09:00:00+00:00",
+  "createdAt": "2026-10-05T09:00:00+00:00",
+  "enrolledAt": "2026-10-05T09:00:00+00:00",
+  "enrolledFrom": "192.0.2.50",
+  "approvedAt": "2026-10-05T09:00:00+00:00",
+  "revokedAt": null,
+  "rotation": null
+}

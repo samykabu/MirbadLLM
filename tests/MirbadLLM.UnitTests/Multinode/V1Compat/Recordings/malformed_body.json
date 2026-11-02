@@ -1,0 +1,9 @@
+{
+  "scenario": "malformed_body",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "status": 400,
+  "contentType": "application/json; charset=utf-8",
+  "retryAfter": null,
+  "body": "{\u0022error\u0022:{\u0022message\u0022:\u0022Request does not name a model.\u0022,\u0022type\u0022:\u0022invalid_request_error\u0022,\u0022code\u0022:\u0022model_required\u0022}}"
+}

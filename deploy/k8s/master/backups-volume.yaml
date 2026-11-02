@@ -1,0 +1,28 @@
+# /backups on the NAS over NFS (owner decision D16: external-volume backups). Only scheduled backup files are written
+# here (no locks), so NFS is fine. The export must let uid/gid 1654 write (or squash to an owner that can).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mirbadllm-backups
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions: [nfsvers=4.1, hard]
+  nfs:
+    server: CHANGE-ME-nas.lan
+    path: /volume1/backups/mirbadllm
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mirbadllm-backups
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  volumeName: mirbadllm-backups
+  resources:
+    requests:
+      storage: 50Gi

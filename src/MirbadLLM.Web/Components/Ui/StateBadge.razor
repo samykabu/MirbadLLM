@@ -1,0 +1,73 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* Model state as colour + icon shape + text; Starting/Stopping also show how long the transition has run.
+   With Node set it shows a node's state instead (design §12.1): the same four colour tokens, each node state
+   with its own icon shape and label, so a state is never conveyed by colour alone. *@
+@if (Node is { } node)
+{
+    var look = NodeLook(node, Draining);
+    <span class="state state--@look.Tone" data-testid="@TestId" data-state="@look.Slug">
+        <Icon Name="@look.Icon" />
+        <span>@look.Label</span>
+    </span>
+}
+else
+{
+    <span class="state state--@Slug" data-testid="@TestId" data-state="@Slug">
+        <Icon Name="@($"state-{Slug}")" Class="@(State == ModelState.Starting ? "icon--spin" : null)" />
+        <span>@UiFormat.StateName(State)</span>
+        @if (ShowElapsed)
+        {
+            <span class="state-elapsed num" data-testid="@(TestId is null ? null : $"{TestId}-elapsed")">@UiFormat.Elapsed(Since!.Value, Now ?? DateTimeOffset.UtcNow)</span>
+        }
+    </span>
+}
+
+@code {
+    /// <summary>The model state shown when <see cref="Node"/> is not set.</summary>
+    [Parameter]
+    public ModelState State { get; set; }
+
+    /// <summary>When set, the badge shows this node state instead of <see cref="State"/>.</summary>
+    [Parameter]
+    public NodeState? Node { get; set; }
+
+    /// <summary>Node draining flag: a serving (Online or Degraded) node reads "Draining".</summary>
+    [Parameter]
+    public bool Draining { get; set; }
+
+    /// <summary>When the current state began; shown as elapsed time while Starting or Stopping.</summary>
+    [Parameter]
+    public DateTimeOffset? Since { get; set; }
+
+    /// <summary>Clock override for tests; defaults to the current UTC time.</summary>
+    [Parameter]
+    public DateTimeOffset? Now { get; set; }
+
+    [Parameter]
+    public string? TestId { get; set; }
+
+    private string Slug => State.ToString().ToLowerInvariant();
+
+    private bool ShowElapsed => Since is not null && State is ModelState.Starting or ModelState.Stopping;
+
+    /// <summary>How a node state is drawn.</summary>
+    /// <param name="Slug">Stable <c>data-state</c> value, e.g. <c>pending-approval</c>.</param>
+    /// <param name="Label">Text label.</param>
+    /// <param name="Icon">Icon name; every state has its own shape.</param>
+    /// <param name="Tone">Colour tone: one of the existing <c>.state--*</c> classes (ready, starting = busy, failed, stopped = idle).</param>
+    public sealed record NodeStateLook(string Slug, string Label, string Icon, string Tone);
+
+    /// <summary>The look of a node state; a draining node that still serves reads "Draining".</summary>
+    public static NodeStateLook NodeLook(NodeState state, bool draining = false) => state switch
+    {
+        NodeState.Online or NodeState.Degraded when draining => new("draining", "Draining", "state-stopping", "starting"),
+        NodeState.Online => new("online", "Online", "state-ready", "ready"),
+        NodeState.Degraded => new("degraded", "Degraded", "warning", "starting"),
+        NodeState.Incompatible => new("incompatible", "Incompatible", "state-failed", "failed"),
+        NodeState.Offline => new("offline", "Offline", "wifi-off", "stopped"),
+        NodeState.PendingApproval => new("pending-approval", "Pending approval", "clock", "stopped"),
+        NodeState.PendingTakeover => new("pending-takeover", "Pending takeover", "lock", "starting"),
+        NodeState.Revoked => new("revoked", "Revoked", "close", "failed"),
+        _ => new(state.ToString().ToLowerInvariant(), state.ToString(), "info", "stopped"),
+    };
+}

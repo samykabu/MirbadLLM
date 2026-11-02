@@ -1,0 +1,14 @@
+{
+  "repoId": "Qwen/Qwen3.6-35B-A3B-NVFP4",
+  "revision": "main",
+  "folder": "Qwen3.6-35B-A3B-NVFP4",
+  "allowPatterns": [
+    "*.safetensors",
+    "*.json"
+  ],
+  "token": null,
+  "existing": "refuse",
+  "operationId": "op-006",
+  "issuedAt": "2026-10-03T14:00:00+00:00",
+  "expiresAt": "2026-10-04T14:00:00+00:00"
+}

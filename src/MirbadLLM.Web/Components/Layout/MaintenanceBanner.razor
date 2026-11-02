@@ -1,0 +1,160 @@
+@implements IAsyncDisposable
+@using MirbadLLM.Orchestration.Benchmarking
+@inject IServiceProvider Services
+@* App-wide notice while the router is in maintenance mode (a benchmark or tuning job runs): says that the API is
+   paused and for how long, links to the job, and can stop it. One notice per open window; a node-scoped window (P2,
+   design §6.5 / §12.3) names its node and lists the exempt models that keep serving there. Renders nothing otherwise. *@
+@foreach (var entry in _entries)
+{
+    var window = entry.Window;
+    bool tuning = window.JobKind == MaintenanceJobKinds.Tuning;
+    bool restore = window.JobKind == MaintenanceJobKinds.Restore;
+    bool stopping = _stopping.Contains(window.JobId);
+    <div class="maintenance-banner" role="status" data-testid="maintenance-banner" data-node="@window.NodeId">
+        <Icon Name="pause" />
+        <div class="maintenance-text">
+            @if (restore)
+            {
+                <strong>API paused while a backup is restored — @Left(window) left.</strong>
+                <span>
+                    MirbadLLM is restoring a backup; API paused until ~<time datetime="@UiFormat.IsoUtc(window.EstimatedEnd)"
+                        data-fmt="hm">@UiFormat.ClockTimeUtc(window.EstimatedEnd)</time>. Clients get 503 with a Retry-After.
+                </span>
+            }
+            else if (window.IsGlobal)
+            {
+                <strong>API paused for @(tuning ? "tuning" : "benchmarking") — @Left(window) left.</strong>
+                <span>
+                    MirbadLLM is running @(tuning ? "a tuning run" : "a benchmark") on @window.ModelId; API paused until ~<time
+                        datetime="@UiFormat.IsoUtc(window.EstimatedEnd)" data-fmt="hm">@UiFormat.ClockTimeUtc(window.EstimatedEnd)</time>. Clients get 503 with a Retry-After.
+                </span>
+            }
+            else
+            {
+                <strong>Node @window.NodeId paused for @(tuning ? "tuning" : "benchmarking") — @Left(window) left.</strong>
+                <span>
+                    MirbadLLM is running @(tuning ? "a tuning run" : "a benchmark") on @window.ModelId on node <span data-testid="maintenance-node">@window.NodeId</span>;
+                    its models are paused until ~<time datetime="@UiFormat.IsoUtc(window.EstimatedEnd)"
+                        data-fmt="hm">@UiFormat.ClockTimeUtc(window.EstimatedEnd)</time> and their clients get 503 with a Retry-After.
+                    @if (entry.Exempt.Count > 0)
+                    {
+                        <span data-testid="maintenance-exempt">Still serving on @window.NodeId: @string.Join(", ", entry.Exempt).</span>
+                    }
+                    Models on other nodes keep serving.
+                </span>
+            }
+        </div>
+        @if (!restore)
+        {
+            <div class="maintenance-actions">
+                <a class="btn btn-sm btn-outline-secondary" href="@($"models/{window.ModelId}/{(tuning ? "tune" : "benchmark")}")" data-testid="maintenance-view">View progress</a>
+                <button type="button" class="btn btn-sm btn-outline-danger" data-testid="maintenance-stop" disabled="@stopping" @onclick="() => Stop(window)">
+                    <Icon Name="stop" /> @(stopping ? "Stopping…" : tuning ? "Stop tuning" : "Stop benchmark")
+                </button>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private IMaintenanceMode? _maintenance;
+    private IModelRegistry? _registry;
+    private ModelJobService? _jobs;
+    private IReadOnlyList<Entry> _entries = [];
+    /// <summary>Job ids whose Stop was pressed (each notice stops its own window's job, MN-126).</summary>
+    private readonly HashSet<string> _stopping = new(StringComparer.Ordinal);
+    private CancellationTokenSource? _cts;
+    private Task? _loop;
+
+    private sealed record Entry(MaintenanceState Window, IReadOnlyList<string> Exempt);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _maintenance = Services.GetService<IMaintenanceMode>();
+        _registry = Services.GetService<IModelRegistry>();
+        _jobs = Services.GetService<ModelJobService>();
+        if (_maintenance is not null)
+        {
+            _cts = new CancellationTokenSource();
+            _entries = await ReadAsync(_cts.Token);
+            _loop = PollAsync(_cts.Token);
+        }
+    }
+
+    private async Task<IReadOnlyList<Entry>> ReadAsync(CancellationToken ct)
+    {
+        var windows = _maintenance?.Active ?? [];
+        if (windows.Count == 0)
+        {
+            return [];
+        }
+
+        IReadOnlyList<ModelDefinition> models = [];
+        if (_registry is not null && windows.Any(w => !w.IsGlobal))
+        {
+            try
+            {
+                models = await _registry.ListAsync(ct);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+            {
+                // The banner still shows the window; only the exempt list is missing.
+            }
+        }
+
+        return [.. windows.Select(w => new Entry(w, MaintenanceModeService.ExemptModelIds(w, models)))];
+    }
+
+    private static string Left(MaintenanceState window)
+    {
+        var left = window.EstimatedEnd - DateTimeOffset.UtcNow;
+        return left <= TimeSpan.Zero ? "a little" : UiFormat.About(left);
+    }
+
+    private async Task PollAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                var entries = await ReadAsync(ct);
+                _stopping.RemoveWhere(id => !entries.Any(e => e.Window.JobId == id));
+
+                _entries = entries;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Circuit gone.
+        }
+    }
+
+    /// <summary>Stops the job holding <paramref name="window"/> only; jobs on other nodes keep running.</summary>
+    private void Stop(MaintenanceState window)
+    {
+        if (_jobs?.CancelJob(window.JobId) == true)
+        {
+            _stopping.Add(window.JobId);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts?.Cancel();
+        if (_loop is not null)
+        {
+            try
+            {
+                await _loop;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected.
+            }
+        }
+
+        _cts?.Dispose();
+    }
+}

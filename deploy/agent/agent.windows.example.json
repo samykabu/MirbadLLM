@@ -1,0 +1,50 @@
+{
+  "//": "mirbadllm-agent on a Windows PC (P4; deploy/agent/windows, design-p3p4 A.4). Installed as %ProgramData%\\mirbadllm-agent\\agent.json by install-agent.ps1, readable only by SYSTEM, Administrators and the service account NT SERVICE\\mirbadllm-agent. No Docker on this node (Docker:Enabled false): models run as native llama-server processes from the Executables catalogue, on loopback ports. install-agent.ps1 writes this file once with an empty Executables list and adds the llama-server entry after it has verified runtimes\\llama.cpp\\{tag} against llama-cpp.lock.json (-LlamaCpp); the entry below shows its shape for the pinned b11476. No hostd on Windows (systemd units and the backup mount are off). Enroll once with install-agent.ps1 install -NodeId ... -EnrollUrl ... -CaHash ... and $env:MIRBADLLM_JOIN_TOKEN or -PromptToken (the \"Add node\" command). NodeId must match the join command, and it is a slug of lower-case letters, digits and '-' (at most 40): a Windows machine name such as \"DevelopmentPC\" is not one, and the agent refuses it at start-up. A later install run applies a -NodeId, -ModelsRoot or -CacheRoot it is given to this file instead of keeping the old value. DockerEndpoint and the image settings are unused while Docker is off.",
+  "Agent": {
+    "NodeId": "win-1",
+    "StateDirectory": "C:\\ProgramData\\mirbadllm-agent\\state",
+    "Port": 9443,
+    "ModelsRoot": "D:\\mirbadllm\\models",
+    "ModelsHostPath": "D:\\mirbadllm\\models",
+    "CacheRoot": "D:\\mirbadllm\\cache",
+    "CacheHostPath": "D:\\mirbadllm\\cache",
+    "DockerEndpoint": "npipe://./pipe/docker_engine",
+    "DockerNetwork": "mirbadllm",
+    "UseContainerNetwork": false,
+    "UpstreamHost": "127.0.0.1",
+    "PortRangeStart": 8101,
+    "MemoryReserveGiB": 4,
+    "AllowTagPulls": false,
+    "ApprovedImages": [],
+    "HostdExpected": false,
+    "ManageSystemdUnits": false,
+    "ManageContainers": false,
+    "ManageBackupMount": false,
+    "ShutdownTimeout": "00:00:30",
+    "Docker": {
+      "Enabled": false
+    },
+    "Executables": [
+      {
+        "Name": "llama-server",
+        "Default": "b11476",
+        "Versions": [
+          {
+            "Version": "b11476",
+            "Cuda": "13.4",
+            "Path": "C:\\Program Files\\mirbadllm-agent\\runtimes\\llama.cpp\\b11476\\llama-server.exe",
+            "Manifest": "C:\\Program Files\\mirbadllm-agent\\runtimes\\llama.cpp\\b11476\\manifest.json"
+          }
+        ]
+      }
+    ],
+    "Process": {
+      "StartTimeout": "00:10:00",
+      "RestartBudget": 2,
+      "RestartWindow": "00:10:00",
+      "LogMaxBytes": 52428800,
+      "LogFilesKept": 2,
+      "HealthPollInterval": "00:00:02"
+    }
+  }
+}

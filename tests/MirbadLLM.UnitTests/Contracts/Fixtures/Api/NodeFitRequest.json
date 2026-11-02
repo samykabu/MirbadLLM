@@ -1,0 +1,8 @@
+{
+  "modelId": "qwen3-8b",
+  "definition": null,
+  "gpuUuids": [
+    "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f601",
+    "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f602"
+  ]
+}

@@ -1,0 +1,261 @@
+{
+  "default": {
+    "name": "ss-m1",
+    "createBody": {
+      "Image": "local/qwen38-vllm-dflash2:66e5414c6d75",
+      "Cmd": [
+        "--model",
+        "/models/ckpt",
+        "--served-model-name",
+        "M1",
+        "--kv-cache-dtype",
+        "fp8",
+        "--max-model-len",
+        "262144",
+        "--max-num-seqs",
+        "16",
+        "--gpu-memory-utilization",
+        "0.3333",
+        "--enable-auto-tool-choice",
+        "--tool-call-parser",
+        "qwen3_coder",
+        "--reasoning-parser",
+        "qwen3",
+        "--enable-prefix-caching",
+        "--speculative-config",
+        "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:2}",
+        "--compilation-config",
+        "{\u0022cudagraph_mode\u0022:\u0022PIECEWISE\u0022}",
+        "--disable-access-log-for-endpoints",
+        "/health,/metrics"
+      ],
+      "Labels": {
+        "mirbadllm.model": "m1",
+        "mirbadllm.served-name": "M1",
+        "mirbadllm.port": "8101",
+        "mirbadllm.config-hash": "664d9b3b884fe7b2",
+        "mirbadllm.budget-gib": "40"
+      },
+      "ExposedPorts": {
+        "8000/tcp": {}
+      },
+      "HostConfig": {
+        "Binds": [
+          "/srv/mirbadllm/models:/models:ro",
+          "/srv/mirbadllm/cache:/root/.cache"
+        ],
+        "PortBindings": {
+          "8000/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "8101"
+            }
+          ]
+        },
+        "RestartPolicy": {
+          "Name": "unless-stopped"
+        },
+        "IpcMode": "host",
+        "DeviceRequests": [
+          {
+            "Driver": "nvidia",
+            "Count": -1,
+            "Capabilities": [
+              [
+                "gpu"
+              ]
+            ]
+          }
+        ]
+      },
+      "NetworkingConfig": {
+        "EndpointsConfig": {
+          "mirbadllm": {
+            "Aliases": [
+              "ss-m1"
+            ]
+          }
+        }
+      }
+    },
+    "calls": [
+      "GET /v1.47/networks/mirbadllm",
+      "GET /v1.47/images/local/qwen38-vllm-dflash2:66e5414c6d75/json",
+      "POST /v1.47/containers/create?name=ss-m1",
+      "POST /v1.47/containers/\u003Cid\u003E/start"
+    ]
+  },
+  "custom-image": {
+    "name": "ss-m1",
+    "createBody": {
+      "Image": "registry.local:5000/vllm/custom:1.2",
+      "Cmd": [
+        "--model",
+        "/models/ckpt",
+        "--served-model-name",
+        "M1",
+        "--kv-cache-dtype",
+        "fp8",
+        "--max-model-len",
+        "65536",
+        "--max-num-seqs",
+        "8",
+        "--gpu-memory-utilization",
+        "0.3333",
+        "--enable-auto-tool-choice",
+        "--tool-call-parser",
+        "qwen3_coder",
+        "--reasoning-parser",
+        "qwen3",
+        "--enable-prefix-caching",
+        "--speculative-config",
+        "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:2}",
+        "--compilation-config",
+        "{\u0022cudagraph_mode\u0022:\u0022PIECEWISE\u0022}",
+        "--disable-access-log-for-endpoints",
+        "/health,/metrics"
+      ],
+      "Labels": {
+        "mirbadllm.model": "m1",
+        "mirbadllm.served-name": "M1",
+        "mirbadllm.port": "8101",
+        "mirbadllm.config-hash": "76910ba0ba8074f9",
+        "mirbadllm.budget-gib": "40"
+      },
+      "ExposedPorts": {
+        "8000/tcp": {}
+      },
+      "HostConfig": {
+        "Binds": [
+          "/srv/mirbadllm/models:/models:ro",
+          "/srv/mirbadllm/cache:/root/.cache"
+        ],
+        "PortBindings": {
+          "8000/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "8101"
+            }
+          ]
+        },
+        "RestartPolicy": {
+          "Name": "unless-stopped"
+        },
+        "IpcMode": "host",
+        "DeviceRequests": [
+          {
+            "Driver": "nvidia",
+            "Count": -1,
+            "Capabilities": [
+              [
+                "gpu"
+              ]
+            ]
+          }
+        ]
+      },
+      "NetworkingConfig": {
+        "EndpointsConfig": {
+          "mirbadllm": {
+            "Aliases": [
+              "ss-m1"
+            ]
+          }
+        }
+      }
+    },
+    "calls": [
+      "GET /v1.47/networks/mirbadllm",
+      "GET /v1.47/images/registry.local:5000/vllm/custom:1.2/json",
+      "POST /v1.47/containers/create?name=ss-m1",
+      "POST /v1.47/containers/\u003Cid\u003E/start"
+    ]
+  },
+  "tuning": {
+    "name": "ss-m1",
+    "createBody": {
+      "Image": "local/qwen38-vllm-dflash2:66e5414c6d75",
+      "Cmd": [
+        "--model",
+        "/models/ckpt",
+        "--served-model-name",
+        "M1",
+        "--kv-cache-dtype",
+        "fp8",
+        "--max-model-len",
+        "262144",
+        "--max-num-seqs",
+        "16",
+        "--gpu-memory-utilization",
+        "0.3333",
+        "--enable-auto-tool-choice",
+        "--tool-call-parser",
+        "qwen3_coder",
+        "--reasoning-parser",
+        "qwen3",
+        "--enable-prefix-caching",
+        "--speculative-config",
+        "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:2}",
+        "--compilation-config",
+        "{\u0022cudagraph_mode\u0022:\u0022PIECEWISE\u0022}",
+        "--disable-access-log-for-endpoints",
+        "/health,/metrics"
+      ],
+      "Labels": {
+        "mirbadllm.model": "m1",
+        "mirbadllm.served-name": "M1",
+        "mirbadllm.port": "8101",
+        "mirbadllm.config-hash": "664d9b3b884fe7b2",
+        "mirbadllm.budget-gib": "40",
+        "mirbadllm.tuning": "1"
+      },
+      "ExposedPorts": {
+        "8000/tcp": {}
+      },
+      "HostConfig": {
+        "Binds": [
+          "/srv/mirbadllm/models:/models:ro",
+          "/srv/mirbadllm/cache:/root/.cache"
+        ],
+        "PortBindings": {
+          "8000/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "8101"
+            }
+          ]
+        },
+        "RestartPolicy": {
+          "Name": "unless-stopped"
+        },
+        "IpcMode": "host",
+        "DeviceRequests": [
+          {
+            "Driver": "nvidia",
+            "Count": -1,
+            "Capabilities": [
+              [
+                "gpu"
+              ]
+            ]
+          }
+        ]
+      },
+      "NetworkingConfig": {
+        "EndpointsConfig": {
+          "mirbadllm": {
+            "Aliases": [
+              "ss-m1"
+            ]
+          }
+        }
+      }
+    },
+    "calls": [
+      "GET /v1.47/networks/mirbadllm",
+      "GET /v1.47/images/local/qwen38-vllm-dflash2:66e5414c6d75/json",
+      "POST /v1.47/containers/create?name=ss-m1",
+      "POST /v1.47/containers/\u003Cid\u003E/start"
+    ]
+  }
+}

@@ -1,0 +1,445 @@
+@page "/models/{Id}/benchmark"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using MirbadLLM.Orchestration
+@using MirbadLLM.Orchestration.Benchmarking
+@inject IModelRegistry Registry
+@inject IModelRuntime Runtime
+@inject ModelJobService Jobs
+@inject BenchmarkStore Store
+@inject IServiceProvider Services
+
+<PageTitle>@(_model?.ServedName ?? Id) · Benchmark · MirbadLLM</PageTitle>
+
+@if (_notFound)
+{
+    <PageHeader Title="Benchmark" BackHref="models" BackLabel="Models" />
+    <EmptyState Title="@($"No model called \"{Id}\"")" TestId="benchmark-not-found">
+        <ChildContent><p>It may have been deleted. Pick a model from the list.</p></ChildContent>
+        <Actions><a class="btn btn-outline-secondary" href="models">Go to Models</a></Actions>
+    </EmptyState>
+}
+else if (_model is not null)
+{
+    <ModelHeader ModelId="@_model.Id" Current="benchmark" StatusChanged="OnHeaderStatus" />
+    <p class="job-lede">Measure the model as it runs now and compare runs over time, e.g. before and after enabling MTP.</p>
+
+    @if (_error is not null)
+    {
+        <div class="callout callout--failed page-alert" role="alert" data-testid="benchmark-error">
+            <Icon Name="state-failed" />
+            <div class="callout-body">@_error</div>
+        </div>
+    }
+
+    @if (_job is not null && _job.ModelId == _model.Id)
+    {
+        <JobProgressPanel Job="_job" Now="_now" OnCancel="CancelAsync" />
+    }
+    else
+    {
+        <section class="panel form-section job-intro" aria-labelledby="run-title">
+            <div class="form-section-intro">
+                <h2 id="run-title">Run a benchmark</h2>
+                <p>
+                    Runs a fixed suite against the model's current settings: nothing restarts and no setting changes.
+                </p>
+            </div>
+            <div class="job-intro-body">
+                <div class="field">
+                    <label for="benchmark-preset">Workload</label>
+                    <select class="form-select" id="benchmark-preset" data-testid="benchmark-preset" @bind="_preset">
+                        @foreach (var option in PresetOptions)
+                        {
+                            <option value="@option.Value">@option.Label</option>
+                        }
+                    </select>
+                </div>
+                @if (SelectedPreset is { } preset && preset != TuningGoal.Embeddings)
+                {
+                    var profile = WorkloadProfiles.For(preset);
+                    <ul class="plain-list" data-testid="benchmark-workload-intro">
+                        <li>@profile.Description</li>
+                        <li>An untimed warm-up, then short chat (code, tool-style and prose prompts with distinct suffixes) of 256 and 1,024 output tokens at N = 1, 16 and the model's max num seqs (up to 64). Each case runs 3 times; the median is reported and failed requests are counted.</li>
+                        @if (profile.LongPromptTokens.Count > 0)
+                        {
+                            <li>Cold @string.Join(" and ", profile.LongPromptTokens.Select(t => $"{t / 1024}K"))-token prompts, each repetition starting with a fresh random prefix so nothing comes from the prefix cache.</li>
+                        }
+                        @if (profile.SharedPrefix)
+                        {
+                            <li>A shared ~8K-token system prompt with different questions, primed once; the model's prefix-cache hit counter shows whether the cache was reused.</li>
+                        }
+                        @if (profile.Tools)
+                        {
+                            <li>Tool calls whose arguments must validate against each tool's JSON schema, required arguments included.</li>
+                        }
+                        <li>8 questions with known answers.</li>
+                    </ul>
+                }
+                else if (Pooling == PoolingMode.Embedding)
+                {
+                    <ul class="plain-list" data-testid="benchmark-embedding-intro">
+                        <li>An embedding model: a warm-up request, then 1, 16 and max-num-seqs concurrent <code>/v1/embeddings</code> requests, each a batch of distinct inputs of mixed lengths. Each level runs 3 times; the median is reported.</li>
+                        <li>Input tokens per second, requests per second and request latency (p50 and p95) per level.</li>
+                        <li>Correctness: one vector per input, one dimension, finite values, normalized.</li>
+                    </ul>
+                }
+                else if (Pooling == PoolingMode.Reranker)
+                {
+                    <p class="muted" data-testid="benchmark-reranker">@BenchmarkSuite.RerankerUnsupported</p>
+                }
+                else
+                {
+                    <ul class="plain-list">
+                        <li>A warm-up request, then 1, 4, 8 and 16 concurrent streaming requests of exactly 256 tokens (temperature 0, thinking off). Each level runs 3 times; the median is reported.</li>
+                        <li>Time to first token (p50 and p95) per level.</li>
+                        <li>A <span class="num">@PrefillTokens</span>-token prompt, cold and again from the prefix cache.</li>
+                        <li>Correctness: one tool call and 8 questions with known answers.</li>
+                    </ul>
+                }
+                <dl class="kv kv--wide">
+                    <dt>Settings measured</dt>
+                    <dd class="num" data-testid="benchmark-settings">@SettingChanges.Summary(_current ?? _model)</dd>
+                    <dt>Takes</dt>
+                    <dd data-testid="benchmark-estimate">@EstimateText</dd>
+                </dl>
+                <div class="callout callout--busy">
+                    <Icon Name="pause" />
+                    <div class="callout-body">
+                        While it runs, the API is paused for every model: clients get 503 with a Retry-After, so the numbers are measured on a quiet box.
+                    </div>
+                </div>
+                <div class="job-intro-actions">
+                    <button type="button" class="btn btn-primary" data-testid="run-benchmark" data-shortcut="benchmark" disabled="@(RunBlockedReason is not null)"
+                            aria-describedby="@(RunBlockedReason is null ? null : "run-blocked")" @onclick="OpenStart">
+                        <Icon Name="gauge" /> Run benchmark
+                    </button>
+                    @if (RunBlockedReason is not null)
+                    {
+                        <span class="muted form-footer-note" id="run-blocked" data-testid="run-blocked">@RunBlockedReason</span>
+                    }
+                </div>
+            </div>
+        </section>
+    }
+
+    @if (_selected?.Result is { } selectedResult)
+    {
+        <section class="section" aria-labelledby="result-title">
+            <div class="section-head">
+                <h2 id="result-title">Result</h2>
+                <span class="section-note num">@UiFormat.RunTime(_selected.StartedAt) · took @UiFormat.Duration(_selected.Duration) · @SettingChanges.Summary(_selected.Settings)</span>
+            </div>
+            <div class="panel panel-body">
+                <BenchmarkResultView Result="selectedResult" TestId="benchmark-result" />
+            </div>
+        </section>
+    }
+    else if (_selected?.Error is { } failed)
+    {
+        <div class="callout callout--failed section" role="status" data-testid="benchmark-failed">
+            <Icon Name="state-failed" />
+            <div class="callout-body"><span class="callout-title">The benchmark at @UiFormat.RunTime(_selected.StartedAt) failed</span><span>@failed</span></div>
+        </div>
+    }
+
+    <section class="section" aria-labelledby="history-title">
+        <div class="section-head">
+            <h2 id="history-title">History</h2>
+            @if (_history.Count >= 2)
+            {
+                <span class="section-note">Tick two runs to compare them.</span>
+            }
+        </div>
+        @if (_history.Count == 0)
+        {
+            <EmptyState Title="No benchmarks yet" HeadingLevel="3" Inline="true" TestId="benchmark-history-empty">
+                <ChildContent><p>Each run is kept with the settings it measured, so you can compare before and after a change.</p></ChildContent>
+            </EmptyState>
+        }
+        else
+        {
+            @if (CompareRuns is { } pair)
+            {
+                <BenchmarkCompare A="pair.A" B="pair.B" BootstrapNodeId="@Jobs.BootstrapNodeId" />
+            }
+            <div class="panel panel--scroll-x">
+                <table class="data-table data-table--stack" data-testid="benchmark-history">
+                    <caption class="visually-hidden">Past benchmark runs of @_model.ServedName</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col"><span class="visually-hidden">Compare</span></th>
+                            <th scope="col"><ColumnHelp Label="When" Key="settings" Scope="bench-history" Text="@BenchGlossary.Settings" /></th>
+                            <th scope="col"><ColumnHelp Label="@Labels.N1" Key="n1" Scope="bench-history" Text="@Helps.N1" /></th>
+                            <th scope="col"><ColumnHelp Label="@Labels.N16" Key="n16" Scope="bench-history" Text="@Helps.N16" /></th>
+                            <th scope="col" class="col-wide"><ColumnHelp Label="@Labels.P95" Key="ttft95" Scope="bench-history" Text="@Helps.P95" /></th>
+                            <th scope="col"><ColumnHelp Label="@Labels.Check" Key="answers" Scope="bench-history" Text="@Helps.Check" /></th>
+                            <th scope="col"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var run in Pager.Slice(_history, _page, _size))
+                        {
+                            var r = run.Result;
+                            <tr class="@(run == _selected ? "is-selected" : null)" data-testid="@($"history-row-{run.Id}")">
+                                <td class="col-check">
+                                    <input type="checkbox" class="form-check-input" id="@($"cmp-{run.Id}")" checked="@_compare.Contains(run.Id)"
+                                           disabled="@(r is null || (_compare.Count >= 2 && !_compare.Contains(run.Id)))"
+                                           aria-label="@($"Compare the run of {UiFormat.RunTime(run.StartedAt)}")"
+                                           data-testid="@($"compare-{run.Id}")" @onchange="() => ToggleCompare(run.Id)" />
+                                </td>
+                                <td class="col-primary">
+                                    <div class="num">@UiFormat.RunTime(run.StartedAt)</div>
+                                    <div class="model-card-id">@SettingChanges.Summary(run.Settings)</div>
+                                </td>
+                                <td data-label="@Labels.N1" class="num">@BenchmarkCells.N1(r)</td>
+                                <td data-label="@Labels.N16" class="num">@BenchmarkCells.N16(r)</td>
+                                <td data-label="@Labels.P95" class="num col-wide">@BenchmarkCells.P95At16(r)</td>
+                                <td data-label="@Labels.Check" class="num">
+                                    @if (r is null)
+                                    {
+                                        <span class="verdict verdict--bad"><Icon Name="state-failed" /> Failed</span>
+                                    }
+                                    else
+                                    {
+                                        @BenchmarkCells.Check(r)
+                                        @if (r.Noise.Noisy)
+                                        {
+                                            <span class="chip chip--busy chip--inline"><Icon Name="warning" /> Noisy</span>
+                                        }
+                                    }
+                                </td>
+                                <td class="col-actions">
+                                    <button type="button" class="btn btn-sm btn-ghost" data-testid="@($"view-{run.Id}")" @onclick="() => _selected = run">View</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <Pager Total="_history.Count" @bind-Page="_page" @bind-Size="_size" Noun="runs" TestId="benchmark-history-pager" />
+            <p class="table-legend" data-testid="benchmark-legend">@(Pooling == PoolingMode.None ? BenchGlossary.Legend : BenchGlossary.EmbeddingLegend)</p>
+        }
+    </section>
+
+    <StartJobDialog @ref="_start" ModelId="@_model.Id" Title="@($"Benchmark {_model.ServedName}?")" ConfirmLabel="Run benchmark" Estimate="@EstimateShort"
+                    OnConfirm="StartAsync" TestId="benchmark-dialog">
+        <p>Measures the current settings (<span class="num">@SettingChanges.Summary(_current ?? _model)</span>) without restarting the model, with the <strong>@PresetLabel</strong> workload.</p>
+    </StartJobDialog>
+}
+
+@code {
+    [Parameter]
+    public string Id { get; set; } = "";
+
+    private ModelDefinition? _model;
+    private ModelDefinition? _current;
+    private ModelStatus? _status;
+    private bool _notFound;
+    private string? _error;
+    private JobSnapshot? _job;
+    private TimeSpan _estimate;
+    private IReadOnlyList<BenchmarkRun> _history = [];
+    private int _page = 1;
+    private int? _size;
+    private BenchmarkRun? _selected;
+    private readonly List<string> _compare = [];
+    private DateTimeOffset _now = DateTimeOffset.UtcNow;
+    private StartJobDialog? _start;
+    private CancellationTokenSource? _cts;
+    private Task? _loop;
+
+    private string EstimateShort => UiFormat.About(_estimate);
+
+    private const string Classic = "classic";
+
+    /// <summary>The picked workload: a preset name, or <see cref="Classic"/> for the original fixed suite.</summary>
+    private string _preset = nameof(TuningGoal.InteractiveChat);
+
+    private IReadOnlyList<(string Value, string Label)> PresetOptions =>
+        (Pooling != PoolingMode.None
+            ? new[] { TuningGoal.Embeddings }
+            : new[] { TuningGoal.InteractiveChat, TuningGoal.AgentsTools, TuningGoal.Throughput, TuningGoal.LongDocuments })
+        .Select(g => (g.ToString(), WorkloadProfiles.For(g).Name))
+        .Append((Classic, "Classic suite (v1: N = 1/4/8/16 × 256 tokens)"))
+        .ToList();
+
+    private TuningGoal? SelectedPreset => Enum.TryParse<TuningGoal>(_preset, out var goal) && WorkloadProfiles.IsPreset(goal) ? goal : null;
+
+    private string PresetLabel => PresetOptions.FirstOrDefault(o => o.Value == _preset).Label ?? "classic";
+
+    /// <summary>Embedding models get the embeddings benchmark and its columns.</summary>
+    private PoolingMode Pooling => _model is null ? PoolingMode.None : PoolingDetection.Detect(_model);
+
+    private (string N1, string N16, string P95, string Check) Labels =>
+        BenchmarkCells.Labels(Pooling != PoolingMode.None || _history.Any(h => h.Result?.Embeddings is not null));
+
+    private (string N1, string N16, string P95, string Check) Helps =>
+        BenchmarkCells.Help(Pooling != PoolingMode.None || _history.Any(h => h.Result?.Embeddings is not null));
+
+    private string EstimateText => _history.FirstOrDefault(r => r.Result is not null) is { } last
+        ? $"{UiFormat.About(_estimate)} (the last run took {UiFormat.Duration(last.Duration)})"
+        : $"{UiFormat.About(_estimate)} (estimate; nothing measured yet)";
+
+    private string PrefillTokens => Math.Min(65_536, (_model?.MaxModelLen ?? 65_536) - 64).ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+
+    private string? RunBlockedReason =>
+        _job is not null
+            ? ModelJobService.ConflictMessage(_job, JobKind.Benchmark)
+            : Pooling == PoolingMode.Reranker
+                ? BenchmarkSuite.RerankerUnsupported
+            : _status?.State != ModelState.Ready
+                ? $"The model is {UiFormat.StateName(_status?.State ?? ModelState.Stopped)}. Start it first: a benchmark measures a running model."
+                : null;
+
+    private (BenchmarkRun A, BenchmarkRun B)? CompareRuns
+    {
+        get
+        {
+            if (_compare.Count != 2)
+            {
+                return null;
+            }
+
+            var runs = _history.Where(r => _compare.Contains(r.Id) && r.Result is not null).OrderBy(r => r.StartedAt).ToList();
+            return runs.Count == 2 ? (runs[0], runs[1]) : null;
+        }
+    }
+
+    // Resolved once (MN-132): the poll loop reloads until DisposeAsync awaits it, and a lookup from a scope that is being
+    // disposed throws ObjectDisposedException.
+    private IModelLauncher? _launcher;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _launcher = Services.GetService<IModelLauncher>();
+        _model = await Registry.GetAsync(Id);
+        if (_model is null)
+        {
+            _notFound = true;
+            return;
+        }
+
+        if (PoolingDetection.Detect(_model) != PoolingMode.None)
+        {
+            _preset = nameof(TuningGoal.Embeddings);
+        }
+
+        await LoadAsync();
+        _cts = new CancellationTokenSource();
+        _loop = PollAsync(_cts.Token);
+    }
+
+    private async Task LoadAsync()
+    {
+        _status = await Runtime.GetStatusAsync(Id);
+        _job = Jobs.JobAffecting(_model);
+        _estimate = await Jobs.EstimateBenchmarkAsync(Id);
+        _history = await Store.ListBenchmarksAsync(Id);
+        _selected = _selected is null ? _history.FirstOrDefault() : _history.FirstOrDefault(r => r.Id == _selected.Id) ?? _history.FirstOrDefault();
+        _current = null;
+        if (_status.State == ModelState.Ready && _launcher is { } launcher)
+        {
+            try
+            {
+                _current = await launcher.GetLaunchedDefinitionAsync(Id);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or DockerApiException)
+            {
+                _current = null;
+            }
+        }
+    }
+
+    private async Task PollAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        int tick = 0;
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                tick++;
+                _now = DateTimeOffset.UtcNow;
+                var job = Jobs.JobAffecting(_model);
+                bool finished = _job is not null && job is null;
+                _job = job;
+                if (finished || tick % 10 == 0)
+                {
+                    if (finished && (_model is null ? Jobs.LastOutcome : Jobs.LastOutcomeOnNode(Jobs.NodeOf(_model))) is { Kind: JobKind.Benchmark } outcome && outcome.ModelId == Id)
+                    {
+                        // Show the run that just finished.
+                        _selected = null;
+                    }
+
+                    await LoadAsync();
+                }
+
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Page closed.
+        }
+    }
+
+    /// <summary>The header's live state keeps "Run benchmark" in step without waiting for this page's 10 s reload.</summary>
+    private void OnHeaderStatus(ModelStatus status) => _status = status;
+
+    private void OpenStart()
+    {
+        _error = null;
+        _start?.Show();
+    }
+
+    private async Task StartAsync()
+    {
+        try
+        {
+            _job = await Jobs.StartBenchmarkAsync(Id, SelectedPreset);
+        }
+        catch (InvalidOperationException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private Task CancelAsync()
+    {
+        // This model's benchmark only (MN-126): never the jobs on other nodes.
+        if (_job is { Kind: JobKind.Benchmark } job && job.ModelId == Id)
+        {
+            Jobs.CancelJob(job.JobId);
+        }
+
+        _job = Jobs.JobAffecting(_model);
+        return Task.CompletedTask;
+    }
+
+    private void ToggleCompare(string runId)
+    {
+        if (!_compare.Remove(runId) && _compare.Count < 2)
+        {
+            _compare.Add(runId);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts?.Cancel();
+        if (_loop is not null)
+        {
+            try
+            {
+                await _loop;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected.
+            }
+        }
+
+        _cts?.Dispose();
+    }
+}

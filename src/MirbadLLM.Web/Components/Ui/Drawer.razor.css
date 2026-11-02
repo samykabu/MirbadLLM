@@ -1,0 +1,54 @@
+/* Floats above the page while open, so it carries the drawer shadow (DESIGN.md Shadow Vocabulary). */
+.side-panel {
+    position: fixed;
+    top: calc(var(--ss-statusbar-h) + var(--ss-sp-4));
+    right: var(--ss-sp-4);
+    bottom: var(--ss-sp-4);
+    z-index: 1010;
+    display: flex;
+    flex-direction: column;
+    width: min(440px, calc(100vw - 2 * var(--ss-sp-4)));
+    background: var(--ss-panel);
+    border: 1px solid var(--ss-panel-edge);
+    border-radius: var(--ss-radius-lg);
+    box-shadow: var(--ss-shadow-3);
+    transform: translateX(calc(100% + 32px));
+    opacity: 0;
+    visibility: hidden;
+}
+
+.side-panel--open {
+    transform: none;
+    opacity: 1;
+    visibility: visible;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .side-panel { transition: transform 360ms var(--ss-ease), opacity 240ms var(--ss-ease), visibility 0s linear 360ms; }
+    .side-panel--open { transition: transform 360ms var(--ss-ease), opacity 240ms var(--ss-ease), visibility 0s; }
+}
+
+.side-panel-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--ss-sp-3);
+    align-items: start;
+    padding: var(--ss-sp-3) var(--ss-sp-4);
+    border-bottom: 1px solid var(--ss-border);
+}
+
+.side-panel-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: var(--ss-sp-3) var(--ss-sp-4) var(--ss-sp-4);
+}
+
+@media (max-width: 959.98px) {
+    .side-panel {
+        top: calc(var(--ss-statusbar-h) + var(--ss-sp-2));
+        right: var(--ss-sp-2);
+        bottom: var(--ss-sp-2);
+        width: calc(100vw - 2 * var(--ss-sp-2));
+    }
+}

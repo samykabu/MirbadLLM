@@ -1,0 +1,9 @@
+{
+  "scenario": "streaming_chat",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "status": 200,
+  "contentType": "text/event-stream; charset=utf-8",
+  "retryAfter": null,
+  "body": "data: {\u0022choices\u0022:[{\u0022delta\u0022:{\u0022content\u0022:\u0022Hello\u0022},\u0022finish_reason\u0022:null}]}\n\ndata: {\u0022choices\u0022:[{\u0022delta\u0022:{\u0022content\u0022:\u0022 \u0022},\u0022finish_reason\u0022:null}]}\n\ndata: {\u0022choices\u0022:[{\u0022delta\u0022:{\u0022content\u0022:\u0022world\u0022},\u0022finish_reason\u0022:null}]}\n\ndata: {\u0022choices\u0022:[{\u0022delta\u0022:{},\u0022finish_reason\u0022:\u0022stop\u0022}],\u0022usage\u0022:{\u0022prompt_tokens\u0022:1,\u0022completion_tokens\u0022:2}}\n\ndata: [DONE]\n"
+}

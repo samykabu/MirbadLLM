@@ -1,0 +1,538 @@
+@namespace MirbadLLM.Web.Components.Ui
+@implements IDisposable
+@using System.Globalization
+@using MirbadLLM.Agent.Contracts
+@using MirbadLLM.Web.Api
+@inject IServiceProvider ServiceProvider
+@* "Add node" (design §12.1): asks for the node id (validated as it is typed), a display name and token lifetime, using the
+   signed-in session; then shows the join command (JoinCommandView: per OS, a token prompt or one line, Copy buttons, the
+   enroll URL, CA hash and expiry) and waits live for the agent ("Waiting for the agent to connect…"). Once it enrolls the
+   dialog shows where it came from, what it reported and its key fingerprint, with Approve (pins that key) and Reject.
+   The token exists only in this component while the dialog is open: it is never logged, never in the URL, and dropped
+   when the dialog closes ("Withdraw token" also expires it on the master). *@
+<div class="add-node">
+    <ConfirmDialog Open="Open" OpenChanged="OnOpenChangedAsync" Title="@Title" ConfirmLabel="@ConfirmLabel" CancelLabel="@CancelLabel"
+                   ConfirmDisabled="@(!CanConfirm)" CloseOnConfirm="false" OnConfirm="ConfirmAsync" TestId="add-node">
+        <ol class="wizard-steps" aria-label="Add node progress" data-testid="add-node-steps">
+            @foreach (var step in Enum.GetValues<Stage>())
+            {
+                <li aria-current="@(step == _stage ? "step" : null)"><span class="num">@((int)step + 1)</span> @(step switch { Stage.Form => "Details", Stage.Waiting => "Join command", _ => "Approve" })</li>
+            }
+        </ol>
+        @switch (_stage)
+        {
+            case Stage.Form:
+                <p>Creates a one-time join token for a new machine. Run the command it gives on that machine; it then appears here for approval.</p>
+                @if (!_loginEnabled)
+                {
+                    <div class="callout callout--busy" data-testid="add-node-login-disabled">
+                        <Icon Name="lock" />
+                        <div class="callout-body"><span>Adding a node needs admin login. Set <code>MirbadLLM__AdminPassword</code> and restart MirbadLLM first.</span></div>
+                    </div>
+                }
+                <div class="field">
+                    <label class="field-label" for="add-node-id">Node id</label>
+                    <input id="add-node-id" class="form-control @(IdProblem is null || _nodeId.Length == 0 ? "" : "invalid")" autocomplete="off" autocapitalize="off" spellcheck="false"
+                           aria-describedby="add-node-id-hint" aria-invalid="@(IdProblem is not null && _nodeId.Length > 0 ? "true" : null)"
+                           data-testid="add-node-id" value="@_nodeId" @oninput="e => _nodeId = e.Value?.ToString()?.Trim() ?? string.Empty" />
+                    @if (!_existingLoaded)
+                    {
+                        <div id="add-node-id-hint" class="field-hint" role="status" data-testid="add-node-id-checking">Checking the registered nodes…</div>
+                    }
+                    else if (IdProblem is { } problem && _nodeId.Length > 0)
+                    {
+                        <div id="add-node-id-hint" class="validation-message" data-testid="add-node-id-error">@problem</div>
+                    }
+                    else
+                    {
+                        <div id="add-node-id-hint" class="field-hint">Lower-case letters, digits and hyphens, e.g. <code>pc-office</code>. It cannot be changed later.</div>
+                    }
+                </div>
+                <div class="field">
+                    <label class="field-label" for="add-node-name">Display name <span class="muted">(optional)</span></label>
+                    <input id="add-node-name" class="form-control" autocomplete="off" data-testid="add-node-name" maxlength="100"
+                           value="@_displayName" @oninput="e => _displayName = e.Value?.ToString() ?? string.Empty" />
+                </div>
+                <div class="field">
+                    <label class="field-label" for="add-node-ttl">Token lifetime</label>
+                    <select id="add-node-ttl" class="form-select" data-testid="add-node-ttl" value="@_ttl.ToString(CultureInfo.InvariantCulture)"
+                            @onchange="e => _ttl = int.TryParse(e.Value?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int v) ? v : 60">
+                        @foreach (int minutes in Lifetimes)
+                        {
+                            <option value="@minutes.ToString(CultureInfo.InvariantCulture)">@NodeActionDialogs.LifetimeText(minutes)</option>
+                        }
+                    </select>
+                </div>
+
+                break;
+
+            case Stage.Waiting:
+            case Stage.Enrolled:
+                @if (_stage == Stage.Enrolled && _enrolled is { } record)
+                {
+                    <div class="callout callout--ready" role="status" data-testid="add-node-enrolled">
+                        <Icon Name="state-ready" />
+                        <div class="callout-body"><span>The agent enrolled. Check these details match the machine you are adding, then approve it.</span></div>
+                    </div>
+                    <PendingNodeFacts Record="record" TestId="add-node-facts" />
+                    <div>
+                        <button type="button" class="btn btn-outline-secondary" data-testid="add-node-reject" disabled="@_busy" @onclick="RejectAsync">
+                            <Icon Name="close" /> Reject
+                        </button>
+                    </div>
+                }
+                else if (_issued is { } issued)
+                {
+                    <p>Run this on <strong>@(_displayName.Length > 0 ? _displayName : _nodeId)</strong> as an administrator.</p>
+                    <JoinCommandView Response="issued" Now="_now" TestId="add-node-command" />
+                    @if (_expired)
+                    {
+                        <div class="callout callout--failed" role="alert" data-testid="add-node-expired">
+                            <Icon Name="clock" />
+                            <div class="callout-body"><span>The token expired before the agent connected. Close this dialog and add the node again.</span></div>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="add-node-wait">
+                            <p class="muted loading-line" role="status" data-testid="add-node-waiting"><Icon Name="refresh" Class="icon--spin" /> Waiting for the agent to connect…</p>
+                            <span class="add-node-wait-actions">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="add-node-check" disabled="@_busy" @onclick="CheckAsync">
+                                    <Icon Name="refresh" /> Check now
+                                </button>
+                                <button type="button" class="btn btn-sm btn-ghost" data-testid="add-node-withdraw" disabled="@_busy" @onclick="WithdrawAsync">
+                                    <Icon Name="trash" /> Withdraw token
+                                </button>
+                            </span>
+                        </div>
+                        <p class="muted">Closing this dialog does not cancel the token: it keeps working until it expires, and the node then shows on the list for approval.</p>
+                    }
+                }
+                break;
+        }
+
+        @if (_error is not null)
+        {
+            <div class="callout callout--failed" role="alert" data-testid="add-node-error">
+                <Icon Name="state-failed" />
+                <div class="callout-body">@_error</div>
+            </div>
+        }
+    </ConfirmDialog>
+</div>
+
+@code {
+    private static readonly int[] Lifetimes = [10, 30, 60, 240, 1440];
+    private static readonly TimeSpan ClockSkew = TimeSpan.FromSeconds(5);
+
+    private enum Stage { Form, Waiting, Enrolled }
+
+    private NodeAdminService? _admin;
+    private INodeRegistry? _registry;
+    private TimeProvider _time = TimeProvider.System;
+    private bool _loginEnabled;
+    private Stage _stage = Stage.Form;
+    private string _nodeId = "";
+    private string _displayName = "";
+    private int _ttl = 60;
+
+    private string? _error;
+    private bool _busy;
+    private bool _expired;
+    private DateTimeOffset _now;
+    private DateTimeOffset _issuedAt;
+    private JoinTokenCreateResponse? _issued;
+    private NodeRecord? _enrolled;
+    private IReadOnlyList<NodeRecord> _existing = [];
+    private bool _existingLoaded;
+    private int _loadVersion;
+    private CancellationTokenSource? _poll;
+    private bool _wasOpen;
+
+    [Parameter]
+    public bool Open { get; set; }
+
+    [Parameter]
+    public EventCallback<bool> OpenChanged { get; set; }
+
+    /// <summary>Who acts (portal session, audit actor, enroll URL host).</summary>
+    [Parameter, EditorRequired]
+    public NodeApiCaller Caller { get; set; } = null!;
+
+    /// <summary>How often the dialog looks for the enrollment while it waits.</summary>
+    [Parameter]
+    public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
+
+    /// <summary>Raised when the list changed (token created, node approved, rejected or token withdrawn), with a status sentence.</summary>
+    [Parameter]
+    public EventCallback<string?> OnChanged { get; set; }
+
+    protected override void OnInitialized()
+    {
+        _admin = ServiceProvider.GetService<NodeAdminService>();
+        _registry = ServiceProvider.GetService<INodeRegistry>();
+        _time = ServiceProvider.GetService<TimeProvider>() ?? TimeProvider.System;
+        _loginEnabled = ServiceProvider.GetService<IAdminReauthenticator>()?.LoginEnabled ?? false;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _now = _time.GetUtcNow();
+        if (Open && !_wasOpen)
+        {
+            _wasOpen = true;
+            Reset();
+            await LoadExistingAsync();
+        }
+        else if (!Open && _wasOpen)
+        {
+            Reset();
+        }
+
+        _wasOpen = Open;
+    }
+
+    /// <summary>
+    /// Reads the registered nodes for the live id check (W8 review MN-128: the check used to run against an empty list
+    /// until the read finished, so an enrolled or revoked id looked free and could be submitted). Until it is read the id
+    /// shows "Checking…" and the dialog cannot confirm; a read that a later open or a close overtook is dropped. A failed
+    /// read leaves the check to the master (it refuses a taken id) and says so.
+    /// </summary>
+    private async Task LoadExistingAsync()
+    {
+        int version = ++_loadVersion;
+        _existing = [];
+        _existingLoaded = _registry is null;
+        if (_registry is null)
+        {
+            return;
+        }
+
+        IReadOnlyList<NodeRecord> existing;
+        try
+        {
+            existing = await _registry.ListAsync();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException or InvalidDataException)
+        {
+            if (version == _loadVersion)
+            {
+                _existingLoaded = true;
+                _error = $"Could not read the node list ({ex.Message}); the master still refuses an id that is taken.";
+            }
+
+            return;
+        }
+
+        if (version == _loadVersion && Open)
+        {
+            _existing = existing;
+            _existingLoaded = true;
+        }
+    }
+
+    private string Title => _stage switch
+    {
+        Stage.Form => "Add a node",
+        Stage.Waiting => $"Join {(_displayName.Length > 0 ? _displayName : _nodeId)}",
+        _ => $"Approve {(_enrolled?.DisplayName ?? _nodeId)}?",
+    };
+
+    private string ConfirmLabel => _stage == Stage.Form ? "Create join command" : "Approve";
+
+    private string CancelLabel => _stage == Stage.Form ? "Cancel" : "Close";
+
+    /// <summary>Why the typed id cannot get a join token, or null (null also while the node list is being read).</summary>
+    private string? IdProblem => _existingLoaded ? IdRefusal(_nodeId, _existing) : null;
+
+    /// <summary>The live check of the node id field (the service checks again).</summary>
+    public static string? IdRefusal(string nodeId, IReadOnlyList<NodeRecord> existing)
+    {
+        ArgumentNullException.ThrowIfNull(existing);
+        if (string.IsNullOrEmpty(nodeId))
+        {
+            return "Give the node an id.";
+        }
+
+        if (!Protocol.IsValidNodeId(nodeId))
+        {
+            return "Use 1–40 lower-case letters, digits and hyphens, starting with a letter or digit.";
+        }
+
+        if (nodeId == NodeAdminService.ReservedNodeId)
+        {
+            return $"'{NodeAdminService.ReservedNodeId}' is reserved; pick another id.";
+        }
+
+        return existing.FirstOrDefault(n => string.Equals(n.Id, nodeId, StringComparison.Ordinal)) switch
+        {
+            { Revoked: true } => "This id belonged to a revoked node and cannot be used again.",
+            { Approved: true } or { CertSpkiSha256: not null } => "A node with this id is already enrolled. Re-pair it from its ⋯ menu instead.",
+            _ => null,
+        };
+    }
+
+    private bool CanConfirm => _admin is not null && !_busy && _stage switch
+    {
+        Stage.Form => _loginEnabled && _existingLoaded && IdProblem is null && _nodeId.Length > 0,
+        Stage.Enrolled => _enrolled?.PendingCertSpkiSha256 is not null,
+        _ => false,
+    };
+
+    private async Task ConfirmAsync()
+    {
+        if (_admin is null)
+        {
+            return;
+        }
+
+        _error = null;
+        if (_stage == Stage.Form)
+        {
+
+            _busy = true;
+            try
+            {
+                _issuedAt = _time.GetUtcNow();
+                _issued = await _admin.CreateJoinTokenAsync(new JoinTokenCreateRequest
+                {
+                    NodeId = _nodeId,
+                    DisplayName = _displayName.Trim().Length == 0 ? null : _displayName.Trim(),
+                    TtlMinutes = _ttl,
+
+                }, Caller);
+                _now = _time.GetUtcNow();
+                _stage = Stage.Waiting;
+                StartPolling();
+                await OnChanged.InvokeAsync(null);
+            }
+            catch (NodeApiException ex)
+            {
+                _error = ex.Message;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
+            {
+                _error = $"The master could not complete this: {ex.Message}";
+            }
+            finally
+            {
+                _busy = false;
+            }
+
+            return;
+        }
+
+        if (_stage == Stage.Enrolled && _enrolled is { PendingCertSpkiSha256: { } pin } record)
+        {
+            _busy = true;
+            try
+            {
+                await _admin.ApproveAsync(record.Id, new NodeApproveRequest { ExpectedSpkiSha256 = pin }, Caller);
+                string name = record.DisplayName ?? record.Id;
+                await CloseAsync();
+                await OnChanged.InvokeAsync($"{name} is approved. The master now connects to it.");
+            }
+            catch (NodeApiException ex)
+            {
+                _error = ex.Message;
+                // The pin may have changed (the node enrolled again): show the record as it is now.
+                _enrolled = _registry is null ? _enrolled : await _registry.GetAsync(record.Id) ?? _enrolled;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
+            {
+                _error = $"The master could not complete this: {ex.Message}";
+            }
+            finally
+            {
+                _busy = false;
+            }
+        }
+    }
+
+    private async Task RejectAsync()
+    {
+        if (_admin is null || _enrolled is not { } record)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            await _admin.RejectAsync(record.Id, Caller);
+            await CloseAsync();
+            await OnChanged.InvokeAsync($"{record.DisplayName ?? record.Id} was rejected and removed.");
+        }
+        catch (NodeApiException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
+        {
+            _error = $"The master could not complete this: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task WithdrawAsync()
+    {
+        if (_admin is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            int expired = await _admin.ExpireJoinTokensAsync(_nodeId, Caller);
+            string id = _nodeId;
+            await CloseAsync();
+            await OnChanged.InvokeAsync(expired == 0
+                ? $"No unused join token was left for {id}."
+                : $"The join token for {id} was withdrawn; it no longer works.");
+        }
+        catch (NodeApiException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
+        {
+            _error = $"The master could not complete this: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Reads the node's record: a pending key from an enrollment after the token was made moves on to approval.</summary>
+    private async Task CheckAsync()
+    {
+        if (_registry is null || _stage != Stage.Waiting || _issued is null)
+        {
+            return;
+        }
+
+        _now = _time.GetUtcNow();
+        NodeRecord? record;
+        try
+        {
+            record = await _registry.GetAsync(_issued.NodeId);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _error = $"Could not read the node: {ex.Message}";
+            return;
+        }
+
+        if (record is { Revoked: false, Approved: false, PendingCertSpkiSha256: not null } && record.EnrolledAt >= _issuedAt - ClockSkew)
+        {
+            _enrolled = record;
+            _stage = Stage.Enrolled;
+            _error = null;
+            StopPolling();
+            return;
+        }
+
+        if (record is { Approved: true })
+        {
+            // Approved meanwhile (another tab, or the API): nothing left to do here.
+            string name = record.DisplayName ?? record.Id;
+            await CloseAsync();
+            await OnChanged.InvokeAsync($"{name} is approved.");
+            return;
+        }
+
+        if (_now >= _issued.ExpiresAt)
+        {
+            _expired = true;
+            StopPolling();
+        }
+    }
+
+    private void StartPolling()
+    {
+        StopPolling();
+        var cts = new CancellationTokenSource();
+        _poll = cts;
+        _ = PollAsync(cts.Token);
+    }
+
+    private async Task PollAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(PollInterval);
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                await InvokeAsync(async () =>
+                {
+                    if (!ct.IsCancellationRequested)
+                    {
+                        await CheckAsync();
+                        StateHasChanged();
+                    }
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Stopped.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The circuit went away.
+        }
+    }
+
+    private void StopPolling()
+    {
+        if (_poll is { } poll)
+        {
+            _poll = null;
+            poll.Cancel();
+            poll.Dispose();
+        }
+    }
+
+    private async Task OnOpenChangedAsync(bool open)
+    {
+        if (!open)
+        {
+            await CloseAsync();
+        }
+    }
+
+    private async Task CloseAsync()
+    {
+        Reset();
+        Open = false;
+        _wasOpen = false;
+        await OpenChanged.InvokeAsync(false);
+    }
+
+    /// <summary>Back to an empty form; the token is dropped.</summary>
+    private void Reset()
+    {
+        StopPolling();
+        _loadVersion++; // a read still running belongs to an earlier open
+        _existingLoaded = false;
+        _stage = Stage.Form;
+        _nodeId = "";
+        _displayName = "";
+        _ttl = 60;
+
+        _error = null;
+        _busy = false;
+        _expired = false;
+        _issued = null;
+        _enrolled = null;
+    }
+
+    public void Dispose() => StopPolling();
+}

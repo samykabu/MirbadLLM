@@ -1,0 +1,278 @@
+[
+  {
+    "Id": "qwen36-35b-a3b-nvfp4",
+    "ServedName": "qwen36-35b-a3b",
+    "ModelPath": "Qwen3.6-35B-A3B-NVFP4",
+    "Quantization": null,
+    "KvCacheDtype": "fp8",
+    "MaxModelLen": 262144,
+    "MaxNumSeqs": 32,
+    "MaxNumBatchedTokens": 16384,
+    "MemoryBudgetGiB": 60,
+    "ToolCallParser": "qwen3_coder",
+    "ReasoningParser": "qwen3",
+    "EnablePrefixCaching": true,
+    "Speculative": {"method":"mtp","moe_backend":"triton","num_speculative_tokens":3},
+    "CudaGraphMode": "PIECEWISE",
+    "CompilationConfig": null,
+    "AsyncScheduling": true,
+    "MambaCacheMode": null,
+    "Image": null,
+    "ExtraArgs": [
+      "--trust-remote-code",
+      "--attention-backend",
+      "flashinfer",
+      "--moe-backend",
+      "marlin",
+      "--enable-chunked-prefill",
+      "--load-format",
+      "fastsafetensors"
+    ],
+    "AutoStart": true,
+    "Tags": [
+      "chat",
+      "tool-calling",
+      "reasoning"
+    ],
+    "Sources": [
+      {
+        "RepoId": "nvidia/Qwen3.6-35B-A3B-NVFP4",
+        "Folder": "Qwen3.6-35B-A3B-NVFP4",
+        "Revision": null,
+        "AllowPatterns": null
+      }
+    ]
+  },
+  {
+    "Id": "nemotron-3-5",
+    "ServedName": "nemotron-3.5",
+    "ModelPath": "Nemotron-3.5-Lightning-30B-A3B-NVFP4",
+    "Quantization": null,
+    "KvCacheDtype": "fp8",
+    "MaxModelLen": 262144,
+    "MaxNumSeqs": 16,
+    "MaxNumBatchedTokens": null,
+    "MemoryBudgetGiB": 40,
+    "ToolCallParser": "qwen3_coder",
+    "ReasoningParser": "nemotron_v3",
+    "EnablePrefixCaching": true,
+    "Speculative": {"model":"/models/Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark","num_speculative_tokens":3},
+    "CudaGraphMode": null,
+    "CompilationConfig": null,
+    "AsyncScheduling": null,
+    "MambaCacheMode": "align",
+    "Image": null,
+    "ExtraArgs": [
+      "--moe-backend",
+      "marlin",
+      "--mamba-backend",
+      "flashinfer"
+    ],
+    "AutoStart": false,
+    "Tags": [
+      "chat",
+      "reasoning"
+    ],
+    "Sources": [
+      {
+        "RepoId": "nvidia/Nemotron-3.5-Lightning-30B-A3B-NVFP4",
+        "Folder": "Nemotron-3.5-Lightning-30B-A3B-NVFP4",
+        "Revision": null,
+        "AllowPatterns": null
+      },
+      {
+        "RepoId": "nvidia/Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark",
+        "Folder": "Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark",
+        "Revision": null,
+        "AllowPatterns": null
+      }
+    ]
+  },
+  {
+    "Id": "qwen3-embedding-4b",
+    "ServedName": "qwen3-embedding-4b",
+    "ModelPath": "Qwen3-Embedding-4B",
+    "Quantization": null,
+    "KvCacheDtype": "fp8",
+    "MaxModelLen": 32768,
+    "MaxNumSeqs": 16,
+    "MaxNumBatchedTokens": null,
+    "MemoryBudgetGiB": 12,
+    "ToolCallParser": null,
+    "ReasoningParser": null,
+    "EnablePrefixCaching": false,
+    "Speculative": null,
+    "CudaGraphMode": null,
+    "CompilationConfig": null,
+    "AsyncScheduling": null,
+    "MambaCacheMode": null,
+    "Image": null,
+    "ExtraArgs": [
+      "--runner",
+      "pooling"
+    ],
+    "AutoStart": true,
+    "Tags": [
+      "embedding"
+    ],
+    "Sources": [
+      {
+        "RepoId": "Qwen/Qwen3-Embedding-4B",
+        "Folder": "Qwen3-Embedding-4B",
+        "Revision": null,
+        "AllowPatterns": null
+      }
+    ]
+  },
+  {
+    "Id": "qwen3-vl-embedding-2b",
+    "ServedName": "qwen3-vl-embedding-2b",
+    "ModelPath": "Qwen3-VL-Embedding-2B",
+    "Quantization": null,
+    "KvCacheDtype": "fp8",
+    "MaxModelLen": 32768,
+    "MaxNumSeqs": 16,
+    "MaxNumBatchedTokens": null,
+    "MemoryBudgetGiB": 8,
+    "ToolCallParser": null,
+    "ReasoningParser": null,
+    "EnablePrefixCaching": false,
+    "Speculative": null,
+    "CudaGraphMode": null,
+    "CompilationConfig": null,
+    "AsyncScheduling": null,
+    "MambaCacheMode": null,
+    "Image": null,
+    "ExtraArgs": [
+      "--runner",
+      "pooling",
+      "--trust-remote-code"
+    ],
+    "AutoStart": true,
+    "Tags": [
+      "embedding",
+      "vision"
+    ],
+    "Sources": []
+  },
+  {
+    "Id": "ov-intent-analysis",
+    "ServedName": "ov-intent-analysis",
+    "ModelPath": "Qwen3-4B-Instruct-2507-FP8",
+    "Quantization": null,
+    "KvCacheDtype": "fp8",
+    "MaxModelLen": 32768,
+    "MaxNumSeqs": 8,
+    "MaxNumBatchedTokens": null,
+    "MemoryBudgetGiB": 10,
+    "ToolCallParser": "hermes",
+    "ReasoningParser": null,
+    "EnablePrefixCaching": true,
+    "Speculative": null,
+    "CudaGraphMode": null,
+    "CompilationConfig": null,
+    "AsyncScheduling": null,
+    "MambaCacheMode": null,
+    "Image": null,
+    "ExtraArgs": [],
+    "AutoStart": true,
+    "Tags": [
+      "chat"
+    ],
+    "Sources": []
+  },
+  {
+    "Id": "qwen38-27b-nvfp4",
+    "ServedName": "qwen38-27b",
+    "ModelPath": "Qwen3.8-27B-NVFP4",
+    "Quantization": null,
+    "KvCacheDtype": "fp8",
+    "MaxModelLen": 131072,
+    "MaxNumSeqs": 4,
+    "MaxNumBatchedTokens": 8192,
+    "MemoryBudgetGiB": 30,
+    "ToolCallParser": "qwen3_coder",
+    "ReasoningParser": "qwen3",
+    "EnablePrefixCaching": true,
+    "Speculative": {"method":"mtp","num_speculative_tokens":2},
+    "CudaGraphMode": "PIECEWISE",
+    "CompilationConfig": {"mode":3},
+    "AsyncScheduling": null,
+    "MambaCacheMode": null,
+    "Image": null,
+    "ExtraArgs": [
+      "--trust-remote-code",
+      "--async-scheduling",
+      "--speculative-config",
+      "{\"method\":\"mtp\",\"num_speculative_tokens\":5}"
+    ],
+    "AutoStart": false,
+    "Tags": [
+      "chat"
+    ],
+    "Sources": []
+  },
+  {
+    "Id": "qwen3-embedding",
+    "ServedName": "qwen3-embedding-8b",
+    "ModelPath": "Qwen3-Embedding-8B",
+    "Quantization": null,
+    "KvCacheDtype": "fp8",
+    "MaxModelLen": 32768,
+    "MaxNumSeqs": 16,
+    "MaxNumBatchedTokens": null,
+    "MemoryBudgetGiB": 24,
+    "ToolCallParser": null,
+    "ReasoningParser": null,
+    "EnablePrefixCaching": false,
+    "Speculative": null,
+    "CudaGraphMode": null,
+    "CompilationConfig": null,
+    "AsyncScheduling": null,
+    "MambaCacheMode": null,
+    "Image": null,
+    "ExtraArgs": [
+      "--runner",
+      "pooling"
+    ],
+    "AutoStart": false,
+    "Tags": [
+      "embedding"
+    ],
+    "Sources": []
+  },
+  {
+    "Id": "ornith-9b-fp8",
+    "ServedName": "Ornith-Uncensored-FP8",
+    "ModelPath": "Ornith-1.5-9B-uncensored",
+    "Quantization": "fp8",
+    "KvCacheDtype": "fp8",
+    "MaxModelLen": 262144,
+    "MaxNumSeqs": 16,
+    "MaxNumBatchedTokens": null,
+    "MemoryBudgetGiB": 36,
+    "ToolCallParser": "qwen3_coder",
+    "ReasoningParser": "qwen3",
+    "EnablePrefixCaching": true,
+    "Speculative": null,
+    "CudaGraphMode": null,
+    "CompilationConfig": null,
+    "AsyncScheduling": null,
+    "MambaCacheMode": null,
+    "Image": "local/vllm-ornith:0.11",
+    "ExtraArgs": [],
+    "AutoStart": false,
+    "Tags": [
+      "chat",
+      "uncensored"
+    ],
+    "Sources": [
+      {
+        "RepoId": "ornith-ai/Ornith-1.5-9B",
+        "Folder": "Ornith-1.5-9B-uncensored",
+        "Revision": null,
+        "AllowPatterns": null
+      }
+    ]
+  }
+]

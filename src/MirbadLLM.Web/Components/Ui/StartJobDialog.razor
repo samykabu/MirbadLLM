@@ -1,0 +1,145 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using MirbadLLM.Orchestration.Benchmarking
+@implements IDisposable
+@inject ModelJobService Jobs
+@inject IServiceProvider Services
+@* Confirms a benchmark or tuning run. States what pauses (503) for its duration: the whole /v1 API (a global window,
+   the single DGX), or only the models on the job's node (a node-scoped window, D83/D101; decided as the job will be),
+   and first samples the GPU of the model's node for a few seconds (MN-124): other GPU work (ComfyUI, Ollama, LM Studio)
+   cannot be paused by MirbadLLM, so a busy GPU is named before the user decides to run anyway. *@
+<ConfirmDialog @bind-Open="_open" Title="@Title" ConfirmLabel="@ConfirmLabel" ConfirmDisabled="_checking"
+               OnConfirm="ConfirmAsync" OnCancel="CancelCheck" TestId="@TestId">
+    @ChildContent
+    <p data-testid="@($"{TestId}-maintenance")">
+        @if (_scopedNode is { } node)
+        {
+            <span>External API calls to the models on node <strong>@node</strong> will be refused with 503 until it finishes (<span class="num">@Estimate</span>), except models set to keep serving during jobs. Other nodes keep serving; the admin UI keeps working.</span>
+        }
+        else
+        {
+            <span>External API calls will be refused with 503 until it finishes (<span class="num">@Estimate</span>). The admin UI keeps working.</span>
+        }
+    </p>
+    @if (_checking)
+    {
+        <p class="muted" role="status" data-testid="@($"{TestId}-gpu-checking")">
+            <Icon Name="state-starting" Class="icon--spin" /> Checking that the GPU is idle (5 seconds)…
+        </p>
+    }
+    else if (_reading is { Busy: true } busy)
+    {
+        <div class="callout callout--busy" role="alert" data-testid="@($"{TestId}-gpu-busy")">
+            <Icon Name="warning" />
+            <div class="callout-body">
+                <span class="callout-title">Other GPU work is active</span>
+                <span>
+                    The GPU is <span class="num">@UiFormat.Number(busy.AveragePercent)%</span> busy with work outside MirbadLLM
+                    (ComfyUI, Ollama or LM Studio, for example). Results will be marked noisy.
+                    Stop those on the <a href="services">Services</a> page first, or run anyway.
+                </span>
+            </div>
+        </div>
+    }
+    else if (_reading is { AveragePercent: { } idle })
+    {
+        <p class="quiet-note" data-testid="@($"{TestId}-gpu-idle")"><Icon Name="check" /> GPU idle: <span class="num">@UiFormat.Number(idle)%</span> over 5 seconds.</p>
+    }
+    else if (_reading is not null)
+    {
+        <p class="muted" data-testid="@($"{TestId}-gpu-unknown")">No GPU telemetry on this host, so the idle check was skipped.</p>
+    }
+</ConfirmDialog>
+
+@code {
+    private bool _open;
+    private bool _checking;
+    private GpuIdleReading? _reading;
+    private CancellationTokenSource? _checkCts;
+    private string? _scopedNode;
+
+    /// <summary>The model the job runs on: its node is the one sampled and, with node-scoped windows, the one paused.</summary>
+    [Parameter]
+    public string? ModelId { get; set; }
+
+    [Parameter, EditorRequired]
+    public string Title { get; set; } = "";
+
+    [Parameter, EditorRequired]
+    public string ConfirmLabel { get; set; } = "";
+
+    /// <summary>How long the job is expected to take, e.g. "about 7 min".</summary>
+    [Parameter]
+    public string Estimate { get; set; } = "";
+
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    [Parameter]
+    public EventCallback OnConfirm { get; set; }
+
+    [Parameter]
+    public string TestId { get; set; } = "start-job-dialog";
+
+    /// <summary>The last idle reading (null until a check completed).</summary>
+    public GpuIdleReading? Reading => _reading;
+
+    public void Show()
+    {
+        _open = true;
+        _checking = true;
+        _reading = null;
+        _checkCts?.Cancel();
+        _checkCts?.Dispose();
+        _checkCts = new CancellationTokenSource();
+        _scopedNode = null;
+        _ = CheckAsync(_checkCts.Token);
+        StateHasChanged();
+    }
+
+    private async Task CheckAsync(CancellationToken ct)
+    {
+        try
+        {
+            _scopedNode = await ScopedNodeAsync(ct);
+            if (_scopedNode is not null)
+            {
+                await InvokeAsync(StateHasChanged); // the pause text before the 5 s GPU sample ends
+            }
+
+            var reading = await Jobs.SampleGpuIdleAsync(ModelId, ct);
+            _reading = reading;
+            _checking = false;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // Dialog closed.
+        }
+    }
+
+    /// <summary>The model's node when a job starting now opens a node-scoped window (the job decides the same way); else null.</summary>
+    private async Task<string?> ScopedNodeAsync(CancellationToken ct)
+    {
+        if (ModelId is null || Services.GetService<MirbadLLM.Orchestration.Multinode.NodeScopedMaintenancePolicy>() is not { } policy
+            || !await policy.IsOnAsync(ct))
+        {
+            return null;
+        }
+
+        return Services.GetService<IModelRegistry>() is { } registry ? (await registry.GetAsync(ModelId, ct))?.Placement?.NodeId : null;
+    }
+
+    private void CancelCheck()
+    {
+        _checkCts?.Cancel();
+        _checking = false;
+    }
+
+    private Task ConfirmAsync() => OnConfirm.InvokeAsync();
+
+    public void Dispose()
+    {
+        _checkCts?.Cancel();
+        _checkCts?.Dispose();
+    }
+}

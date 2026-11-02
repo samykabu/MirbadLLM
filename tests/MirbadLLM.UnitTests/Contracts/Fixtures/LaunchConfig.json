@@ -1,0 +1,36 @@
+{
+  "kind": "container",
+  "image": "local/qwen38-vllm-dflash2:66e5414c6d75",
+  "imageDigest": "sha256:66e5414c6d75",
+  "executable": null,
+  "argv": [
+    "--model",
+    "/models/Qwen3.6-35B-A3B-NVFP4",
+    "--served-model-name",
+    "qwen36-35b"
+  ],
+  "env": {
+    "HF_HUB_OFFLINE": "1",
+    "HF_TOKEN": null
+  },
+  "mounts": [
+    {
+      "volume": "models",
+      "subPath": null,
+      "target": "/models",
+      "readOnly": true
+    }
+  ],
+  "gpus": [
+    {
+      "index": 0,
+      "uuid": "GPU-550e8400-e29b-41d4-a716-446655440000"
+    }
+  ],
+  "labels": {
+    "mirbadllm.model": "qwen36-35b",
+    "mirbadllm.served-name": "qwen36-35b"
+  },
+  "executionFingerprint": "41ab5c8d",
+  "createdAt": "2026-10-03T10:00:00+00:00"
+}

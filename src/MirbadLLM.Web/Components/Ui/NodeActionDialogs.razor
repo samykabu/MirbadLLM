@@ -1,0 +1,507 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using System.Globalization
+@using System.Security.Claims
+@using MirbadLLM.Orchestration
+@using MirbadLLM.Orchestration.Audit
+@using MirbadLLM.Orchestration.Nodes
+@using MirbadLLM.Orchestration.Pki
+@using MirbadLLM.Web.Api
+@using MirbadLLM.Web.Components.Pages
+@inject IServiceProvider ServiceProvider
+@* The confirm dialogs behind a node's actions (design §12.1), shared by the Nodes list ("⋯" row menu) and the node
+   detail page: approve (shows the pending key's fingerprint and pins it), reject, drain / undrain, rotate the agent
+   certificate, re-pair (rekey: shows the uid and the full command), and revoke (typed node id + signed-in session, and the
+   models it unplaces). Every write goes through NodeAdminService (MN-102), the same code as /api/nodes, so the audit
+   lines, refusals and session checks are the API's. Dialogs stay open until the server confirms, so a
+   refusal renders in place; tokens are cleared when the dialog closes. *@
+<div class="node-actions">
+<ConfirmDialog Open="@(Request is not null)" OpenChanged="OnOpenChangedAsync" Title="@Title" ConfirmLabel="@ConfirmLabel"
+               CancelLabel="@CancelLabel" Destructive="@Destructive" DangerFill="@(Request?.Action == NodeAction.Revoke)" ConfirmDisabled="@(!CanConfirm)" CloseOnConfirm="false"
+               OnConfirm="ConfirmAsync" TestId="@DialogTestId">
+    @if (Request is { } request)
+    {
+        var row = request.Row;
+        @switch (request.Action)
+        {
+            case NodeAction.Approve:
+                @if (row.Record is { PendingCertSpkiSha256: not null } pending)
+                {
+                    <p>Approve <strong>@row.Name</strong> so this master starts sending it commands? Check that these details match the machine you are adding.</p>
+                    <PendingNodeFacts Record="pending" LiveCapabilities="row.Capabilities" TestId="node-approve-facts" />
+                    <p class="muted">The approval pins this key. If the node enrolled again with another key since this dialog opened, the approval is refused.</p>
+                }
+                else
+                {
+                    <p data-testid="node-approve-not-enrolled">@row.Name has not enrolled yet, so there is nothing to approve. Run the join command on the machine first.</p>
+                }
+                break;
+
+            case NodeAction.Reject:
+                <p>
+                    Reject <strong>@row.Name</strong>? Its enrollment request@(row.Record?.PendingCertSpkiSha256 is null ? "" : " and pending key") are deleted and its
+                    unused join tokens stop working. The agent stays installed but cannot connect until you give it a new join token.
+                </p>
+                break;
+
+            case NodeAction.Drain:
+                <p>
+                    Drain <strong>@row.Name</strong>? No new model starts or placements go to this node.
+                    @RunningText(row) keep serving until you stop or move them.
+                </p>
+                break;
+
+            case NodeAction.Undrain:
+                <p>Undrain <strong>@row.Name</strong>? Models can be started on and placed on this node again.</p>
+                break;
+
+            case NodeAction.RotateCertificate:
+                <p>
+                    Rotate the agent certificate of <strong>@row.Name</strong>? The agent makes a new key, this master signs a new certificate for it,
+                    and both switch to it. Models keep serving; it takes a few seconds.
+                </p>
+                <p class="muted">Current certificate: expires <span class="num">@Nodes.CertExpiryText(row.CertNotAfter, _now)</span>.</p>
+                @if (_rotating)
+                {
+                    <p class="muted loading-line" role="status" data-testid="node-rotate-running"><Icon Name="refresh" Class="icon--spin" /> Rotating…</p>
+                }
+                break;
+
+            case NodeAction.Rekey:
+                @if (_rekey is { } dgxToken && IsContainerAgent(row) && row.Record is { } dgxRecord)
+                {
+                    <p>
+                        <strong>@row.Name</strong> runs its agent as a container (<code>deploy/compose.multinode.yaml</code>). Run these lines on it, in the
+                        deploy checkout: they stop the agent container, re-pair it inside the agent image against its state volume (same node uid, new key),
+                        and start it again. The last-but-two line asks for the token. Do not use <code>install-agent.sh</code> there.
+                    </p>
+                    <pre class="code-block join-code" data-testid="node-rekey-container"><code>@ContainerAgentRekey.Script(dgxRecord.Id, dgxRecord.Uid, dgxToken.CaHash)</code></pre>
+                    <div class="join-token-row">
+                        <span class="field-label">Rekey token</span>
+                        <pre class="code-block join-code" data-testid="node-rekey-container-token"><code>@dgxToken.Token</code></pre>
+                    </div>
+                    <p class="muted">Node uid <code class="num">@dgxRecord.Uid</code> · expires <span class="num">@JoinCommandView.ExpiryText(dgxToken.ExpiresAt, _now)</span>.
+                        The node keeps its approval and its models; only its key and certificate change.</p>
+                }
+                else if (_rekey is { } issued)
+                {
+                    <p>
+                        Run this on <strong>@row.Name</strong>. It stops the agent, re-pairs it with a new key under the same node uid and starts it again;
+                        if the re-pair fails, the agent restarts with its old identity.
+                        @if (IsWindowsNode(row))
+                        {
+                            <span data-testid="node-rekey-windows-note">Its models keep running while the service is stopped (they are separate processes) and the agent takes them over again when it starts.</span>
+                        }
+                    </p>
+                    <JoinCommandView Response="issued" NodeUid="@row.Record?.Uid" Now="_now" InitialOs="@NodeOs(row)" TestId="node-rekey-command" />
+                    @if (row.Record is { Approved: false })
+                    {
+                        <p class="muted" data-testid="node-rekey-pending-note">This node is still waiting for approval. After it re-pairs it still needs approval here.</p>
+                    }
+                    else
+                    {
+                        <p class="muted">The node keeps its approval and its models; only its key and certificate change.</p>
+                    }
+                }
+                else
+                {
+                    <p>
+                        Re-pair <strong>@row.Name</strong> with a new key, keeping its node uid (<code class="num">@(row.Record?.Uid ?? UiFormat.Missing)</code>), state and models.
+                        Use it when the agent lost its key or its certificate expired. This creates a one-time rekey token.
+                    </p>
+                    @LifetimeField("node-rekey-ttl")
+                    @LoginRequirement("node-rekey-password")
+                }
+                break;
+
+            case NodeAction.Revoke:
+                var placed = PlacedIds(row.Id);
+                <p data-testid="node-revoke-consequence">
+                    Revoke node <strong>@row.Id</strong>?
+                    @if (placed.Count == 0)
+                    {
+                        <span>No models are placed there.</span>
+                    }
+                    else
+                    {
+                        <span>@Plural(placed.Count, "model", "models") placed there become unplaced and stop serving.</span>
+                    }
+                    The agent keeps running but the master will no longer talk to it. A revoked id cannot be used again.
+                </p>
+                @if (placed.Count > 0)
+                {
+                    <div class="form-check">
+                        <input id="node-revoke-unplace" type="checkbox" class="form-check-input" data-testid="node-revoke-unplace"
+                               checked="@_unplace" @onchange="e => _unplace = e.Value is true" />
+                        <label class="form-check-label" for="node-revoke-unplace">Stop and unplace @string.Join(", ", placed)</label>
+                    </div>
+                }
+                <p class="muted">While the revoke runs the node is drained; if it is refused, the drain is lifted again.</p>
+                <div class="field confirm-field">
+                    <label class="field-label" for="node-revoke-typed">Type <code>@row.Id</code> to confirm</label>
+                    <input id="node-revoke-typed" class="form-control" autocomplete="off" autocapitalize="off" spellcheck="false"
+                           data-testid="node-revoke-typed" value="@_typed" @oninput="e => _typed = e.Value?.ToString() ?? string.Empty" />
+                </div>
+                @LoginRequirement("node-revoke-password")
+                break;
+        }
+
+        @if (_error is not null)
+        {
+            <div class="callout callout--failed" role="alert" data-testid="node-action-error">
+                <Icon Name="state-failed" />
+                <div class="callout-body">@_error</div>
+            </div>
+        }
+    }
+</ConfirmDialog>
+</div>
+
+@code {
+    private static readonly int[] Lifetimes = [10, 30, 60, 240, 1440];
+
+    private NodeAdminService? _admin;
+    private CertificateRotationService? _rotation;
+    private TimeProvider _time = TimeProvider.System;
+    private bool _loginEnabled;
+    private DateTimeOffset _now;
+    private string _typed = "";
+    private bool _unplace;
+    private int _ttl = 60;
+    private string? _error;
+    private bool _rotating;
+    private JoinTokenCreateResponse? _rekey;
+    private NodeActionRequest? _shown;
+
+    /// <summary>The action to confirm; null = no dialog.</summary>
+    [Parameter]
+    public NodeActionRequest? Request { get; set; }
+
+    [Parameter]
+    public EventCallback<NodeActionRequest?> RequestChanged { get; set; }
+
+    /// <summary>Who acts (audit actor, re-auth budget, enroll URL host).</summary>
+    [Parameter, EditorRequired]
+    public NodeApiCaller Caller { get; set; } = null!;
+
+    /// <summary>The model list, for the models a revoke unplaces.</summary>
+    [Parameter]
+    public IReadOnlyList<ModelDefinition>? Models { get; set; }
+
+    /// <summary>Raised after an action succeeded, with a sentence for the page's status line.</summary>
+    [Parameter]
+    public EventCallback<NodeActionResult> OnDone { get; set; }
+
+    private string _bootstrapNodeId = RegistryMigrationOptions.DefaultBootstrapNodeId;
+
+    /// <summary>The bootstrap node is the DGX's container agent (topology a): its re-pair runs in the agent image (D105).</summary>
+    private bool IsContainerAgent(Nodes.NodeRow row) =>
+        string.Equals(row.Record?.Id, _bootstrapNodeId, StringComparison.Ordinal);
+
+    /// <summary>The node's OS family as the join command's tabs name it (<c>linux</c>, <c>windows</c>, <c>macos</c>), or null when unknown.</summary>
+    public static string? NodeOs(Nodes.NodeRow row)
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return row.Capabilities?.Os.Family?.Trim().ToLowerInvariant() switch
+        {
+            "windows" => "windows",
+            "macos" => "macos",
+            "linux" => "linux",
+            _ => null,
+        };
+    }
+
+    private static bool IsWindowsNode(Nodes.NodeRow row) => NodeOs(row) == "windows";
+
+    protected override void OnInitialized()
+    {
+        _bootstrapNodeId = ServiceProvider.GetService<Microsoft.Extensions.Options.IOptions<RegistryMigrationOptions>>()?.Value.EffectiveBootstrapNodeId
+            ?? RegistryMigrationOptions.DefaultBootstrapNodeId;
+        _admin = ServiceProvider.GetService<NodeAdminService>();
+        _rotation = ServiceProvider.GetService<CertificateRotationService>();
+        _time = ServiceProvider.GetService<TimeProvider>() ?? TimeProvider.System;
+        _loginEnabled = ServiceProvider.GetService<IAdminReauthenticator>()?.LoginEnabled ?? false;
+    }
+
+    protected override void OnParametersSet()
+    {
+        _now = _time.GetUtcNow();
+        if (!ReferenceEquals(Request, _shown))
+        {
+            // A new action (or none): start clean, never carry a token over.
+            _shown = Request;
+            Clear();
+        }
+    }
+
+    private void Clear()
+    {
+        _typed = "";
+        _unplace = false;
+        _ttl = 60;
+        _error = null;
+        _rotating = false;
+        _rekey = null;
+    }
+
+    private bool RequiresSession => Request?.Action is NodeAction.Revoke || (Request?.Action is NodeAction.Rekey && _rekey is null);
+
+    private string DialogTestId => Request?.Action switch
+    {
+        NodeAction.Approve => "node-approve",
+        NodeAction.Reject => "node-reject",
+        NodeAction.Drain => "node-drain",
+        NodeAction.Undrain => "node-undrain",
+        NodeAction.RotateCertificate => "node-rotate",
+        NodeAction.Rekey => "node-rekey",
+        NodeAction.Revoke => "node-revoke",
+        _ => "node-action",
+    };
+
+    private string Title => Request is not { } r ? "" : r.Action switch
+    {
+        NodeAction.Approve => $"Approve {r.Row.Name}?",
+        NodeAction.Reject => $"Reject {r.Row.Name}?",
+        NodeAction.Drain => $"Drain {r.Row.Name}?",
+        NodeAction.Undrain => $"Undrain {r.Row.Name}?",
+        NodeAction.RotateCertificate => $"Rotate the certificate of {r.Row.Name}?",
+        NodeAction.Rekey => _rekey is null ? $"Re-pair {r.Row.Name}?" : $"Re-pair command for {r.Row.Name}",
+        NodeAction.Revoke => $"Revoke node {r.Row.Id}?",
+        _ => "",
+    };
+
+    private string ConfirmLabel => Request?.Action switch
+    {
+        NodeAction.Approve => "Approve",
+        NodeAction.Reject => "Reject",
+        NodeAction.Drain => "Drain",
+        NodeAction.Undrain => "Undrain",
+        NodeAction.RotateCertificate => "Rotate certificate",
+        NodeAction.Rekey => _rekey is null ? "Create rekey command" : "Done",
+        NodeAction.Revoke => "Revoke node",
+        _ => "OK",
+    };
+
+    private string CancelLabel => Request?.Action is NodeAction.Rekey && _rekey is not null ? "Close" : "Cancel";
+
+    private bool Destructive => Request?.Action is NodeAction.Reject or NodeAction.Revoke;
+
+    private bool CanConfirm
+    {
+        get
+        {
+            if (Request is not { } r || _admin is null || _rotating)
+            {
+                return false;
+            }
+
+            if (RequiresSession && !_loginEnabled)
+            {
+                return false;
+            }
+
+            return r.Action switch
+            {
+                NodeAction.Approve => r.Row.Record?.PendingCertSpkiSha256 is not null,
+                NodeAction.RotateCertificate => _rotation is not null,
+                NodeAction.Revoke => string.Equals(_typed.Trim(), r.Row.Id, StringComparison.Ordinal) && (_unplace || PlacedIds(r.Row.Id).Count == 0),
+                _ => true,
+            };
+        }
+    }
+
+    private List<string> PlacedIds(string nodeId) =>
+        [.. (Models ?? []).Where(m => string.Equals(m.Placement?.NodeId, nodeId, StringComparison.Ordinal)).Select(m => m.Id).Order(StringComparer.Ordinal)];
+
+    private static string Plural(int count, string one, string many) =>
+        string.Create(CultureInfo.InvariantCulture, $"{count} {(count == 1 ? one : many)}");
+
+    private static string RunningText(Nodes.NodeRow row)
+    {
+        int running = row.Runtimes.Count(r => r.State is ModelState.Starting or ModelState.Ready);
+        return running switch
+        {
+            0 => "Models already placed there",
+            1 => "The 1 model running there will",
+            _ => string.Create(CultureInfo.InvariantCulture, $"The {running} models running there"),
+        };
+    }
+
+    private RenderFragment LoginRequirement(string id) => __builder =>
+    {
+        @if (!_loginEnabled)
+        {
+            <div class="callout callout--busy" data-testid="@($"{id}-disabled")">
+                <Icon Name="lock" />
+                <div class="callout-body"><span>This action needs admin login. Set <code>MirbadLLM__AdminPassword</code> and restart MirbadLLM first.</span></div>
+            </div>
+        }
+
+    };
+
+    private RenderFragment LifetimeField(string id) => __builder =>
+    {
+        <div class="field">
+            <label class="field-label" for="@id">Token lifetime</label>
+            <select id="@id" class="form-select" data-testid="@id" value="@_ttl.ToString(CultureInfo.InvariantCulture)"
+                    @onchange="e => _ttl = int.TryParse(e.Value?.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int v) ? v : 60">
+                @foreach (int minutes in Lifetimes)
+                {
+                    <option value="@minutes.ToString(CultureInfo.InvariantCulture)">@LifetimeText(minutes)</option>
+                }
+            </select>
+        </div>
+    };
+
+    /// <summary>"10 minutes", "1 hour", "24 hours".</summary>
+    public static string LifetimeText(int minutes) => minutes switch
+    {
+        < 60 => string.Create(CultureInfo.InvariantCulture, $"{minutes} minutes"),
+        60 => "1 hour",
+        _ => string.Create(CultureInfo.InvariantCulture, $"{minutes / 60} hours"),
+    };
+
+    private async Task ConfirmAsync()
+    {
+        if (Request is not { } request || _admin is null)
+        {
+            return;
+        }
+
+        var row = request.Row;
+
+        _error = null;
+        try
+        {
+            string? message = null;
+            switch (request.Action)
+            {
+                case NodeAction.Approve:
+                    await _admin.ApproveAsync(row.Id, new NodeApproveRequest { ExpectedSpkiSha256 = row.Record?.PendingCertSpkiSha256 }, Caller);
+                    message = $"{row.Name} is approved. The master now connects to it.";
+                    break;
+                case NodeAction.Reject:
+                    await _admin.RejectAsync(row.Id, Caller);
+                    message = $"{row.Name} was rejected and removed.";
+                    break;
+                case NodeAction.Drain:
+                    await _admin.SetDrainingAsync(row.Id, true, Caller);
+                    message = $"{row.Name} is draining: no new starts or placements go there.";
+                    break;
+                case NodeAction.Undrain:
+                    await _admin.SetDrainingAsync(row.Id, false, Caller);
+                    message = $"{row.Name} is no longer draining.";
+                    break;
+                case NodeAction.RotateCertificate:
+                    message = await RotateAsync(row);
+                    if (message is null)
+                    {
+                        return;
+                    }
+
+                    break;
+                case NodeAction.Rekey:
+                    if (_rekey is null)
+                    {
+                        _now = _time.GetUtcNow();
+                        _rekey = await _admin.CreateJoinTokenAsync(
+                            new JoinTokenCreateRequest { NodeId = row.Id, Rekey = true, TtlMinutes = _ttl }, Caller);
+                        return; // stay open: the operator copies the command
+                    }
+
+                    break;
+                case NodeAction.Revoke:
+                    var result = await _admin.RevokeAsync(row.Id, new NodeRevokeRequest { Confirm = _typed.Trim(), UnplaceModels = _unplace }, Caller);
+                    message = result.UnplacedModelIds.Count == 0
+                        ? $"Node {row.Id} is revoked."
+                        : $"Node {row.Id} is revoked; unplaced {string.Join(", ", result.UnplacedModelIds)}.";
+                    break;
+            }
+
+            var done = new NodeActionResult(request.Action, row.Id, message, Removed: request.Action is NodeAction.Reject or NodeAction.Revoke);
+            await CloseAsync();
+            if (message is not null)
+            {
+                await OnDone.InvokeAsync(done);
+            }
+        }
+        catch (NodeApiException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or TimeoutException)
+        {
+            _error = $"The master could not complete this: {ex.Message}";
+        }
+    }
+
+    /// <summary>Rotates the agent certificate under the caller's audit scope; null (and an error shown) when it failed.</summary>
+    private async Task<string?> RotateAsync(Nodes.NodeRow row)
+    {
+        if (_rotation is null)
+        {
+            _error = "Certificate rotation is not running on this master.";
+            return null;
+        }
+
+        _rotating = true;
+        StateHasChanged();
+        try
+        {
+            using var scope = AuditScope.Begin(Caller.Actor);
+            CertificateRotationRecord rotated = await _rotation.RotateAsync(row.Id);
+            return rotated.Stage switch
+            {
+                CertificateRotationStage.Committed => rotated.NewCertNotAfter is { } until
+                    ? $"The certificate of {row.Name} was rotated; it now expires {until.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}."
+                    : $"The certificate of {row.Name} was rotated.",
+                CertificateRotationStage.Aborted => $"The agent on {row.Name} abandoned the rotation; it keeps its current certificate.",
+                _ => $"The rotation of {row.Name} is at {Nodes.RotationText(rotated.Stage).ToLowerInvariant()}; it resumes on its own.",
+            };
+        }
+        catch (Exception ex) when (ex is CertificateRotationException or InvalidOperationException or KeyNotFoundException
+            or MirbadLLM.Agent.Contracts.AgentException or MirbadLLM.Agent.Contracts.AgentUnreachableException or HttpRequestException or IOException)
+        {
+            _error = $"The rotation did not finish: {ex.Message} It resumes from where it stopped; try again later.";
+            return null;
+        }
+        finally
+        {
+            _rotating = false;
+        }
+    }
+
+    private async Task OnOpenChangedAsync(bool open)
+    {
+        if (!open)
+        {
+            await CloseAsync();
+        }
+    }
+
+    private async Task CloseAsync()
+    {
+        Clear();
+        _shown = null;
+        Request = null;
+        await RequestChanged.InvokeAsync(null);
+    }
+
+    /// <summary>
+    /// The caller of the node admin service for a page of this circuit (<see cref="AdminCallers.ResolveAsync"/>: the
+    /// circuit's signed-in user decides the actor and the re-check budget, <c>sid:{hash}</c>, W8 review MN-128); the enroll
+    /// URL host is the request's host when one is at hand, else the page's own host; the agent bundle base is likewise the
+    /// request's address, else the page's base URI (what the operator's browser uses for the UI).
+    /// </summary>
+    public static async Task<NodeApiCaller> ResolveCallerAsync(IServiceProvider services, string? pageHost, string? pageBaseUri = null)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        AdminCaller caller = await AdminCallers.ResolveAsync(services);
+        Microsoft.AspNetCore.Http.HttpContext? http = services.GetService<Microsoft.AspNetCore.Http.IHttpContextAccessor>()?.HttpContext;
+        bool hasHost = http?.Request.Host.HasValue == true;
+        string? host = hasHost ? http!.Request.Host.Host : null;
+        Uri? baseUrl = hasHost
+            ? MirbadLLM.Web.Api.AgentBundleEndpoints.RequestBase(http!)
+            : Uri.TryCreate(pageBaseUri, UriKind.Absolute, out Uri? page) ? page : null;
+        return new NodeApiCaller(caller.Actor, caller.ClientKey, host ?? pageHost, baseUrl) { User = caller.User };
+    }
+}

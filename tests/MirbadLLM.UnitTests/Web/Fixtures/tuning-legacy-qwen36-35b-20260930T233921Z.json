@@ -1,0 +1,2690 @@
+{
+  "id": "20260930T233921Z",
+  "modelId": "qwen36-35b-a3b-nvfp4",
+  "goal": "Balanced",
+  "startedAt": "2026-09-30T23:39:21.6081209+00:00",
+  "finishedAt": "2026-10-01T00:26:58.6375852+00:00",
+  "status": "Completed",
+  "baseline": {
+    "id": "qwen36-35b-a3b-nvfp4",
+    "servedName": "Qwen3.6-35B-A3B-NVFP4",
+    "modelPath": "Qwen3.6-35B-A3B-NVFP4",
+    "quantization": null,
+    "kvCacheDtype": "fp8",
+    "maxModelLen": 262144,
+    "maxNumSeqs": 8,
+    "maxNumBatchedTokens": 8192,
+    "memoryBudgetGiB": 48,
+    "toolCallParser": "qwen3_xml",
+    "reasoningParser": "qwen3",
+    "enablePrefixCaching": true,
+    "speculative": null,
+    "cudaGraphMode": null,
+    "image": null,
+    "extraArgs": [
+      "--trust-remote-code",
+      "--attention-backend",
+      "flashinfer",
+      "--moe-backend",
+      "marlin",
+      "--enable-chunked-prefill",
+      "--async-scheduling",
+      "--load-format",
+      "fastsafetensors",
+      "--speculative-config",
+      "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:3,\u0022moe_backend\u0022:\u0022triton\u0022}"
+    ],
+    "autoStart": false
+  },
+  "candidates": [
+    {
+      "index": 0,
+      "step": "Baseline",
+      "label": "Baseline (saved settings)",
+      "settings": {
+        "id": "qwen36-35b-a3b-nvfp4",
+        "servedName": "Qwen3.6-35B-A3B-NVFP4",
+        "modelPath": "Qwen3.6-35B-A3B-NVFP4",
+        "quantization": null,
+        "kvCacheDtype": "fp8",
+        "maxModelLen": 262144,
+        "maxNumSeqs": 8,
+        "maxNumBatchedTokens": 8192,
+        "memoryBudgetGiB": 48,
+        "toolCallParser": "qwen3_xml",
+        "reasoningParser": "qwen3",
+        "enablePrefixCaching": true,
+        "speculative": null,
+        "cudaGraphMode": null,
+        "image": null,
+        "extraArgs": [
+          "--trust-remote-code",
+          "--attention-backend",
+          "flashinfer",
+          "--moe-backend",
+          "marlin",
+          "--enable-chunked-prefill",
+          "--async-scheduling",
+          "--load-format",
+          "fastsafetensors",
+          "--speculative-config",
+          "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:3,\u0022moe_backend\u0022:\u0022triton\u0022}"
+        ],
+        "autoStart": false
+      },
+      "configHash": "34b57abea552b69e",
+      "outcome": "Accepted",
+      "reason": null,
+      "result": {
+        "levels": [
+          {
+            "concurrency": 1,
+            "runs": [
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.3009302,
+                "perRequestTokS": 79.51781885604795,
+                "aggregateTokS": 77.55389677733871,
+                "ttftP50": 0.0783932,
+                "ttftP95": 0.0783932,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.1916654,
+                "perRequestTokS": 81.85668352786446,
+                "aggregateTokS": 80.20890911685166,
+                "ttftP50": 0.0641464,
+                "ttftP95": 0.0641464,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.0677925,
+                "perRequestTokS": 85.08086154874488,
+                "aggregateTokS": 83.44762561353156,
+                "ttftP50": 0.0588319,
+                "ttftP95": 0.0588319,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              }
+            ],
+            "perRequestTokS": 81.85668352786446,
+            "aggregateTokS": 80.20890911685166,
+            "ttftP50": 0.0641464,
+            "ttftP95": 0.0641464,
+            "noisy": false
+          },
+          {
+            "concurrency": 4,
+            "runs": [
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 6.1771249,
+                "perRequestTokS": 54.37590272267113,
+                "aggregateTokS": 165.77291483939396,
+                "ttftP50": 1.2911249,
+                "ttftP95": 1.2979867,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.0046893,
+                "perRequestTokS": 55.01232039444601,
+                "aggregateTokS": 204.60810624148036,
+                "ttftP50": 0.1678584,
+                "ttftP95": 0.1745606,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.2325975,
+                "perRequestTokS": 56.00706897938176,
+                "aggregateTokS": 195.6963057066782,
+                "ttftP50": 0.5533658,
+                "ttftP95": 0.5537105,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              }
+            ],
+            "perRequestTokS": 55.01232039444601,
+            "aggregateTokS": 195.6963057066782,
+            "ttftP50": 0.5533658,
+            "ttftP95": 0.5537105,
+            "noisy": false
+          },
+          {
+            "concurrency": 8,
+            "runs": [
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 7.3149085,
+                "perRequestTokS": 40.26930160845578,
+                "aggregateTokS": 279.97616101418083,
+                "ttftP50": 0.744654,
+                "ttftP95": 0.7562869,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.869618,
+                "perRequestTokS": 40.23583184667504,
+                "aggregateTokS": 298.12429162727824,
+                "ttftP50": 0.1773597,
+                "ttftP95": 0.1778809,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.561183,
+                "perRequestTokS": 41.677632876758715,
+                "aggregateTokS": 312.13883228070307,
+                "ttftP50": 0.2238225,
+                "ttftP95": 0.2239155,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 40.26930160845578,
+            "aggregateTokS": 298.12429162727824,
+            "ttftP50": 0.2238225,
+            "ttftP95": 0.2239155,
+            "noisy": false
+          },
+          {
+            "concurrency": 16,
+            "runs": [
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 13.8642711,
+                "perRequestTokS": 38.87702805612872,
+                "aggregateTokS": 295.43565402439367,
+                "ttftP50": 0.1332044,
+                "ttftP95": 7.5843459,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 14.004396,
+                "perRequestTokS": 39.12628334557686,
+                "aggregateTokS": 292.4795899801748,
+                "ttftP50": 0.2601016,
+                "ttftP95": 7.5598572,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 14.2046883,
+                "perRequestTokS": 38.69731105870281,
+                "aggregateTokS": 288.35550020481617,
+                "ttftP50": 0.3149982,
+                "ttftP95": 7.7807925,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 38.87702805612872,
+            "aggregateTokS": 292.4795899801748,
+            "ttftP50": 0.2601016,
+            "ttftP95": 7.5843459,
+            "noisy": false
+          }
+        ],
+        "prefill": {
+          "promptTokens": 65496,
+          "coldSeconds": 15.7185801,
+          "cachedSeconds": 15.7327736,
+          "coldTokensPerSecond": 4166.7885765330675
+        },
+        "guardrails": {
+          "toolCallValid": true,
+          "toolCallDetail": "get_time({\u0022city\u0022: \u0022Riyadh\u0022})",
+          "qaCorrect": 8,
+          "qaTotal": 8,
+          "answers": [
+            {
+              "question": "What is 17 multiplied by 23? Reply with only the number.",
+              "expected": "391",
+              "answer": "391",
+              "correct": true
+            },
+            {
+              "question": "What is 1024 divided by 16? Reply with only the number.",
+              "expected": "64",
+              "answer": "64",
+              "correct": true
+            },
+            {
+              "question": "How many centimeters are in 3.5 meters? Reply with only the number.",
+              "expected": "350",
+              "answer": "350",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(len(\u0027mirbadllm\u0027))\n\nReply with only the output.",
+              "expected": "11",
+              "answer": "11",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(sum(range(5)))\n\nReply with only the output.",
+              "expected": "10",
+              "answer": "10",
+              "correct": true
+            },
+            {
+              "question": "What does this JavaScript code print?\n\nconsole.log([1, 2, 3].map(x =\u003E x * 2).join(\u0027,\u0027))\n\nReply with only the output.",
+              "expected": "2,4,6",
+              "answer": "2,4,6",
+              "correct": true
+            },
+            {
+              "question": "What is the chemical symbol for gold? Reply with only the symbol.",
+              "expected": "Au",
+              "answer": "Au",
+              "correct": true
+            },
+            {
+              "question": "What is the capital city of Australia? Reply with only the city name.",
+              "expected": "Canberra",
+              "answer": "Canberra",
+              "correct": true
+            }
+          ]
+        },
+        "noise": {
+          "noisy": false,
+          "reasons": [],
+          "idleGpuPercent": 0,
+          "otherModelsMaxRunning": {
+            "qwen3-embedding-4b": 0,
+            "qwen3-embedding-0-6b": 0,
+            "qwen38-27b-nvfp4": 0,
+            "qwen3-vl-embedding-2b": 0,
+            "ov-intent-analysis": 0
+          }
+        }
+      },
+      "score": 1,
+      "startupSeconds": null
+    },
+    {
+      "index": 1,
+      "step": "Speculative decoding",
+      "label": "MTP \u00D7 1",
+      "settings": {
+        "id": "qwen36-35b-a3b-nvfp4",
+        "servedName": "Qwen3.6-35B-A3B-NVFP4",
+        "modelPath": "Qwen3.6-35B-A3B-NVFP4",
+        "quantization": null,
+        "kvCacheDtype": "fp8",
+        "maxModelLen": 262144,
+        "maxNumSeqs": 8,
+        "maxNumBatchedTokens": 8192,
+        "memoryBudgetGiB": 48,
+        "toolCallParser": "qwen3_xml",
+        "reasoningParser": "qwen3",
+        "enablePrefixCaching": true,
+        "speculative": {
+          "method": "mtp",
+          "numSpeculativeTokens": 1
+        },
+        "cudaGraphMode": "PIECEWISE",
+        "image": null,
+        "extraArgs": [
+          "--trust-remote-code",
+          "--attention-backend",
+          "flashinfer",
+          "--moe-backend",
+          "marlin",
+          "--enable-chunked-prefill",
+          "--async-scheduling",
+          "--load-format",
+          "fastsafetensors",
+          "--speculative-config",
+          "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:3,\u0022moe_backend\u0022:\u0022triton\u0022}"
+        ],
+        "autoStart": false
+      },
+      "configHash": "885c8568d8a13a45",
+      "outcome": "Accepted",
+      "reason": null,
+      "result": {
+        "levels": [
+          {
+            "concurrency": 1,
+            "runs": [
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.9771025,
+                "perRequestTokS": 88.57865138934058,
+                "aggregateTokS": 85.98964933185874,
+                "ttftP50": 0.0759984,
+                "ttftP95": 0.0759984,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.0098136,
+                "perRequestTokS": 86.8571051673633,
+                "aggregateTokS": 85.05510108665865,
+                "ttftP50": 0.0624086,
+                "ttftP95": 0.0624086,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.1591851,
+                "perRequestTokS": 83.16988771837741,
+                "aggregateTokS": 81.03355514053291,
+                "ttftP50": 0.0811021,
+                "ttftP95": 0.0811021,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              }
+            ],
+            "perRequestTokS": 86.8571051673633,
+            "aggregateTokS": 85.05510108665865,
+            "ttftP50": 0.0759984,
+            "ttftP95": 0.0759984,
+            "noisy": false
+          },
+          {
+            "concurrency": 4,
+            "runs": [
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 6.1965436,
+                "perRequestTokS": 52.37400586618009,
+                "aggregateTokS": 165.2534164368665,
+                "ttftP50": 1.3902962,
+                "ttftP95": 1.3903382,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.0453582,
+                "perRequestTokS": 55.72968660629467,
+                "aggregateTokS": 202.95883055438958,
+                "ttftP50": 0.1414976,
+                "ttftP95": 0.1415974,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.3733675,
+                "perRequestTokS": 55.12140798742142,
+                "aggregateTokS": 190.56950785517648,
+                "ttftP50": 0.5591211,
+                "ttftP95": 0.5689307,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              }
+            ],
+            "perRequestTokS": 55.12140798742142,
+            "aggregateTokS": 190.56950785517648,
+            "ttftP50": 0.5591211,
+            "ttftP95": 0.5689307,
+            "noisy": false
+          },
+          {
+            "concurrency": 8,
+            "runs": [
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.9189018,
+                "perRequestTokS": 40.35427757281205,
+                "aggregateTokS": 296.00073237056205,
+                "ttftP50": 0.2684488,
+                "ttftP95": 0.3069659,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.7549333,
+                "perRequestTokS": 41.16208143803432,
+                "aggregateTokS": 303.18582124267607,
+                "ttftP50": 0.2297853,
+                "ttftP95": 0.2299614,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 7.3572057,
+                "perRequestTokS": 39.579109986192975,
+                "aggregateTokS": 278.3665543019954,
+                "ttftP50": 0.4936387,
+                "ttftP95": 0.49372,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 40.35427757281205,
+            "aggregateTokS": 296.00073237056205,
+            "ttftP50": 0.2684488,
+            "ttftP95": 0.3069659,
+            "noisy": false
+          },
+          {
+            "concurrency": 16,
+            "runs": [
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 13.8823685,
+                "perRequestTokS": 39.58172060916684,
+                "aggregateTokS": 295.0505167760098,
+                "ttftP50": 0.1780844,
+                "ttftP95": 7.5377558,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 13.9483205,
+                "perRequestTokS": 39.57516891554251,
+                "aggregateTokS": 293.6554261138465,
+                "ttftP50": 0.1789653,
+                "ttftP95": 7.5483513,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 13.7402465,
+                "perRequestTokS": 39.367279489847746,
+                "aggregateTokS": 298.1023666496813,
+                "ttftP50": 0.1341927,
+                "ttftP95": 7.3279874,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 39.57516891554251,
+            "aggregateTokS": 295.0505167760098,
+            "ttftP50": 0.1780844,
+            "ttftP95": 7.5377558,
+            "noisy": false
+          }
+        ],
+        "prefill": {
+          "promptTokens": 65500,
+          "coldSeconds": 15.751485,
+          "cachedSeconds": 15.7090465,
+          "coldTokensPerSecond": 4158.338086853398
+        },
+        "guardrails": {
+          "toolCallValid": true,
+          "toolCallDetail": "get_time({\u0022city\u0022: \u0022Riyadh\u0022})",
+          "qaCorrect": 8,
+          "qaTotal": 8,
+          "answers": [
+            {
+              "question": "What is 17 multiplied by 23? Reply with only the number.",
+              "expected": "391",
+              "answer": "391",
+              "correct": true
+            },
+            {
+              "question": "What is 1024 divided by 16? Reply with only the number.",
+              "expected": "64",
+              "answer": "64",
+              "correct": true
+            },
+            {
+              "question": "How many centimeters are in 3.5 meters? Reply with only the number.",
+              "expected": "350",
+              "answer": "350",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(len(\u0027mirbadllm\u0027))\n\nReply with only the output.",
+              "expected": "11",
+              "answer": "11",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(sum(range(5)))\n\nReply with only the output.",
+              "expected": "10",
+              "answer": "10",
+              "correct": true
+            },
+            {
+              "question": "What does this JavaScript code print?\n\nconsole.log([1, 2, 3].map(x =\u003E x * 2).join(\u0027,\u0027))\n\nReply with only the output.",
+              "expected": "2,4,6",
+              "answer": "2,4,6",
+              "correct": true
+            },
+            {
+              "question": "What is the chemical symbol for gold? Reply with only the symbol.",
+              "expected": "Au",
+              "answer": "Au",
+              "correct": true
+            },
+            {
+              "question": "What is the capital city of Australia? Reply with only the city name.",
+              "expected": "Canberra",
+              "answer": "Canberra",
+              "correct": true
+            }
+          ]
+        },
+        "noise": {
+          "noisy": false,
+          "reasons": [],
+          "idleGpuPercent": 0,
+          "otherModelsMaxRunning": {
+            "qwen3-embedding-4b": 0,
+            "qwen3-embedding-0-6b": 0,
+            "qwen38-27b-nvfp4": 0,
+            "qwen3-vl-embedding-2b": 0,
+            "ov-intent-analysis": 0
+          }
+        }
+      },
+      "score": 1.0346084238057818,
+      "startupSeconds": 258
+    },
+    {
+      "index": 2,
+      "step": "Speculative decoding",
+      "label": "MTP \u00D7 2",
+      "settings": {
+        "id": "qwen36-35b-a3b-nvfp4",
+        "servedName": "Qwen3.6-35B-A3B-NVFP4",
+        "modelPath": "Qwen3.6-35B-A3B-NVFP4",
+        "quantization": null,
+        "kvCacheDtype": "fp8",
+        "maxModelLen": 262144,
+        "maxNumSeqs": 8,
+        "maxNumBatchedTokens": 8192,
+        "memoryBudgetGiB": 48,
+        "toolCallParser": "qwen3_xml",
+        "reasoningParser": "qwen3",
+        "enablePrefixCaching": true,
+        "speculative": {
+          "method": "mtp",
+          "numSpeculativeTokens": 2
+        },
+        "cudaGraphMode": "PIECEWISE",
+        "image": null,
+        "extraArgs": [
+          "--trust-remote-code",
+          "--attention-backend",
+          "flashinfer",
+          "--moe-backend",
+          "marlin",
+          "--enable-chunked-prefill",
+          "--async-scheduling",
+          "--load-format",
+          "fastsafetensors",
+          "--speculative-config",
+          "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:3,\u0022moe_backend\u0022:\u0022triton\u0022}"
+        ],
+        "autoStart": false
+      },
+      "configHash": "7d17a981bd263178",
+      "outcome": "Accepted",
+      "reason": null,
+      "result": {
+        "levels": [
+          {
+            "concurrency": 1,
+            "runs": [
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.9669647,
+                "perRequestTokS": 88.96051445865511,
+                "aggregateTokS": 86.28346673622372,
+                "ttftP50": 0.089194,
+                "ttftP95": 0.089194,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.15473,
+                "perRequestTokS": 83.28411112234579,
+                "aggregateTokS": 81.1479904777905,
+                "ttftP50": 0.0808469,
+                "ttftP95": 0.0808469,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.8286096,
+                "perRequestTokS": 92.4653023050119,
+                "aggregateTokS": 90.50382916044688,
+                "ttftP50": 0.0599728,
+                "ttftP95": 0.0599728,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              }
+            ],
+            "perRequestTokS": 88.96051445865511,
+            "aggregateTokS": 86.28346673622372,
+            "ttftP50": 0.0808469,
+            "ttftP95": 0.0808469,
+            "noisy": false
+          },
+          {
+            "concurrency": 4,
+            "runs": [
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.4757255,
+                "perRequestTokS": 53.48094429352,
+                "aggregateTokS": 187.00718288380233,
+                "ttftP50": 0.6337019,
+                "ttftP95": 0.633874,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 4.8871632,
+                "perRequestTokS": 55.882406407774454,
+                "aggregateTokS": 209.52850520727443,
+                "ttftP50": 0.135071,
+                "ttftP95": 0.1351718,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 4.9957881,
+                "perRequestTokS": 54.93116228596351,
+                "aggregateTokS": 204.97266487343606,
+                "ttftP50": 0.2906617,
+                "ttftP95": 0.3014276,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              }
+            ],
+            "perRequestTokS": 54.93116228596351,
+            "aggregateTokS": 204.97266487343606,
+            "ttftP50": 0.2906617,
+            "ttftP95": 0.3014276,
+            "noisy": false
+          },
+          {
+            "concurrency": 8,
+            "runs": [
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 7.5115559,
+                "perRequestTokS": 40.335992442365466,
+                "aggregateTokS": 272.64657645694945,
+                "ttftP50": 0.7127778,
+                "ttftP95": 0.7243603,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 7.5758557,
+                "perRequestTokS": 39.92945767756452,
+                "aggregateTokS": 270.33249854534586,
+                "ttftP50": 0.7013075,
+                "ttftP95": 0.7134521,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.7923777,
+                "perRequestTokS": 40.52292417321803,
+                "aggregateTokS": 301.51444611214714,
+                "ttftP50": 0.1820775,
+                "ttftP95": 0.182577,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 40.335992442365466,
+            "aggregateTokS": 272.64657645694945,
+            "ttftP50": 0.7013075,
+            "ttftP95": 0.7134521,
+            "noisy": false
+          },
+          {
+            "concurrency": 16,
+            "runs": [
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 14.1695031,
+                "perRequestTokS": 38.37033692604996,
+                "aggregateTokS": 289.0715342022121,
+                "ttftP50": 0.2299186,
+                "ttftP95": 7.5264142,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 13.958757,
+                "perRequestTokS": 38.978854036989645,
+                "aggregateTokS": 293.4358696838121,
+                "ttftP50": 0.2989354,
+                "ttftP95": 7.4108279,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 13.8568071,
+                "perRequestTokS": 39.20728105397334,
+                "aggregateTokS": 295.594791097294,
+                "ttftP50": 0.1698748,
+                "ttftP95": 7.607091,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 38.978854036989645,
+            "aggregateTokS": 293.4358696838121,
+            "ttftP50": 0.2299186,
+            "ttftP95": 7.5264142,
+            "noisy": false
+          }
+        ],
+        "prefill": {
+          "promptTokens": 65501,
+          "coldSeconds": 15.8915061,
+          "cachedSeconds": 15.676906,
+          "coldTokensPerSecond": 4121.761624595167
+        },
+        "guardrails": {
+          "toolCallValid": true,
+          "toolCallDetail": "get_time({\u0022city\u0022: \u0022Riyadh\u0022})",
+          "qaCorrect": 8,
+          "qaTotal": 8,
+          "answers": [
+            {
+              "question": "What is 17 multiplied by 23? Reply with only the number.",
+              "expected": "391",
+              "answer": "391",
+              "correct": true
+            },
+            {
+              "question": "What is 1024 divided by 16? Reply with only the number.",
+              "expected": "64",
+              "answer": "64",
+              "correct": true
+            },
+            {
+              "question": "How many centimeters are in 3.5 meters? Reply with only the number.",
+              "expected": "350",
+              "answer": "350",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(len(\u0027mirbadllm\u0027))\n\nReply with only the output.",
+              "expected": "11",
+              "answer": "11",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(sum(range(5)))\n\nReply with only the output.",
+              "expected": "10",
+              "answer": "10",
+              "correct": true
+            },
+            {
+              "question": "What does this JavaScript code print?\n\nconsole.log([1, 2, 3].map(x =\u003E x * 2).join(\u0027,\u0027))\n\nReply with only the output.",
+              "expected": "2,4,6",
+              "answer": "2,4,6",
+              "correct": true
+            },
+            {
+              "question": "What is the chemical symbol for gold? Reply with only the symbol.",
+              "expected": "Au",
+              "answer": "Au",
+              "correct": true
+            },
+            {
+              "question": "What is the capital city of Australia? Reply with only the city name.",
+              "expected": "Canberra",
+              "answer": "Canberra",
+              "correct": true
+            }
+          ]
+        },
+        "noise": {
+          "noisy": false,
+          "reasons": [],
+          "idleGpuPercent": 0,
+          "otherModelsMaxRunning": {
+            "qwen3-embedding-4b": 0,
+            "qwen3-embedding-0-6b": 0,
+            "qwen38-27b-nvfp4": 0,
+            "qwen3-vl-embedding-2b": 0,
+            "ov-intent-analysis": 0
+          }
+        }
+      },
+      "score": 1.0441920642727327,
+      "startupSeconds": 148
+    },
+    {
+      "index": 3,
+      "step": "Speculative decoding",
+      "label": "MTP \u00D7 3",
+      "settings": {
+        "id": "qwen36-35b-a3b-nvfp4",
+        "servedName": "Qwen3.6-35B-A3B-NVFP4",
+        "modelPath": "Qwen3.6-35B-A3B-NVFP4",
+        "quantization": null,
+        "kvCacheDtype": "fp8",
+        "maxModelLen": 262144,
+        "maxNumSeqs": 8,
+        "maxNumBatchedTokens": 8192,
+        "memoryBudgetGiB": 48,
+        "toolCallParser": "qwen3_xml",
+        "reasoningParser": "qwen3",
+        "enablePrefixCaching": true,
+        "speculative": {
+          "method": "mtp",
+          "numSpeculativeTokens": 3
+        },
+        "cudaGraphMode": "PIECEWISE",
+        "image": null,
+        "extraArgs": [
+          "--trust-remote-code",
+          "--attention-backend",
+          "flashinfer",
+          "--moe-backend",
+          "marlin",
+          "--enable-chunked-prefill",
+          "--async-scheduling",
+          "--load-format",
+          "fastsafetensors",
+          "--speculative-config",
+          "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:3,\u0022moe_backend\u0022:\u0022triton\u0022}"
+        ],
+        "autoStart": false
+      },
+      "configHash": "3ef1f659faa8745c",
+      "outcome": "Accepted",
+      "reason": null,
+      "result": {
+        "levels": [
+          {
+            "concurrency": 1,
+            "runs": [
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.1481954,
+                "perRequestTokS": 83.30632928297526,
+                "aggregateTokS": 81.31642654709425,
+                "ttftP50": 0.0751606,
+                "ttftP95": 0.0751606,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.0064288,
+                "perRequestTokS": 87.0354656263118,
+                "aggregateTokS": 85.15086071554397,
+                "ttftP50": 0.0650436,
+                "ttftP95": 0.0650436,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.8792533,
+                "perRequestTokS": 91.47663259793387,
+                "aggregateTokS": 88.91194116196725,
+                "ttftP50": 0.0806708,
+                "ttftP95": 0.0806708,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              }
+            ],
+            "perRequestTokS": 87.0354656263118,
+            "aggregateTokS": 85.15086071554397,
+            "ttftP50": 0.0751606,
+            "ttftP95": 0.0751606,
+            "noisy": false
+          },
+          {
+            "concurrency": 4,
+            "runs": [
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.8075315,
+                "perRequestTokS": 51.899647579877794,
+                "aggregateTokS": 176.322762950145,
+                "ttftP50": 0.5550454,
+                "ttftP95": 0.5665012,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.3351156,
+                "perRequestTokS": 52.98671059705206,
+                "aggregateTokS": 191.93585983403997,
+                "ttftP50": 0.2725945,
+                "ttftP95": 0.2726697,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.0239545,
+                "perRequestTokS": 53.99586074759087,
+                "aggregateTokS": 203.8235019843432,
+                "ttftP50": 0.1337104,
+                "ttftP95": 0.133815,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              }
+            ],
+            "perRequestTokS": 52.98671059705206,
+            "aggregateTokS": 191.93585983403997,
+            "ttftP50": 0.2725945,
+            "ttftP95": 0.2726697,
+            "noisy": false
+          },
+          {
+            "concurrency": 8,
+            "runs": [
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 7.2225503,
+                "perRequestTokS": 39.45010340172732,
+                "aggregateTokS": 283.5563498948564,
+                "ttftP50": 0.3810073,
+                "ttftP95": 0.391984,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.9100012,
+                "perRequestTokS": 40.57335106303849,
+                "aggregateTokS": 296.3820035226622,
+                "ttftP50": 0.181094,
+                "ttftP95": 0.1814574,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.9603157,
+                "perRequestTokS": 40.84628386836785,
+                "aggregateTokS": 294.23952709501384,
+                "ttftP50": 0.3126309,
+                "ttftP95": 0.3276208,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 40.57335106303849,
+            "aggregateTokS": 294.23952709501384,
+            "ttftP50": 0.3126309,
+            "ttftP95": 0.3276208,
+            "noisy": false
+          },
+          {
+            "concurrency": 16,
+            "runs": [
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 13.6967646,
+                "perRequestTokS": 39.100782365037674,
+                "aggregateTokS": 299.04872571147206,
+                "ttftP50": 0.1297915,
+                "ttftP95": 7.2585229,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 13.8684111,
+                "perRequestTokS": 38.96766996614861,
+                "aggregateTokS": 295.3474605320865,
+                "ttftP50": 0.1346123,
+                "ttftP95": 7.3571103,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 14.057916,
+                "perRequestTokS": 38.54151794211655,
+                "aggregateTokS": 291.36608868626047,
+                "ttftP50": 0.1322106,
+                "ttftP95": 7.2593454,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 38.96766996614861,
+            "aggregateTokS": 295.3474605320865,
+            "ttftP50": 0.1322106,
+            "ttftP95": 7.2593454,
+            "noisy": false
+          }
+        ],
+        "prefill": {
+          "promptTokens": 65499,
+          "coldSeconds": 15.6396488,
+          "cachedSeconds": 15.6215858,
+          "coldTokensPerSecond": 4188.009643797117
+        },
+        "guardrails": {
+          "toolCallValid": true,
+          "toolCallDetail": "get_time({\u0022city\u0022: \u0022Riyadh\u0022})",
+          "qaCorrect": 8,
+          "qaTotal": 8,
+          "answers": [
+            {
+              "question": "What is 17 multiplied by 23? Reply with only the number.",
+              "expected": "391",
+              "answer": "391",
+              "correct": true
+            },
+            {
+              "question": "What is 1024 divided by 16? Reply with only the number.",
+              "expected": "64",
+              "answer": "64",
+              "correct": true
+            },
+            {
+              "question": "How many centimeters are in 3.5 meters? Reply with only the number.",
+              "expected": "350",
+              "answer": "350",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(len(\u0027mirbadllm\u0027))\n\nReply with only the output.",
+              "expected": "11",
+              "answer": "11",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(sum(range(5)))\n\nReply with only the output.",
+              "expected": "10",
+              "answer": "10",
+              "correct": true
+            },
+            {
+              "question": "What does this JavaScript code print?\n\nconsole.log([1, 2, 3].map(x =\u003E x * 2).join(\u0027,\u0027))\n\nReply with only the output.",
+              "expected": "2,4,6",
+              "answer": "2,4,6",
+              "correct": true
+            },
+            {
+              "question": "What is the chemical symbol for gold? Reply with only the symbol.",
+              "expected": "Au",
+              "answer": "Au",
+              "correct": true
+            },
+            {
+              "question": "What is the capital city of Australia? Reply with only the city name.",
+              "expected": "Canberra",
+              "answer": "Canberra",
+              "correct": true
+            }
+          ]
+        },
+        "noise": {
+          "noisy": false,
+          "reasons": [],
+          "idleGpuPercent": 0,
+          "otherModelsMaxRunning": {
+            "qwen3-embedding-4b": 0,
+            "qwen3-embedding-0-6b": 0,
+            "qwen38-27b-nvfp4": 0,
+            "qwen3-vl-embedding-2b": 0,
+            "ov-intent-analysis": 0
+          }
+        }
+      },
+      "score": 1.0361911863981188,
+      "startupSeconds": 146
+    },
+    {
+      "index": 4,
+      "step": "Max num seqs",
+      "label": "Max num seqs 16",
+      "settings": {
+        "id": "qwen36-35b-a3b-nvfp4",
+        "servedName": "Qwen3.6-35B-A3B-NVFP4",
+        "modelPath": "Qwen3.6-35B-A3B-NVFP4",
+        "quantization": null,
+        "kvCacheDtype": "fp8",
+        "maxModelLen": 262144,
+        "maxNumSeqs": 16,
+        "maxNumBatchedTokens": 8192,
+        "memoryBudgetGiB": 48,
+        "toolCallParser": "qwen3_xml",
+        "reasoningParser": "qwen3",
+        "enablePrefixCaching": true,
+        "speculative": {
+          "method": "mtp",
+          "numSpeculativeTokens": 2
+        },
+        "cudaGraphMode": "PIECEWISE",
+        "image": null,
+        "extraArgs": [
+          "--trust-remote-code",
+          "--attention-backend",
+          "flashinfer",
+          "--moe-backend",
+          "marlin",
+          "--enable-chunked-prefill",
+          "--async-scheduling",
+          "--load-format",
+          "fastsafetensors",
+          "--speculative-config",
+          "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:3,\u0022moe_backend\u0022:\u0022triton\u0022}"
+        ],
+        "autoStart": false
+      },
+      "configHash": "09c56a0e778b9907",
+      "outcome": "Accepted",
+      "reason": null,
+      "result": {
+        "levels": [
+          {
+            "concurrency": 1,
+            "runs": [
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.9710849,
+                "perRequestTokS": 88.73779430704069,
+                "aggregateTokS": 86.16381174432276,
+                "ttftP50": 0.0861417,
+                "ttftP95": 0.0861417,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.9449292,
+                "perRequestTokS": 88.82896943093283,
+                "aggregateTokS": 86.92908474675724,
+                "ttftP50": 0.0629501,
+                "ttftP95": 0.0629501,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.8505251,
+                "perRequestTokS": 91.79232803307936,
+                "aggregateTokS": 89.8080146707005,
+                "ttftP50": 0.0615604,
+                "ttftP95": 0.0615604,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              }
+            ],
+            "perRequestTokS": 88.82896943093283,
+            "aggregateTokS": 86.92908474675724,
+            "ttftP50": 0.0629501,
+            "ttftP95": 0.0629501,
+            "noisy": false
+          },
+          {
+            "concurrency": 4,
+            "runs": [
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.8226449,
+                "perRequestTokS": 55.905531084231825,
+                "aggregateTokS": 175.8650952593726,
+                "ttftP50": 1.0181991,
+                "ttftP95": 1.0626937,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 4.8085218,
+                "perRequestTokS": 56.52137826008412,
+                "aggregateTokS": 212.95525789235268,
+                "ttftP50": 0.1571241,
+                "ttftP95": 0.1572288,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 4.8658485,
+                "perRequestTokS": 55.60963775464249,
+                "aggregateTokS": 210.4463383929853,
+                "ttftP50": 0.125755,
+                "ttftP95": 0.1729422,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              }
+            ],
+            "perRequestTokS": 55.905531084231825,
+            "aggregateTokS": 210.4463383929853,
+            "ttftP50": 0.1571241,
+            "ttftP95": 0.1729422,
+            "noisy": false
+          },
+          {
+            "concurrency": 8,
+            "runs": [
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 7.4901593,
+                "perRequestTokS": 39.3164089775631,
+                "aggregateTokS": 273.42542634573874,
+                "ttftP50": 0.5389715,
+                "ttftP95": 0.5912112,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 7.0220228,
+                "perRequestTokS": 38.98507815975403,
+                "aggregateTokS": 291.6538522204741,
+                "ttftP50": 0.2190858,
+                "ttftP95": 0.2192037,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 7.0762836,
+                "perRequestTokS": 38.59445244016745,
+                "aggregateTokS": 289.4174563608502,
+                "ttftP50": 0.172602,
+                "ttftP95": 0.1726695,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 38.98507815975403,
+            "aggregateTokS": 289.4174563608502,
+            "ttftP50": 0.2190858,
+            "ttftP95": 0.2192037,
+            "noisy": false
+          },
+          {
+            "concurrency": 16,
+            "runs": [
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 10.1441037,
+                "perRequestTokS": 27.830968124933822,
+                "aggregateTokS": 403.7813611862031,
+                "ttftP50": 0.5652456,
+                "ttftP95": 0.5654229,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.8048478,
+                "perRequestTokS": 28.487272299585197,
+                "aggregateTokS": 417.75253257883315,
+                "ttftP50": 0.300404,
+                "ttftP95": 0.34125,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 10.0652106,
+                "perRequestTokS": 28.44966491164667,
+                "aggregateTokS": 406.946278898526,
+                "ttftP50": 0.298106,
+                "ttftP95": 0.3546311,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              }
+            ],
+            "perRequestTokS": 28.44966491164667,
+            "aggregateTokS": 406.946278898526,
+            "ttftP50": 0.300404,
+            "ttftP95": 0.3546311,
+            "noisy": false
+          }
+        ],
+        "prefill": {
+          "promptTokens": 65498,
+          "coldSeconds": 15.6424575,
+          "cachedSeconds": 15.6724533,
+          "coldTokensPerSecond": 4187.193732186902
+        },
+        "guardrails": {
+          "toolCallValid": true,
+          "toolCallDetail": "get_time({\u0022city\u0022: \u0022Riyadh\u0022})",
+          "qaCorrect": 8,
+          "qaTotal": 8,
+          "answers": [
+            {
+              "question": "What is 17 multiplied by 23? Reply with only the number.",
+              "expected": "391",
+              "answer": "391",
+              "correct": true
+            },
+            {
+              "question": "What is 1024 divided by 16? Reply with only the number.",
+              "expected": "64",
+              "answer": "64",
+              "correct": true
+            },
+            {
+              "question": "How many centimeters are in 3.5 meters? Reply with only the number.",
+              "expected": "350",
+              "answer": "350",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(len(\u0027mirbadllm\u0027))\n\nReply with only the output.",
+              "expected": "11",
+              "answer": "11",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(sum(range(5)))\n\nReply with only the output.",
+              "expected": "10",
+              "answer": "10",
+              "correct": true
+            },
+            {
+              "question": "What does this JavaScript code print?\n\nconsole.log([1, 2, 3].map(x =\u003E x * 2).join(\u0027,\u0027))\n\nReply with only the output.",
+              "expected": "2,4,6",
+              "answer": "2,4,6",
+              "correct": true
+            },
+            {
+              "question": "What is the chemical symbol for gold? Reply with only the symbol.",
+              "expected": "Au",
+              "answer": "Au",
+              "correct": true
+            },
+            {
+              "question": "What is the capital city of Australia? Reply with only the city name.",
+              "expected": "Canberra",
+              "answer": "Canberra",
+              "correct": true
+            }
+          ]
+        },
+        "noise": {
+          "noisy": false,
+          "reasons": [],
+          "idleGpuPercent": 0,
+          "otherModelsMaxRunning": {
+            "qwen3-embedding-4b": 0,
+            "qwen3-embedding-0-6b": 0,
+            "qwen38-27b-nvfp4": 0,
+            "qwen3-vl-embedding-2b": 0,
+            "ov-intent-analysis": 0
+          }
+        }
+      },
+      "score": 1.2287711256731568,
+      "startupSeconds": 238
+    },
+    {
+      "index": 5,
+      "step": "Max num seqs",
+      "label": "Max num seqs 32",
+      "settings": {
+        "id": "qwen36-35b-a3b-nvfp4",
+        "servedName": "Qwen3.6-35B-A3B-NVFP4",
+        "modelPath": "Qwen3.6-35B-A3B-NVFP4",
+        "quantization": null,
+        "kvCacheDtype": "fp8",
+        "maxModelLen": 262144,
+        "maxNumSeqs": 32,
+        "maxNumBatchedTokens": 8192,
+        "memoryBudgetGiB": 48,
+        "toolCallParser": "qwen3_xml",
+        "reasoningParser": "qwen3",
+        "enablePrefixCaching": true,
+        "speculative": {
+          "method": "mtp",
+          "numSpeculativeTokens": 2
+        },
+        "cudaGraphMode": "PIECEWISE",
+        "image": null,
+        "extraArgs": [
+          "--trust-remote-code",
+          "--attention-backend",
+          "flashinfer",
+          "--moe-backend",
+          "marlin",
+          "--enable-chunked-prefill",
+          "--async-scheduling",
+          "--load-format",
+          "fastsafetensors",
+          "--speculative-config",
+          "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:3,\u0022moe_backend\u0022:\u0022triton\u0022}"
+        ],
+        "autoStart": false
+      },
+      "configHash": "500820d8c585685a",
+      "outcome": "Accepted",
+      "reason": null,
+      "result": {
+        "levels": [
+          {
+            "concurrency": 1,
+            "runs": [
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.9700955,
+                "perRequestTokS": 88.9434254149098,
+                "aggregateTokS": 86.19251468513386,
+                "ttftP50": 0.075447,
+                "ttftP95": 0.075447,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.9496261,
+                "perRequestTokS": 88.68580455519391,
+                "aggregateTokS": 86.7906613655202,
+                "ttftP50": 0.0630024,
+                "ttftP95": 0.0630024,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.0732538,
+                "perRequestTokS": 84.98910761669396,
+                "aggregateTokS": 83.29933570732102,
+                "ttftP50": 0.0610358,
+                "ttftP95": 0.0610358,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              }
+            ],
+            "perRequestTokS": 88.68580455519391,
+            "aggregateTokS": 86.19251468513386,
+            "ttftP50": 0.0630024,
+            "ttftP95": 0.0630024,
+            "noisy": false
+          },
+          {
+            "concurrency": 4,
+            "runs": [
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 6.2241835,
+                "perRequestTokS": 52.544058025669166,
+                "aggregateTokS": 164.51957112125632,
+                "ttftP50": 0.996567,
+                "ttftP95": 1.0416273,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 4.9068542,
+                "perRequestTokS": 54.35748643139734,
+                "aggregateTokS": 208.68767610824875,
+                "ttftP50": 0.1245666,
+                "ttftP95": 0.1652844,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 4.9613234,
+                "perRequestTokS": 54.647985242998374,
+                "aggregateTokS": 206.396543309392,
+                "ttftP50": 0.1661641,
+                "ttftP95": 0.2171101,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              }
+            ],
+            "perRequestTokS": 54.35748643139734,
+            "aggregateTokS": 206.396543309392,
+            "ttftP50": 0.1661641,
+            "ttftP95": 0.2171101,
+            "noisy": false
+          },
+          {
+            "concurrency": 8,
+            "runs": [
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 7.2929695,
+                "perRequestTokS": 38.40088830774912,
+                "aggregateTokS": 280.81839640217885,
+                "ttftP50": 0.1854781,
+                "ttftP95": 0.2386117,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.86554,
+                "perRequestTokS": 39.66972596318941,
+                "aggregateTokS": 298.30137177847627,
+                "ttftP50": 0.1281888,
+                "ttftP95": 0.1284658,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.9847017,
+                "perRequestTokS": 38.95725237648796,
+                "aggregateTokS": 293.21223553469724,
+                "ttftP50": 0.170739,
+                "ttftP95": 0.1709365,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 38.95725237648796,
+            "aggregateTokS": 293.21223553469724,
+            "ttftP50": 0.170739,
+            "ttftP95": 0.1709365,
+            "noisy": false
+          },
+          {
+            "concurrency": 16,
+            "runs": [
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.6143734,
+                "perRequestTokS": 28.9185730439578,
+                "aggregateTokS": 426.0288039156041,
+                "ttftP50": 0.3707223,
+                "ttftP95": 0.4904418,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.5972264,
+                "perRequestTokS": 28.993730952938172,
+                "aggregateTokS": 426.789973403149,
+                "ttftP50": 0.3626783,
+                "ttftP95": 0.3627998,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.6696345,
+                "perRequestTokS": 28.827755629396897,
+                "aggregateTokS": 423.59408724290455,
+                "ttftP50": 0.1541387,
+                "ttftP95": 0.3380214,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              }
+            ],
+            "perRequestTokS": 28.9185730439578,
+            "aggregateTokS": 426.0288039156041,
+            "ttftP50": 0.3626783,
+            "ttftP95": 0.3627998,
+            "noisy": false
+          }
+        ],
+        "prefill": {
+          "promptTokens": 65498,
+          "coldSeconds": 15.6116626,
+          "cachedSeconds": 15.6294452,
+          "coldTokensPerSecond": 4195.4532120108715
+        },
+        "guardrails": {
+          "toolCallValid": true,
+          "toolCallDetail": "get_time({\u0022city\u0022: \u0022Riyadh\u0022})",
+          "qaCorrect": 8,
+          "qaTotal": 8,
+          "answers": [
+            {
+              "question": "What is 17 multiplied by 23? Reply with only the number.",
+              "expected": "391",
+              "answer": "391",
+              "correct": true
+            },
+            {
+              "question": "What is 1024 divided by 16? Reply with only the number.",
+              "expected": "64",
+              "answer": "64",
+              "correct": true
+            },
+            {
+              "question": "How many centimeters are in 3.5 meters? Reply with only the number.",
+              "expected": "350",
+              "answer": "350",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(len(\u0027mirbadllm\u0027))\n\nReply with only the output.",
+              "expected": "11",
+              "answer": "11",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(sum(range(5)))\n\nReply with only the output.",
+              "expected": "10",
+              "answer": "10",
+              "correct": true
+            },
+            {
+              "question": "What does this JavaScript code print?\n\nconsole.log([1, 2, 3].map(x =\u003E x * 2).join(\u0027,\u0027))\n\nReply with only the output.",
+              "expected": "2,4,6",
+              "answer": "2,4,6",
+              "correct": true
+            },
+            {
+              "question": "What is the chemical symbol for gold? Reply with only the symbol.",
+              "expected": "Au",
+              "answer": "Au",
+              "correct": true
+            },
+            {
+              "question": "What is the capital city of Australia? Reply with only the city name.",
+              "expected": "Canberra",
+              "answer": "Canberra",
+              "correct": true
+            }
+          ]
+        },
+        "noise": {
+          "noisy": false,
+          "reasons": [],
+          "idleGpuPercent": 0,
+          "otherModelsMaxRunning": {
+            "qwen3-embedding-4b": 0,
+            "qwen3-embedding-0-6b": 0,
+            "qwen38-27b-nvfp4": 0,
+            "qwen3-vl-embedding-2b": 0,
+            "ov-intent-analysis": 0
+          }
+        }
+      },
+      "score": 1.2562372919314873,
+      "startupSeconds": 236
+    },
+    {
+      "index": 6,
+      "step": "Max batched tokens",
+      "label": "Batched tokens 2,048",
+      "settings": {
+        "id": "qwen36-35b-a3b-nvfp4",
+        "servedName": "Qwen3.6-35B-A3B-NVFP4",
+        "modelPath": "Qwen3.6-35B-A3B-NVFP4",
+        "quantization": null,
+        "kvCacheDtype": "fp8",
+        "maxModelLen": 262144,
+        "maxNumSeqs": 32,
+        "maxNumBatchedTokens": 2048,
+        "memoryBudgetGiB": 48,
+        "toolCallParser": "qwen3_xml",
+        "reasoningParser": "qwen3",
+        "enablePrefixCaching": true,
+        "speculative": {
+          "method": "mtp",
+          "numSpeculativeTokens": 2
+        },
+        "cudaGraphMode": "PIECEWISE",
+        "image": null,
+        "extraArgs": [
+          "--trust-remote-code",
+          "--attention-backend",
+          "flashinfer",
+          "--moe-backend",
+          "marlin",
+          "--enable-chunked-prefill",
+          "--async-scheduling",
+          "--load-format",
+          "fastsafetensors",
+          "--speculative-config",
+          "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:3,\u0022moe_backend\u0022:\u0022triton\u0022}"
+        ],
+        "autoStart": false
+      },
+      "configHash": "de151a60932c9cf7",
+      "outcome": "Accepted",
+      "reason": null,
+      "result": {
+        "levels": [
+          {
+            "concurrency": 1,
+            "runs": [
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.8448118,
+                "perRequestTokS": 92.78878206821992,
+                "aggregateTokS": 89.98837814156985,
+                "ttftP50": 0.0858273,
+                "ttftP95": 0.0858273,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.1950582,
+                "perRequestTokS": 81.78547401806475,
+                "aggregateTokS": 80.12373608718615,
+                "ttftP50": 0.0648853,
+                "ttftP95": 0.0648853,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.1998824,
+                "perRequestTokS": 81.59461893687438,
+                "aggregateTokS": 80.00294010804897,
+                "ttftP50": 0.0623858,
+                "ttftP95": 0.0623858,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              }
+            ],
+            "perRequestTokS": 81.78547401806475,
+            "aggregateTokS": 80.12373608718615,
+            "ttftP50": 0.0648853,
+            "ttftP95": 0.0648853,
+            "noisy": false
+          },
+          {
+            "concurrency": 4,
+            "runs": [
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 6.0537099,
+                "perRequestTokS": 53.326538312532946,
+                "aggregateTokS": 169.15247293234185,
+                "ttftP50": 1.000649,
+                "ttftP95": 1.0007622,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 4.94379,
+                "perRequestTokS": 55.164925463571024,
+                "aggregateTokS": 207.12853903584093,
+                "ttftP50": 0.1317501,
+                "ttftP95": 0.169909,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 4.947942,
+                "perRequestTokS": 55.81531018005734,
+                "aggregateTokS": 206.9547298654673,
+                "ttftP50": 0.1650664,
+                "ttftP95": 0.1651234,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              }
+            ],
+            "perRequestTokS": 55.164925463571024,
+            "aggregateTokS": 206.9547298654673,
+            "ttftP50": 0.1650664,
+            "ttftP95": 0.169909,
+            "noisy": false
+          },
+          {
+            "concurrency": 8,
+            "runs": [
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.7633293,
+                "perRequestTokS": 40.90873239342474,
+                "aggregateTokS": 302.80944622938887,
+                "ttftP50": 0.1827094,
+                "ttftP95": 0.2420346,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.9235862,
+                "perRequestTokS": 38.91539116599397,
+                "aggregateTokS": 295.8004624828676,
+                "ttftP50": 0.1359651,
+                "ttftP95": 0.1938806,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 7.047576,
+                "perRequestTokS": 39.57251546150768,
+                "aggregateTokS": 290.59636958863587,
+                "ttftP50": 0.1766231,
+                "ttftP95": 0.1768943,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 39.57251546150768,
+            "aggregateTokS": 295.8004624828676,
+            "ttftP50": 0.1766231,
+            "ttftP95": 0.1938806,
+            "noisy": false
+          },
+          {
+            "concurrency": 16,
+            "runs": [
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.5028608,
+                "perRequestTokS": 29.403151015092515,
+                "aggregateTokS": 431.02809629706456,
+                "ttftP50": 0.3377643,
+                "ttftP95": 0.4354314,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.8213736,
+                "perRequestTokS": 28.482431836503757,
+                "aggregateTokS": 417.0496069918367,
+                "ttftP50": 0.2952662,
+                "ttftP95": 0.2958721,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.9235171,
+                "perRequestTokS": 28.252753100368942,
+                "aggregateTokS": 412.756884351013,
+                "ttftP50": 0.2985246,
+                "ttftP95": 0.3777821,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              }
+            ],
+            "perRequestTokS": 28.482431836503757,
+            "aggregateTokS": 417.0496069918367,
+            "ttftP50": 0.2985246,
+            "ttftP95": 0.3777821,
+            "noisy": false
+          }
+        ],
+        "prefill": {
+          "promptTokens": 65499,
+          "coldSeconds": 19.285596,
+          "cachedSeconds": 18.9840637,
+          "coldTokensPerSecond": 3396.265274871463
+        },
+        "guardrails": {
+          "toolCallValid": true,
+          "toolCallDetail": "get_time({\u0022city\u0022: \u0022Riyadh\u0022})",
+          "qaCorrect": 8,
+          "qaTotal": 8,
+          "answers": [
+            {
+              "question": "What is 17 multiplied by 23? Reply with only the number.",
+              "expected": "391",
+              "answer": "391",
+              "correct": true
+            },
+            {
+              "question": "What is 1024 divided by 16? Reply with only the number.",
+              "expected": "64",
+              "answer": "64",
+              "correct": true
+            },
+            {
+              "question": "How many centimeters are in 3.5 meters? Reply with only the number.",
+              "expected": "350",
+              "answer": "350",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(len(\u0027mirbadllm\u0027))\n\nReply with only the output.",
+              "expected": "11",
+              "answer": "11",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(sum(range(5)))\n\nReply with only the output.",
+              "expected": "10",
+              "answer": "10",
+              "correct": true
+            },
+            {
+              "question": "What does this JavaScript code print?\n\nconsole.log([1, 2, 3].map(x =\u003E x * 2).join(\u0027,\u0027))\n\nReply with only the output.",
+              "expected": "2,4,6",
+              "answer": "2,4,6",
+              "correct": true
+            },
+            {
+              "question": "What is the chemical symbol for gold? Reply with only the symbol.",
+              "expected": "Au",
+              "answer": "Au",
+              "correct": true
+            },
+            {
+              "question": "What is the capital city of Australia? Reply with only the city name.",
+              "expected": "Canberra",
+              "answer": "Canberra",
+              "correct": true
+            }
+          ]
+        },
+        "noise": {
+          "noisy": false,
+          "reasons": [],
+          "idleGpuPercent": 0,
+          "otherModelsMaxRunning": {
+            "qwen3-embedding-4b": 0,
+            "qwen3-embedding-0-6b": 0,
+            "qwen38-27b-nvfp4": 0,
+            "qwen3-vl-embedding-2b": 0,
+            "ov-intent-analysis": 0
+          }
+        }
+      },
+      "score": 1.1935952741382672,
+      "startupSeconds": 222
+    },
+    {
+      "index": 7,
+      "step": "Max batched tokens",
+      "label": "Batched tokens 16,384",
+      "settings": {
+        "id": "qwen36-35b-a3b-nvfp4",
+        "servedName": "Qwen3.6-35B-A3B-NVFP4",
+        "modelPath": "Qwen3.6-35B-A3B-NVFP4",
+        "quantization": null,
+        "kvCacheDtype": "fp8",
+        "maxModelLen": 262144,
+        "maxNumSeqs": 32,
+        "maxNumBatchedTokens": 16384,
+        "memoryBudgetGiB": 48,
+        "toolCallParser": "qwen3_xml",
+        "reasoningParser": "qwen3",
+        "enablePrefixCaching": true,
+        "speculative": {
+          "method": "mtp",
+          "numSpeculativeTokens": 2
+        },
+        "cudaGraphMode": "PIECEWISE",
+        "image": null,
+        "extraArgs": [
+          "--trust-remote-code",
+          "--attention-backend",
+          "flashinfer",
+          "--moe-backend",
+          "marlin",
+          "--enable-chunked-prefill",
+          "--async-scheduling",
+          "--load-format",
+          "fastsafetensors",
+          "--speculative-config",
+          "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:3,\u0022moe_backend\u0022:\u0022triton\u0022}"
+        ],
+        "autoStart": false
+      },
+      "configHash": "2bfdb03001b4c20a",
+      "outcome": "Accepted",
+      "reason": null,
+      "result": {
+        "levels": [
+          {
+            "concurrency": 1,
+            "runs": [
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.7532085,
+                "perRequestTokS": 95.96233957983189,
+                "aggregateTokS": 92.98242396098952,
+                "ttftP50": 0.0854489,
+                "ttftP95": 0.0854489,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.2129685,
+                "perRequestTokS": 81.24055340557227,
+                "aggregateTokS": 79.67709611843378,
+                "ttftP50": 0.0617873,
+                "ttftP95": 0.0617873,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 2.9027849,
+                "perRequestTokS": 90.69022345220839,
+                "aggregateTokS": 88.19117117496374,
+                "ttftP50": 0.0799343,
+                "ttftP95": 0.0799343,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              }
+            ],
+            "perRequestTokS": 90.69022345220839,
+            "aggregateTokS": 88.19117117496374,
+            "ttftP50": 0.0799343,
+            "ttftP95": 0.0799343,
+            "noisy": false
+          },
+          {
+            "concurrency": 4,
+            "runs": [
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.9546847,
+                "perRequestTokS": 52.215534329452524,
+                "aggregateTokS": 171.9654442828854,
+                "ttftP50": 1.0151832,
+                "ttftP95": 1.0152319,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.0178258,
+                "perRequestTokS": 55.282273746355436,
+                "aggregateTokS": 204.07244906748258,
+                "ttftP50": 0.1301855,
+                "ttftP95": 0.1683497,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.0381351,
+                "perRequestTokS": 55.92323324810923,
+                "aggregateTokS": 203.24980963690317,
+                "ttftP50": 0.1703706,
+                "ttftP95": 0.1703853,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              }
+            ],
+            "perRequestTokS": 55.282273746355436,
+            "aggregateTokS": 203.24980963690317,
+            "ttftP50": 0.1703706,
+            "ttftP95": 0.1703853,
+            "noisy": false
+          },
+          {
+            "concurrency": 8,
+            "runs": [
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.8331656,
+                "perRequestTokS": 39.55901518497531,
+                "aggregateTokS": 299.71467397189963,
+                "ttftP50": 0.1918692,
+                "ttftP95": 0.2422379,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.8088823,
+                "perRequestTokS": 40.28004098339084,
+                "aggregateTokS": 300.78358088228373,
+                "ttftP50": 0.1683013,
+                "ttftP95": 0.1684611,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.8485912,
+                "perRequestTokS": 39.33794528882097,
+                "aggregateTokS": 299.03960394073454,
+                "ttftP50": 0.1424053,
+                "ttftP95": 0.1974155,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 39.55901518497531,
+            "aggregateTokS": 299.71467397189963,
+            "ttftP50": 0.1683013,
+            "ttftP95": 0.1974155,
+            "noisy": false
+          },
+          {
+            "concurrency": 16,
+            "runs": [
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 10.1187839,
+                "perRequestTokS": 27.926117724572713,
+                "aggregateTokS": 404.7917260096838,
+                "ttftP50": 0.4222539,
+                "ttftP95": 0.5334496,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.6405867,
+                "perRequestTokS": 28.546633274437706,
+                "aggregateTokS": 424.8704075240566,
+                "ttftP50": 0.2893027,
+                "ttftP95": 0.2894456,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.5999052,
+                "perRequestTokS": 28.790310522563104,
+                "aggregateTokS": 426.67088004160706,
+                "ttftP50": 0.1535251,
+                "ttftP95": 0.2535848,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              }
+            ],
+            "perRequestTokS": 28.546633274437706,
+            "aggregateTokS": 424.8704075240566,
+            "ttftP50": 0.2893027,
+            "ttftP95": 0.2894456,
+            "noisy": false
+          }
+        ],
+        "prefill": {
+          "promptTokens": 65498,
+          "coldSeconds": 15.4345704,
+          "cachedSeconds": 15.4183739,
+          "coldTokensPerSecond": 4243.5907383596505
+        },
+        "guardrails": {
+          "toolCallValid": true,
+          "toolCallDetail": "get_time({\u0022city\u0022: \u0022Riyadh\u0022})",
+          "qaCorrect": 8,
+          "qaTotal": 8,
+          "answers": [
+            {
+              "question": "What is 17 multiplied by 23? Reply with only the number.",
+              "expected": "391",
+              "answer": "391",
+              "correct": true
+            },
+            {
+              "question": "What is 1024 divided by 16? Reply with only the number.",
+              "expected": "64",
+              "answer": "64",
+              "correct": true
+            },
+            {
+              "question": "How many centimeters are in 3.5 meters? Reply with only the number.",
+              "expected": "350",
+              "answer": "350",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(len(\u0027mirbadllm\u0027))\n\nReply with only the output.",
+              "expected": "11",
+              "answer": "11",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(sum(range(5)))\n\nReply with only the output.",
+              "expected": "10",
+              "answer": "10",
+              "correct": true
+            },
+            {
+              "question": "What does this JavaScript code print?\n\nconsole.log([1, 2, 3].map(x =\u003E x * 2).join(\u0027,\u0027))\n\nReply with only the output.",
+              "expected": "2,4,6",
+              "answer": "2,4,6",
+              "correct": true
+            },
+            {
+              "question": "What is the chemical symbol for gold? Reply with only the symbol.",
+              "expected": "Au",
+              "answer": "Au",
+              "correct": true
+            },
+            {
+              "question": "What is the capital city of Australia? Reply with only the city name.",
+              "expected": "Canberra",
+              "answer": "Canberra",
+              "correct": true
+            }
+          ]
+        },
+        "noise": {
+          "noisy": false,
+          "reasons": [],
+          "idleGpuPercent": 0,
+          "otherModelsMaxRunning": {
+            "qwen3-embedding-4b": 0,
+            "qwen3-embedding-0-6b": 0,
+            "qwen38-27b-nvfp4": 0,
+            "qwen3-vl-embedding-2b": 0,
+            "ov-intent-analysis": 0
+          }
+        }
+      },
+      "score": 1.2686260428514446,
+      "startupSeconds": 238
+    },
+    {
+      "index": 8,
+      "step": "KV cache dtype",
+      "label": "KV cache Auto",
+      "settings": {
+        "id": "qwen36-35b-a3b-nvfp4",
+        "servedName": "Qwen3.6-35B-A3B-NVFP4",
+        "modelPath": "Qwen3.6-35B-A3B-NVFP4",
+        "quantization": null,
+        "kvCacheDtype": "auto",
+        "maxModelLen": 262144,
+        "maxNumSeqs": 32,
+        "maxNumBatchedTokens": 16384,
+        "memoryBudgetGiB": 48,
+        "toolCallParser": "qwen3_xml",
+        "reasoningParser": "qwen3",
+        "enablePrefixCaching": true,
+        "speculative": {
+          "method": "mtp",
+          "numSpeculativeTokens": 2
+        },
+        "cudaGraphMode": "PIECEWISE",
+        "image": null,
+        "extraArgs": [
+          "--trust-remote-code",
+          "--attention-backend",
+          "flashinfer",
+          "--moe-backend",
+          "marlin",
+          "--enable-chunked-prefill",
+          "--async-scheduling",
+          "--load-format",
+          "fastsafetensors",
+          "--speculative-config",
+          "{\u0022method\u0022:\u0022mtp\u0022,\u0022num_speculative_tokens\u0022:3,\u0022moe_backend\u0022:\u0022triton\u0022}"
+        ],
+        "autoStart": false
+      },
+      "configHash": "511cdce6b7071e59",
+      "outcome": "Accepted",
+      "reason": null,
+      "result": {
+        "levels": [
+          {
+            "concurrency": 1,
+            "runs": [
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.2323854,
+                "perRequestTokS": 81.1356480594207,
+                "aggregateTokS": 79.19847676579656,
+                "ttftP50": 0.0771406,
+                "ttftP95": 0.0771406,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.1703001,
+                "perRequestTokS": 82.31299781076363,
+                "aggregateTokS": 80.74945334039512,
+                "ttftP50": 0.0601946,
+                "ttftP95": 0.0601946,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              },
+              {
+                "concurrency": 1,
+                "completionTokens": 256,
+                "wallSeconds": 3.0819489,
+                "perRequestTokS": 84.96273720202306,
+                "aggregateTokS": 83.06432335721075,
+                "ttftP50": 0.0688386,
+                "ttftP95": 0.0688386,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 1
+              }
+            ],
+            "perRequestTokS": 82.31299781076363,
+            "aggregateTokS": 80.74945334039512,
+            "ttftP50": 0.0688386,
+            "ttftP95": 0.0688386,
+            "noisy": false
+          },
+          {
+            "concurrency": 4,
+            "runs": [
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.8296597,
+                "perRequestTokS": 53.34233039276345,
+                "aggregateTokS": 175.65347768069552,
+                "ttftP50": 0.7910677,
+                "ttftP95": 0.8036773,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 5.0768426,
+                "perRequestTokS": 55.221484739931725,
+                "aggregateTokS": 201.70016695022218,
+                "ttftP50": 0.3459811,
+                "ttftP95": 0.3460468,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              },
+              {
+                "concurrency": 4,
+                "completionTokens": 1024,
+                "wallSeconds": 4.9467888,
+                "perRequestTokS": 53.83816034544013,
+                "aggregateTokS": 207.0029753443284,
+                "ttftP50": 0.1657214,
+                "ttftP95": 0.1657466,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 4
+              }
+            ],
+            "perRequestTokS": 53.83816034544013,
+            "aggregateTokS": 201.70016695022218,
+            "ttftP50": 0.3459811,
+            "ttftP95": 0.3460468,
+            "noisy": false
+          },
+          {
+            "concurrency": 8,
+            "runs": [
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 7.0075275,
+                "perRequestTokS": 39.82968403446727,
+                "aggregateTokS": 292.2571477600338,
+                "ttftP50": 0.1328962,
+                "ttftP95": 0.1953393,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.9217429,
+                "perRequestTokS": 39.64467305277171,
+                "aggregateTokS": 295.8792358496875,
+                "ttftP50": 0.1716217,
+                "ttftP95": 0.1716714,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              },
+              {
+                "concurrency": 8,
+                "completionTokens": 2048,
+                "wallSeconds": 6.7790682,
+                "perRequestTokS": 39.63050389400393,
+                "aggregateTokS": 302.10641633609765,
+                "ttftP50": 0.1432974,
+                "ttftP95": 0.1984893,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 8
+              }
+            ],
+            "perRequestTokS": 39.64467305277171,
+            "aggregateTokS": 295.8792358496875,
+            "ttftP50": 0.1432974,
+            "ttftP95": 0.1953393,
+            "noisy": false
+          },
+          {
+            "concurrency": 16,
+            "runs": [
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.7641027,
+                "perRequestTokS": 28.243860351678247,
+                "aggregateTokS": 419.4957924807571,
+                "ttftP50": 0.3676035,
+                "ttftP95": 0.4875441,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.5484128,
+                "perRequestTokS": 28.61970687059476,
+                "aggregateTokS": 428.97181822721365,
+                "ttftP50": 0.2880128,
+                "ttftP95": 0.288344,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              },
+              {
+                "concurrency": 16,
+                "completionTokens": 4096,
+                "wallSeconds": 9.4358725,
+                "perRequestTokS": 28.99910468775347,
+                "aggregateTokS": 434.0881036703283,
+                "ttftP50": 0.1543589,
+                "ttftP95": 0.2511062,
+                "otherModelsRunningMax": 0,
+                "sameModelRunningMax": 16
+              }
+            ],
+            "perRequestTokS": 28.61970687059476,
+            "aggregateTokS": 428.97181822721365,
+            "ttftP50": 0.2880128,
+            "ttftP95": 0.288344,
+            "noisy": false
+          }
+        ],
+        "prefill": {
+          "promptTokens": 65500,
+          "coldSeconds": 13.653124,
+          "cachedSeconds": 13.6384807,
+          "coldTokensPerSecond": 4797.436835701485
+        },
+        "guardrails": {
+          "toolCallValid": true,
+          "toolCallDetail": "get_time({\u0022city\u0022: \u0022Riyadh\u0022})",
+          "qaCorrect": 8,
+          "qaTotal": 8,
+          "answers": [
+            {
+              "question": "What is 17 multiplied by 23? Reply with only the number.",
+              "expected": "391",
+              "answer": "391",
+              "correct": true
+            },
+            {
+              "question": "What is 1024 divided by 16? Reply with only the number.",
+              "expected": "64",
+              "answer": "64",
+              "correct": true
+            },
+            {
+              "question": "How many centimeters are in 3.5 meters? Reply with only the number.",
+              "expected": "350",
+              "answer": "350",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(len(\u0027mirbadllm\u0027))\n\nReply with only the output.",
+              "expected": "11",
+              "answer": "11",
+              "correct": true
+            },
+            {
+              "question": "What does this Python code print?\n\nprint(sum(range(5)))\n\nReply with only the output.",
+              "expected": "10",
+              "answer": "10",
+              "correct": true
+            },
+            {
+              "question": "What does this JavaScript code print?\n\nconsole.log([1, 2, 3].map(x =\u003E x * 2).join(\u0027,\u0027))\n\nReply with only the output.",
+              "expected": "2,4,6",
+              "answer": "2,4,6",
+              "correct": true
+            },
+            {
+              "question": "What is the chemical symbol for gold? Reply with only the symbol.",
+              "expected": "Au",
+              "answer": "Au",
+              "correct": true
+            },
+            {
+              "question": "What is the capital city of Australia? Reply with only the city name.",
+              "expected": "Canberra",
+              "answer": "Canberra",
+              "correct": true
+            }
+          ]
+        },
+        "noise": {
+          "noisy": false,
+          "reasons": [],
+          "idleGpuPercent": 0,
+          "otherModelsMaxRunning": {
+            "qwen3-embedding-4b": 0,
+            "qwen3-embedding-0-6b": 0,
+            "qwen38-27b-nvfp4": 0,
+            "qwen3-vl-embedding-2b": 0,
+            "ov-intent-analysis": 0
+          }
+        }
+      },
+      "score": 1.2144334901471545,
+      "startupSeconds": 236
+    }
+  ],
+  "winnerIndex": 7,
+  "winnerGainPercent": 26.862604285144464,
+  "error": null,
+  "notes": [
+    "Restored the saved settings (the model restarts with them)."
+  ]
+}

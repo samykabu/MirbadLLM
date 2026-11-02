@@ -1,0 +1,436 @@
+@page "/models/{Id}/overview"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using MirbadLLM.Orchestration
+@using MirbadLLM.Orchestration.Benchmarking
+@using MirbadLLM.Orchestration.Multinode
+@using MirbadLLM.Orchestration.Nodes
+@using MirbadLLM.Web.Components.ModelEditor
+@inject IModelRegistry Registry
+@inject IServiceProvider Services
+@inject IJSRuntime JS
+
+<PageTitle>@(_model?.ServedName ?? Id) · Overview · MirbadLLM</PageTitle>
+
+@if (_notFound)
+{
+    <PageHeader Title="Model" BackHref="models" BackLabel="Models" />
+    <EmptyState Title="@($"No model called \"{Id}\"")" TestId="overview-not-found">
+        <ChildContent><p>It may have been deleted. Pick a model from the list.</p></ChildContent>
+        <Actions><a class="btn btn-outline-secondary" href="models">Go to Models</a></Actions>
+    </EmptyState>
+}
+else if (_model is not null)
+{
+    <ModelHeader ModelId="@Id" Current="overview" StatusChanged="OnStatusChangedAsync" />
+
+    <div class="overview-grid">
+        <section class="panel overview-panel overview-state" aria-labelledby="ov-state" data-testid="overview-state">
+            <h2 class="panel-label" id="ov-state">State</h2>
+            <div class="overview-state-line">
+                <StateBadge State="State" Since="_status?.Since" Now="_now" TestId="overview-state-badge" />
+                <span class="muted">@StateNote</span>
+            </div>
+            @if (_status is { State: ModelState.Failed } failed)
+            {
+                <div class="failure" data-testid="overview-failure">
+                    <span><strong>Cause:</strong> <span class="failure-cause">@UiFormat.FailureSummary(failed.Error)</span></span>
+                    @if (!string.IsNullOrWhiteSpace(failed.Error))
+                    {
+                        <details>
+                            <summary>Full error output</summary>
+                            <pre>@failed.Error</pre>
+                        </details>
+                    }
+                    <a href="@($"models/{Id}/logs")" data-testid="overview-failure-logs">Open the log</a>
+                </div>
+            }
+            else if (State == ModelState.Ready && _progress is { } progress)
+            {
+                <div class="failure" data-testid="overview-progress">
+                    <span class="failure-cause">@progress.Text</span>
+                    <a href="@($"models/{Id}/logs")">Open the log</a>
+                </div>
+            }
+
+            <dl class="overview-kpis" data-testid="overview-kpis">
+                <div>
+                    <dt>Generation</dt>
+                    <dd><span class="num" data-testid="overview-tok-s">@UiFormat.Number(Load?.GenerationTokensPerSecond)</span> <span class="overview-unit">tok/s</span></dd>
+                </div>
+                <div>
+                    <dt><ColumnHelp Label="Run / wait" Key="run-wait" Scope="overview"
+                                    Text="@($"Requests generating now / requests queued for a free slot. At most {_model.MaxNumSeqs} run at once (Max sequences).")" /></dt>
+                    <dd class="num" data-testid="overview-running-waiting">@RunningWaiting</dd>
+                </div>
+                <div>
+                    <dt>KV cache</dt>
+                    <dd class="num" data-testid="overview-kv">@KvCache</dd>
+                </div>
+            </dl>
+            @if (State != ModelState.Ready)
+            {
+                <p class="overview-foot muted">Live numbers appear while the model is Ready.</p>
+            }
+        </section>
+
+        <section class="panel overview-panel" aria-labelledby="ov-config" data-testid="overview-config">
+            <h2 class="panel-label" id="ov-config">Configuration</h2>
+            <dl class="overview-facts">
+                <dt>Served name</dt>
+                <dd class="overview-copy">
+                    <code data-testid="overview-served-name">@_model.ServedName</code>
+                    <button type="button" class="btn btn-sm btn-ghost" data-testid="overview-copy-served-name"
+                            aria-label="@($"Copy served name {_model.ServedName}")" @onclick="CopyServedNameAsync">
+                        <Icon Name="@(_copied ? "check" : "copy")" /> @(_copied ? "Copied" : "Copy")
+                    </button>
+                </dd>
+                <dt>Node</dt>
+                <dd class="num" data-testid="overview-node">
+                    @if (NodeId is { } node)
+                    {
+                        <a href="@($"nodes/{Uri.EscapeDataString(node)}")">@node</a>
+                    }
+                    else
+                    {
+                        <span>Unplaced</span>
+                    }
+                </dd>
+                <dt>GPUs</dt>
+                <dd class="num" data-testid="overview-gpus">@GpuText</dd>
+                <dt>Runtime</dt>
+                <dd class="num" data-testid="overview-runtime">@ModelHeader.RuntimeLabel(_model.Runtime)</dd>
+                <dt>Budget</dt>
+                <dd class="num" data-testid="overview-budget">@UiFormat.GiB(_model.MemoryBudgetGiB)</dd>
+                <dt>Context</dt>
+                <dd class="num" data-testid="overview-context">@UiFormat.ContextLength(_model.Mlx is { } mlxContext && _model.Runtime == RuntimeKind.Mlx ? mlxContext.ContextSize : _model.MaxModelLen) tokens</dd>
+                <dt>Max sequences</dt>
+                <dd class="num">@(_model.Mlx is { } mlxParallel && _model.Runtime == RuntimeKind.Mlx ? mlxParallel.Parallel : _model.MaxNumSeqs)</dd>
+                <dt>Speculative</dt>
+                <dd class="num">@UiFormat.SpeculativeLabel(_model.Speculative)</dd>
+            </dl>
+            <a class="overview-link" href="@($"models/{Id}")">Change settings</a>
+        </section>
+
+        <section class="panel overview-panel" aria-labelledby="ov-bench" data-testid="overview-benchmark">
+            <h2 class="panel-label" id="ov-bench">Last benchmark</h2>
+            @if (_lastRun is { Result: { } result } run)
+            {
+                var labels = BenchmarkCells.Labels(result.Embeddings is not null);
+                <p class="muted num">@UiFormat.RunTime(run.StartedAt) · @SettingChanges.Summary(run.Settings)</p>
+                <dl class="overview-facts" data-testid="overview-benchmark-summary">
+                    <dt>@labels.N1</dt>
+                    <dd class="num">@BenchmarkCells.N1(result)</dd>
+                    <dt>@labels.N16</dt>
+                    <dd class="num">@BenchmarkCells.N16(result)</dd>
+                    <dt>@labels.P95</dt>
+                    <dd class="num">@BenchmarkCells.P95At16(result)</dd>
+                    <dt>@labels.Check</dt>
+                    <dd class="num">@BenchmarkCells.Check(result)</dd>
+                </dl>
+                <a class="overview-link" href="@($"models/{Id}/benchmark")">All runs and compare</a>
+            }
+            else
+            {
+                <p class="muted" data-testid="overview-benchmark-empty">
+                    No benchmark yet. A run measures the current settings without restarting the model; it needs the model Ready.
+                </p>
+                <a class="overview-link" href="@($"models/{Id}/benchmark")">Go to Benchmark</a>
+            }
+        </section>
+
+        @if (_multiNode)
+        {
+            <section class="panel overview-panel" aria-labelledby="ov-placement" data-testid="overview-placement">
+                <h2 class="panel-label" id="ov-placement">Placement</h2>
+                <p class="muted">
+                    @if (NodeId is { } placed)
+                    {
+                        <span>Runs on <strong class="num">@placed</strong>. Moving it downloads the checkpoint on the target first, then stops it here and starts it there.</span>
+                    }
+                    else
+                    {
+                        <span>On no node, so it can't start or serve. Move it to a node to run it.</span>
+                    }
+                </p>
+                @if (_move is { Active: true } move && move.Record.Move is { } details)
+                {
+                    <div class="callout callout--busy" role="status" data-testid="overview-move-active">
+                        <Icon Name="state-starting" />
+                        <div class="callout-body">
+                            <span>Moving to <strong>@details.TargetNodeId</strong>: @MoveProgress.Label(move.Record.Stage, details).ToLowerInvariant().</span>
+                        </div>
+                    </div>
+                }
+                <div class="overview-actions">
+                    @if (_moves is not null)
+                    {
+                        <button type="button" class="btn btn-outline-secondary" data-testid="overview-move" disabled="@(_move is { Active: true })"
+                                @onclick="() => OpenMoveAsync(_move is { Active: true })">
+                            <Icon Name="arrow-right" /> @(NodeId is null ? "Move to a node…" : "Move to another node…")
+                        </button>
+                        @if (_move is { Active: true })
+                        {
+                            <button type="button" class="btn btn-ghost" data-testid="overview-view-move" @onclick="() => OpenMoveAsync(true)">View progress</button>
+                        }
+                        else if (_model.Placement is not null)
+                        {
+                            <button type="button" class="btn btn-ghost" data-testid="overview-unplace" @onclick="() => _unplace?.Open()">Unplace…</button>
+                        }
+                    }
+                    else
+                    {
+                        <span class="muted">Moves are not available on this master.</span>
+                    }
+                </div>
+            </section>
+        }
+    </div>
+
+    @if (_multiNode && _moves is not null)
+    {
+        <MoveModelDialog @ref="_moveDialog" Model="_model" Nodes="_nodes" Running="IsRunning" OnChanged="ReloadAsync" />
+        <UnplaceModelDialog @ref="_unplace" Model="_model" Running="IsRunning" OnUnplaced="ReloadAsync" />
+    }
+}
+
+@code {
+    [Parameter]
+    public string Id { get; set; } = "";
+
+    private const LiveNeeds Needs = LiveNeeds.Models | LiveNeeds.Statuses;
+
+    private ModelDefinition? _model;
+    private ModelStatus? _status;
+    private ModelMetrics? _load;
+    private ModelProgressIssue? _progress;
+    private BenchmarkRun? _lastRun;
+    private bool _notFound;
+    private bool _copied;
+    private DateTimeOffset _now = DateTimeOffset.UtcNow;
+
+    private bool _multiNode;
+    private string? _singleNodeId;
+    private IReadOnlyList<PlacementNode> _nodes = [];
+    private INodeRegistry? _nodeRegistry;
+    private INodeStatusCache? _nodeCache;
+    private MoveService? _moves;
+    private MoveStatusView? _move;
+    private MoveModelDialog? _moveDialog;
+    private UnplaceModelDialog? _unplace;
+
+    private LiveDataService? _live;
+    private bool _ownsLive;
+    private IDisposable? _subscription;
+    private CancellationTokenSource? _cts;
+    private IJSObjectReference? _module;
+
+    private ModelState State => _status?.State ?? ModelState.Stopped;
+
+    private bool IsRunning => State is ModelState.Starting or ModelState.Ready;
+
+    private string? NodeId => _model?.Placement?.NodeId ?? _singleNodeId;
+
+    /// <summary>Live numbers only while Ready (the history keeps the last sample after a stop).</summary>
+    private ModelMetrics? Load => State == ModelState.Ready ? _load : null;
+
+    private string RunningWaiting => Load is null ? UiFormat.Missing : $"{UiFormat.Whole(Load.RunningRequests)} / {UiFormat.Whole(Load.WaitingRequests)}";
+
+    /// <summary>llama-server and mlx_lm.server report no KV-cache usage: always "—" there.</summary>
+    private string KvCache => Load is null || _model?.Runtime is RuntimeKind.LlamaCpp or RuntimeKind.Mlx ? UiFormat.Missing : UiFormat.Percent(Load.KvCacheUsage * 100);
+
+    private string StateNote => (State is ModelState.Failed or ModelState.Starting ? UiFormat.CrashNote(Services.GetService<ModelRecoveryState>()?.CrashRestartOf(Id)) : null) ?? State switch
+    {
+        ModelState.Starting => "Loading weights and compiling kernels. This usually takes 2–5 minutes.",
+        ModelState.Stopping => "Stopping and releasing its memory.",
+        ModelState.Ready => "Serving requests.",
+        ModelState.Failed => "It did not start or stopped unexpectedly.",
+        _ => "Not running. Start it from the header.",
+    };
+
+    private string GpuText
+    {
+        get
+        {
+            var uuids = _model?.Placement?.GpuUuids;
+            if (uuids is not { Count: > 0 })
+            {
+                return NodeId is null ? UiFormat.Missing : "All (unified memory)";
+            }
+
+            var gpus = NodeId is { } node ? _nodes.FirstOrDefault(n => n.Id == node)?.Gpus ?? [] : [];
+            return string.Join(", ", uuids.Select(u => gpus.FirstOrDefault(g => g.Uuid == u) is { } g ? $"GPU {g.Index}" : u));
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _model = await Registry.GetAsync(Id);
+        if (_model is null)
+        {
+            _notFound = true;
+            return;
+        }
+
+        _nodeRegistry = Services.GetService<INodeRegistry>();
+        _nodeCache = Services.GetService<INodeStatusCache>();
+        _moves = Services.GetService<MoveService>();
+        await ReadNodesAsync();
+        await ReadBenchmarkAsync();
+
+        _cts = new CancellationTokenSource();
+        _live = LiveDataService.Resolve(Services, out _ownsLive);
+        Apply(await _live.GetAsync(Needs, _cts.Token));
+        _subscription = _live.Subscribe(Needs,
+            snapshot => InvokeAsync(async () =>
+            {
+                Apply(snapshot);
+                if (_multiNode && _moves is { } moves)
+                {
+                    _move = await moves.GetAsync(Id);
+                }
+
+                StateHasChanged();
+            }),
+            now => State is ModelState.Starting or ModelState.Stopping
+                ? InvokeAsync(() =>
+                {
+                    _now = now;
+                    StateHasChanged();
+                })
+                : Task.CompletedTask);
+    }
+
+    private void Apply(LiveSnapshot snapshot)
+    {
+        _now = DateTimeOffset.UtcNow;
+        if (snapshot.Models?.FirstOrDefault(m => m.Id == Id) is { } model)
+        {
+            _model = model;
+        }
+
+        if (snapshot.Statuses is { } statuses)
+        {
+            _status = statuses.TryGetValue(Id, out var s) ? s : new ModelStatus(Id, ModelState.Stopped);
+        }
+
+        _load = snapshot.LatestKpis.GetValueOrDefault(Id)?.Load;
+        _progress = Services.GetService<IMetricsHistory>() is { } history
+            ? ModelProgress.Assess(history.GetModel(Id, ModelProgress.Window), _now)
+            : null;
+    }
+
+    private async Task ReadNodesAsync()
+    {
+        if (_nodeRegistry is null)
+        {
+            return;
+        }
+
+        var all = await _nodeRegistry.ListAsync();
+        _multiNode = PlacementEditing.IsMultiNode(all);
+        _singleNodeId = _multiNode ? null : (NodeFleet.Members(all).FirstOrDefault() ?? all.FirstOrDefault(n => !n.Revoked))?.Id;
+        var cache = _nodeCache;
+        _nodes = PlacementEditing.Offered(all, id => cache?.GetNode(id), _model?.Placement?.NodeId);
+        if (_multiNode && _moves is { } moves)
+        {
+            _move = await moves.GetAsync(Id);
+        }
+    }
+
+    private async Task ReadBenchmarkAsync()
+    {
+        if (Services.GetService<BenchmarkStore>() is not { } store)
+        {
+            return;
+        }
+
+        try
+        {
+            _lastRun = (await store.ListBenchmarksAsync(Id)).FirstOrDefault(r => r.Result is not null);
+        }
+        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or UnauthorizedAccessException)
+        {
+            _lastRun = null;
+        }
+    }
+
+    private async Task OnStatusChangedAsync(ModelStatus status)
+    {
+        _status = status;
+        if (status.State == ModelState.Ready)
+        {
+            await ReadBenchmarkAsync();
+        }
+    }
+
+    private async Task OpenMoveAsync(bool progress)
+    {
+        if (_moveDialog is not null)
+        {
+            await _moveDialog.OpenAsync(progress);
+        }
+    }
+
+    /// <summary>A move started or ended, or the model was unplaced: re-read the model, its nodes and its move.</summary>
+    private async Task ReloadAsync()
+    {
+        if (await Registry.GetAsync(Id) is { } current)
+        {
+            _model = current;
+        }
+
+        await ReadNodesAsync();
+        if (_live is not null)
+        {
+            Apply(await _live.RefreshAsync(_cts?.Token ?? CancellationToken.None));
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task CopyServedNameAsync()
+    {
+        if (_model is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./interop.js");
+            _copied = await _module.InvokeAsync<bool>("copyText", _model.ServedName);
+        }
+        catch (JSException)
+        {
+            _copied = false;
+        }
+        catch (JSDisconnectedException)
+        {
+            _copied = false;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _subscription?.Dispose();
+        _cts?.Cancel();
+        if (_ownsLive && _live is not null)
+        {
+            await _live.DisposeAsync();
+        }
+
+        _cts?.Dispose();
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // The circuit is already gone.
+            }
+        }
+    }
+}

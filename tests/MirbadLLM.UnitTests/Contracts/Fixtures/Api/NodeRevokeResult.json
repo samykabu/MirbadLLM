@@ -1,0 +1,8 @@
+{
+  "nodeId": "pc-office",
+  "unplacedModelIds": [
+    "qwen3-8b",
+    "gemma-12b"
+  ],
+  "expiredJoinTokens": 1
+}

@@ -1,0 +1,75 @@
+/* Fencing notices (MN-121): a static bar in the layout flow under the status bar, like the maintenance banner, in the
+   failed tokens (Paired State Rule: icon + text, never colour alone). No shadow: it is not a floating surface. */
+.takeover-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--ss-sp-2) var(--ss-sp-3);
+    padding: var(--ss-sp-2) var(--ss-sp-5);
+    background: var(--ss-failed-subtle);
+    border-bottom: 1px solid color-mix(in srgb, var(--ss-failed) 40%, transparent);
+    color: var(--ss-text);
+}
+
+.takeover-banner--done {
+    align-items: center;
+    background: var(--ss-ready-subtle);
+    border-bottom-color: color-mix(in srgb, var(--ss-ready) 40%, transparent);
+}
+
+.takeover-icon {
+    display: inline-flex;
+    margin-top: 2px;
+    color: var(--ss-failed);
+}
+
+.takeover-banner--done .takeover-icon { color: var(--ss-ready); margin-top: 0; }
+
+.takeover-text {
+    display: grid;
+    flex: 1;
+    gap: var(--ss-sp-1);
+    min-width: min(100%, 24ch);
+    font-size: var(--ss-fs-100);
+}
+
+.takeover-text strong { font-size: var(--ss-fs-200); }
+
+.takeover-nodes {
+    display: grid;
+    gap: var(--ss-sp-1);
+    margin: 0;
+    padding-left: 1.1rem;
+}
+
+.takeover-node-name { font-weight: 600; margin-right: var(--ss-sp-1); }
+
+.takeover-node-reason,
+.takeover-plan { overflow-wrap: anywhere; }
+
+.takeover-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-2);
+}
+
+.takeover-plan {
+    display: grid;
+    gap: var(--ss-sp-2);
+    margin: 0 0 var(--ss-sp-3);
+    padding-left: 1.1rem;
+}
+
+.confirm-field + .confirm-field { margin-top: var(--ss-sp-3); }
+.confirm-field + .callout, .callout + .confirm-field { margin-top: var(--ss-sp-3); }
+
+@media (max-width: 767.98px) {
+    .takeover-banner { padding-inline: var(--ss-sp-4); }
+}
+
+/* Phones: the actions take their own full-width row with 44px targets under the text. */
+@media (max-width: 639.98px) {
+    .takeover-actions { width: 100%; }
+    .takeover-actions .btn { flex: 1 1 auto; min-height: 44px; }
+    .takeover-banner--done .takeover-actions { width: auto; }
+}

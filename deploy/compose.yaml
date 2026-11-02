@@ -1,0 +1,63 @@
+# mirbadllm controller on the DGX Spark. Model containers (ss-<id>) are created by the controller
+# as siblings on the "mirbadllm" network; they are not part of this file.
+name: mirbadllm
+
+services:
+  controller:
+    image: ${MIRBADLLM_IMAGE:-mirbadllm/controller:dev}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: mirbadllm
+    restart: unless-stopped
+    ports:
+      - "${MIRBADLLM_PORT:-8080}:8080"
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID to the gid of /var/run/docker.sock}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${MIRBADLLM_DATA:-/srv/mirbadllm/data}:/data
+      # Read-write: Hugging Face downloads land here; the editor lists and inspects checkpoints.
+      - ${MIRBADLLM_MODELS:-/srv/mirbadllm/models}:/models
+      # mirbadllm-hostd's socket (Services page). Read-only is enough to connect; created by the
+      # host agent (deploy/hostd), and harmlessly empty when the agent is not installed.
+      - /run/mirbadllm-hostd:/run/mirbadllm-hostd:ro
+      # Scheduled backups (Backup & restore page). The page can mount a NAS share at this host path through
+      # the host agent; rslave propagation makes a share mounted on the host AFTER the controller started
+      # appear inside the container too (and disappear again when it is unmounted). Needs the host path's
+      # mount to be shared or slave — the default on Ubuntu/systemd (check: findmnt -o TARGET,PROPAGATION -T /srv/mirbadllm/backups).
+      - type: bind
+        source: ${MIRBADLLM_BACKUPS:-/srv/mirbadllm/backups}
+        target: /backups
+        bind:
+          propagation: rslave
+          create_host_path: true
+    environment:
+      MirbadLLM__ModelsHostPath: ${MIRBADLLM_MODELS:-/srv/mirbadllm/models}
+      MirbadLLM__CacheHostPath: ${MIRBADLLM_CACHE:-/srv/mirbadllm/cache}
+      MirbadLLM__DockerNetwork: mirbadllm
+      MirbadLLM__UseContainerNetwork: "true"
+      MirbadLLM__MemoryReserveGiB: ${MIRBADLLM_MEMORY_RESERVE_GIB:-8}
+      MirbadLLM__ApiKey: ${MIRBADLLM_API_KEY:-}
+      MirbadLLM__ModelsLocalPath: /models
+      # Empty = admin login disabled (a red banner says so).
+      MirbadLLM__AdminPassword: ${MIRBADLLM_ADMIN_PASSWORD:-}
+      MirbadLLM__RequireApiKey: ${MIRBADLLM_REQUIRE_API_KEY:-false}
+      # Encrypts the API keys in scheduled backups. Empty = scheduled backups carry no API keys.
+      MirbadLLM__Backup__Passphrase: ${MIRBADLLM_BACKUP_PASSPHRASE:-}
+      # Names the backup files; inside the container the machine name is a random container id.
+      MirbadLLM__Backup__HostName: ${MIRBADLLM_BACKUP_HOSTNAME:-dgx-spark}
+    networks:
+      - mirbadllm
+    # "utility" only: mounts nvidia-smi for GPU telemetry (Monitoring page, /metrics); no compute access.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [utility]
+
+networks:
+  mirbadllm:
+    name: mirbadllm

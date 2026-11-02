@@ -1,0 +1,8 @@
+/* Approve (a 95-character fingerprint) and rekey (the re-pair command) need a little more than 480px; phones keep 16px gutters. */
+.node-actions ::deep .ss-dialog {
+    width: min(560px, calc(100vw - 32px));
+}
+
+.node-actions ::deep .ss-dialog-body {
+    min-width: 0;
+}

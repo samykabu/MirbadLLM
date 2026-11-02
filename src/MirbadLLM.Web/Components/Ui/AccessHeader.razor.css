@@ -1,0 +1,55 @@
+.access-tabs {
+    --ss-tab-indicator: var(--ss-accent);
+    display: flex;
+    align-items: flex-end;
+    gap: var(--ss-sp-1);
+    margin: calc(-1 * var(--ss-sp-2)) 0 var(--ss-sp-4);
+    border-bottom: 1px solid var(--ss-border);
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+[data-bs-theme=dark] .access-tabs { --ss-tab-indicator: var(--ss-accent-text); }
+
+.access-tabs a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    margin-bottom: -1px;
+    padding: var(--ss-sp-1) var(--ss-sp-3);
+    border-bottom: 2px solid transparent;
+    border-radius: var(--ss-radius) var(--ss-radius) 0 0;
+    color: var(--ss-text-muted);
+    font-family: var(--ss-font-sans);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    white-space: nowrap;
+    text-decoration: none;
+    transition: color var(--ss-dur) var(--ss-ease), background-color var(--ss-dur) var(--ss-ease), border-color var(--ss-dur) var(--ss-ease);
+}
+
+.access-tabs a:hover { color: var(--ss-text); background: var(--ss-hover); border-bottom-color: var(--ss-border-control); }
+
+.access-tabs a[aria-current=page] {
+    color: var(--ss-text);
+    font-weight: 600;
+    border-bottom-color: var(--ss-tab-indicator);
+}
+
+.access-tabs a:focus-visible { outline: 2px solid var(--ss-focus); outline-offset: -2px; }
+
+.access-tab-count {
+    min-width: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--ss-elevated);
+    color: var(--ss-text-muted);
+    font-size: var(--ss-fs-100);
+    line-height: 18px;
+    text-align: center;
+}
+
+@media (pointer: coarse) {
+    .access-tabs a { min-height: 44px; }
+}

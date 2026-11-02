@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <base href="/" />
+    @* Fingerprinted URLs, so a new mark replaces the one browsers cached; /favicon.ico covers bookmarks and history. *@
+    <link rel="icon" type="image/png" href="@Assets["brand/favicon.png"]" />
+    <link rel="apple-touch-icon" href="@Assets["brand/apple-touch-icon.png"]" />
+    <ResourcePreloader />
+    <script>
+        // Set the theme before first paint: stored choice, else the OS preference.
+        (function () {
+            var theme = null;
+            try { theme = localStorage.getItem('mirbadllm-theme'); } catch (e) { /* storage unavailable */ }
+            if (theme !== 'light' && theme !== 'dark') {
+                theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+            }
+            document.documentElement.setAttribute('data-bs-theme', theme);
+        })();
+    </script>
+    <link rel="stylesheet" href="@Assets["lib/bootstrap/css/bootstrap.min.css"]" />
+    <link rel="stylesheet" href="@Assets["app.css"]" />
+    <link rel="stylesheet" href="@Assets["MirbadLLM.Web.styles.css"]" />
+    <ImportMap />
+    <HeadOutlet @rendermode="InteractiveServer" />
+</head>
+
+<body>
+    <Routes />
+    <ReconnectModal />
+    <script src="@Assets["_framework/blazor.web.js"]" autostart="false"></script>
+    <script>
+        // The server pings every second (Program.cs); treat 4 s of silence as a lost connection so the
+        // reconnect banner shows within a few seconds instead of after SignalR's default 30 s.
+        Blazor.start({
+            circuit: {
+                configureSignalR: function (builder) {
+                    builder.withServerTimeout(4000).withKeepAliveInterval(1000);
+                }
+            }
+        });
+    </script>
+    <script src="@Assets["js/shell.js"]"></script>
+    <script src="@Assets["js/tour.js"]"></script>
+</body>
+
+</html>

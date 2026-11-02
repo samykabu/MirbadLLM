@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "version": "b11476",
+  "cuda": "13.4",
+  "minDriver": "615.00",
+  "commit": "988190680",
+  "assets": [
+    {
+      "name": "llama-b11476-bin-win-cuda-13.4-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11476/llama-b11476-bin-win-cuda-13.4-x64.zip",
+      "sha256": "0f947f51ece3b807a7f556dbdf45dc1a7f31aa6ea265657639007a33ef1ce5e0",
+      "bytes": 153139193
+    },
+    {
+      "name": "cudart-llama-bin-win-cuda-13.4-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11476/cudart-llama-bin-win-cuda-13.4-x64.zip",
+      "sha256": "738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668",
+      "bytes": 423535356
+    }
+  ],
+  "files": [
+    {
+      "path": "cudart64_13.dll",
+      "sha256": "05bfafcb97bd53b0089568a96e1e5bd6921637bd0853ff7f5342bd31a6a16890",
+      "bytes": 551024
+    },
+    {
+      "path": "ggml-cuda.dll",
+      "sha256": "9bfc5beba3617a92da33807943cb8e2d6b4b140f044ca3765e30ba6c78086c75",
+      "bytes": 147822592
+    },
+    {
+      "path": "llama-server-impl.dll",
+      "sha256": "9b1610036e7afb84ac48dac134c0e622d534af2ffe1456ac6095fef21c78b781",
+      "bytes": 9172992
+    },
+    {
+      "path": "llama-server.exe",
+      "sha256": "f78215d0ed0b62789f136f1dd576de8ceb968dabfb5c3ff2b22543fef0e09408",
+      "bytes": 9216
+    }
+  ]
+}

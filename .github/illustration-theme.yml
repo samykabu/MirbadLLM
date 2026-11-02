@@ -1,0 +1,6 @@
+schema_version: "1.0"
+active:
+  theme: "cobalt"
+  mode: "light"
+  font_loading: "remote"
+custom_themes: {}

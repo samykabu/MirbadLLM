@@ -1,0 +1,9 @@
+{
+  "scenario": "invalid_api_key",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "status": 401,
+  "contentType": "application/json; charset=utf-8",
+  "retryAfter": null,
+  "body": "{\u0022error\u0022:{\u0022message\u0022:\u0022Missing or invalid API key.\u0022,\u0022type\u0022:\u0022invalid_request_error\u0022,\u0022code\u0022:\u0022invalid_api_key\u0022}}"
+}

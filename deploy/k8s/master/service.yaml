@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mirbadllm-master
+spec:
+  selector:
+    app.kubernetes.io/name: mirbadllm-master
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: enroll
+      port: 8443
+      targetPort: enroll

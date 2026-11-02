@@ -1,0 +1,80 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* One node on Monitoring's node rail: a memory ring, the name, its state as icon + word, the GPU line and one bead per
+   model placed on it (filled in the model's colour while it runs, an empty ring when it does not), followed by the
+   counts in words. The card is a toggle button: pressed means the page is filtered to this node. *@
+<button type="button" class="nd" aria-pressed="@(Pressed ? "true" : "false")" title="@MemoryTitle"
+        data-testid="@TestId" @onclick="OnClick">
+    <RingGauge Percent="MemoryPercent" Label="Memory" ShowValue="true" Size="52" Stroke="4.2"
+               TestId="@(TestId is null ? null : $"{TestId}-memory")" />
+    <span class="nd-top">
+        <span class="nd-name">@Name</span>
+        <span class="nd-state nd-state--@_look.Tone" data-testid="@(TestId is null ? null : $"{TestId}-state")">
+            <Icon Name="@_look.Icon" /> @_look.Label
+        </span>
+    </span>
+    <span class="nd-meta num">@Meta</span>
+    <span class="beads">
+        @foreach (var bead in Beads)
+        {
+            <i class="bead @(bead.Running ? "bead--on" : "bead--off")" style="@(bead.Running ? $"background:{bead.Color}" : null)"
+               title="@($"{bead.Name} · {(bead.Running ? "Ready" : "not running")}")"></i>
+        }
+        <span class="nd-count" data-testid="@(TestId is null ? null : $"{TestId}-count")">@CountText</span>
+    </span>
+</button>
+
+@code {
+    /// <summary>A model placed on the node.</summary>
+    /// <param name="Name">Served name.</param>
+    /// <param name="Color">The model's colour (the same as its table swatch and chart series).</param>
+    /// <param name="Running">True while it is Ready.</param>
+    public sealed record Bead(string Name, string Color, bool Running);
+
+    [Parameter, EditorRequired]
+    public string Name { get; set; } = "";
+
+    [Parameter]
+    public NodeState State { get; set; }
+
+    [Parameter]
+    public bool Draining { get; set; }
+
+    /// <summary>Model memory in use, 0–100; null without a reading ("—").</summary>
+    [Parameter]
+    public double? MemoryPercent { get; set; }
+
+    /// <summary>Tooltip with the memory figures behind the ring.</summary>
+    [Parameter]
+    public string? MemoryTitle { get; set; }
+
+    /// <summary>The second line: GPU, temperature and power, or why there are none.</summary>
+    [Parameter]
+    public string Meta { get; set; } = "";
+
+    [Parameter]
+    public IReadOnlyList<Bead> Beads { get; set; } = [];
+
+    /// <summary>True while the page is filtered to this node.</summary>
+    [Parameter]
+    public bool Pressed { get; set; }
+
+    [Parameter]
+    public EventCallback OnClick { get; set; }
+
+    [Parameter]
+    public string? TestId { get; set; }
+
+    private StateBadge.NodeStateLook _look = StateBadge.NodeLook(NodeState.Online);
+
+    protected override void OnParametersSet() => _look = StateBadge.NodeLook(State, Draining);
+
+    private string CountText
+    {
+        get
+        {
+            int running = Beads.Count(b => b.Running);
+            int off = Beads.Count - running;
+            return Beads.Count == 0 ? "No models placed" : off == 0 ? $"{running} running" : $"{running} running · {off} off";
+        }
+    }
+}

@@ -1,0 +1,129 @@
+/* Backup: every setup problem lives in one checklist inside the Automatic backups block; each item says what is
+   wrong, how to fix it, and keeps the raw message behind a Details disclosure. */
+.setup-checklist {
+    gap: var(--ss-sp-2);
+}
+
+.setup-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-1) var(--ss-sp-3);
+}
+
+.setup-count {
+    color: var(--ss-text-muted);
+    font-size: var(--ss-fs-100);
+}
+
+.setup-list {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.setup-item {
+    display: grid;
+    grid-template-columns: 9.5rem minmax(0, 1fr);
+    align-items: start;
+    gap: var(--ss-sp-2) var(--ss-sp-4);
+    padding: var(--ss-sp-3) 0;
+}
+
+.setup-item + .setup-item { border-top: 1px solid var(--ss-border); }
+
+.setup-state { justify-self: start; }
+
+.setup-body {
+    display: grid;
+    gap: var(--ss-sp-1);
+    max-width: 78ch;
+    min-width: 0;
+}
+
+.setup-title {
+    font-size: var(--ss-fs-200);
+    font-weight: 600;
+}
+
+.setup-fix {
+    color: var(--ss-text-muted);
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+}
+
+.setup-details {
+    font-size: var(--ss-fs-100);
+    color: var(--ss-text-muted);
+}
+
+.setup-details summary {
+    width: fit-content;
+    min-height: 28px;
+    padding-block: 4px;
+    cursor: pointer;
+}
+
+.setup-details summary:focus-visible { outline: 2px solid var(--ss-focus); outline-offset: 2px; }
+
+.setup-details p {
+    margin-top: var(--ss-sp-1);
+    padding: var(--ss-sp-2) var(--ss-sp-3);
+    border-radius: var(--ss-radius-sm);
+    background: var(--ss-sunken);
+    font-family: var(--ss-font-mono);
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 639.98px) {
+    .setup-item { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (pointer: coarse) {
+    .setup-details summary { min-height: 44px; display: flex; align-items: center; }
+}
+
+.backup-shield { display:grid; place-items:center; width:48px; height:48px; border-radius:var(--ss-radius-lg); color:var(--ss-accent-text); background:var(--ss-accent-subtle); }
+.backup-shield ::deep .icon { width:28px; height:28px; }
+.hub-head { flex-wrap:nowrap; align-items:center; }
+.hub-title { margin-right:auto; }
+.backup-now-progress { display:block; width:calc(100% - 48px); height:4px; margin:0 var(--ss-sp-5) var(--ss-sp-3); }
+.backup-facts { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--ss-sp-4); margin:0; }
+.backup-facts dt { font-size:var(--ss-fs-100); color:var(--ss-text-muted); font-weight:400; margin-bottom:var(--ss-sp-2); }
+.backup-facts dd { margin:0; display:grid; gap:var(--ss-sp-1); overflow-wrap:anywhere; }
+.backup-columns { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(0,1fr); gap:var(--ss-sp-4); align-items:start; margin-top:var(--ss-sp-5); }
+.backup-columns > div { min-width:0; }
+.backup-storage { padding:var(--ss-sp-4); }
+.backup-storage .destination-panel { border:0; padding:0; }
+.backup-columns .download-panel { grid-template-columns:minmax(0,1fr); margin-top:0; padding:var(--ss-sp-4); }
+.passphrase-meter { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:var(--ss-sp-1); margin:var(--ss-sp-2) 0; }
+.passphrase-meter span { height:4px; border-radius:var(--ss-radius-sm); background:var(--ss-sunken); }
+.passphrase-meter [data-on=true] { background:var(--ss-accent); }
+.restore-layout { display:grid; grid-template-columns:220px minmax(0,1fr); gap:var(--ss-sp-4); align-items:start; }
+.restore-step-content { min-width:0; }
+.restore-step-content > .section:first-child { margin-top:0; }
+.restore-layout .restore-steps { flex-direction:column; display:flex; gap:var(--ss-sp-3); margin:0; position:sticky; top:calc(var(--ss-statusbar-h) + 16px); }
+.restore-layout .restore-steps ::deep .wizard-step::after { display:none; }
+.restore-layout .restore-steps ::deep .wizard-step-btn { flex-direction:row; text-align:left; justify-content:flex-start; }
+::deep .restore-file-drop { height:auto; min-height:110px; padding:var(--ss-sp-5); border-style:dashed; background:var(--ss-sunken); }
+@media (max-width:1199.98px) { .backup-columns { grid-template-columns:minmax(0,1fr); } }
+@media (max-width:760px) { .backup-facts { grid-template-columns:repeat(2,minmax(0,1fr)); } .hub-head { flex-wrap:wrap; } .restore-layout { grid-template-columns:minmax(0,1fr); } .restore-layout .restore-steps { position:static; flex-direction:row; } }
+
+.setup-checklist { border:1px solid var(--ss-panel-edge); background:var(--ss-panel); border-radius:var(--ss-radius-lg); box-shadow:var(--ss-panel-shadow); margin-top:var(--ss-sp-4); }
+.backup-facts > div + div { border-left: 1px solid var(--ss-border); padding-left: 16px; }
+.backup-facts dd { font-family: var(--ss-font-mono); font-size: 13px; }
+.backup-columns { margin-top: 16px; }
+@media (max-width: 1199.98px) { .restore-layout { grid-template-columns: minmax(0,1fr); } .restore-layout .restore-steps { position: static; flex-direction: row; flex-wrap: wrap; } }
+@media (max-width: 759.98px) { .backup-facts > div:nth-child(3) { border-left: 0; padding-left: 0; } }
+
+.restore-step-content [data-testid=restore-mode] { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); padding:0; gap:var(--ss-sp-3); background:transparent; border:0; }
+.restore-step-content [data-testid=restore-mode] .segmented-option { padding:var(--ss-sp-4); border:1px solid var(--ss-border-control); border-radius:var(--ss-radius); min-width:0; }
+.restore-step-content [data-testid=restore-mode] .segmented-option > span { display:grid; gap:var(--ss-sp-2); white-space:normal; }
+.restore-step-content [data-testid=restore-mode] small { font-size:var(--ss-fs-100); font-weight:400; color:var(--ss-text-muted); }
+@media (max-width:760px) { .restore-step-content [data-testid=restore-mode] { grid-template-columns:minmax(0,1fr); } }
+
+.restore-step-content [data-testid=restore-mode] .segmented-option:has(input:checked) { border-color:var(--ss-accent); background:var(--ss-accent-subtle); }
+
+.backup-storage code { overflow-wrap:anywhere; min-width:0; }

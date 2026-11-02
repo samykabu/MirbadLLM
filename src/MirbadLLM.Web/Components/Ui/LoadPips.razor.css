@@ -1,0 +1,21 @@
+.load {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ss-sp-2);
+    white-space: nowrap;
+}
+
+.pips {
+    display: inline-flex;
+    gap: 2px;
+}
+
+.pip {
+    width: 3px;
+    height: 14px;
+    border-radius: 2px;
+    background: var(--ss-sunken);
+}
+
+.pip--run { background: var(--ss-series-1); }
+.pip--wait { background: var(--ss-busy); }

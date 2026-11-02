@@ -1,0 +1,15 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* One stroke icon set (24px grid, 1.75 stroke, round joins), drawn inline so it themes with currentColor.
+   Always decorative: the adjacent text or the control's accessible name carries the meaning. *@
+<svg class="@CssClass" viewBox="0 0 24 24" aria-hidden="true" focusable="false">@((MarkupString)IconPaths.For(Name))</svg>
+
+@code {
+    [Parameter, EditorRequired]
+    public string Name { get; set; } = "";
+
+    /// <summary>Extra classes, e.g. <c>icon--lg</c> or <c>icon--spin</c>.</summary>
+    [Parameter]
+    public string? Class { get; set; }
+
+    private string CssClass => string.IsNullOrEmpty(Class) ? "icon" : $"icon {Class}";
+}

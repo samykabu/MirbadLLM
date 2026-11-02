@@ -1,0 +1,7 @@
+{
+  "ref": "local/qwen38-vllm-dflash2:66e5414c6d75",
+  "id": "sha256:abc123def456",
+  "digest": "sha256:66e5414c6d75",
+  "arch": "arm64",
+  "sizeBytes": 19327352832
+}

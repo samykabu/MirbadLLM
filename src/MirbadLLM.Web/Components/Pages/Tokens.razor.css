@@ -1,0 +1,15 @@
+/* Saved tokens: a short line on what they are for, the add/edit form, then the list (the API keys layout). */
+.tokens-intro {
+    max-width: 75ch;
+    margin-bottom: var(--ss-sp-4);
+    color: var(--ss-text-muted);
+    text-wrap: pretty;
+}
+
+.tokens-layout { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: var(--ss-sp-4); align-items: start; }
+.tokens-layout > .section { margin-top: 0; min-width: 0; }
+.tokens-form > .panel-label { margin-bottom: var(--ss-sp-3); font-size: 17px; font-weight: 600; letter-spacing: normal; text-transform: none; color: var(--ss-text); }
+/* ::deep because EditForm renders the <form> itself, so it never carries this page's scope attribute. */
+.tokens-form ::deep .token-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--ss-sp-3); }
+.token-form-actions { display: flex; flex-wrap: wrap; gap: var(--ss-sp-2); }
+@media (max-width: 1199.98px) { .tokens-layout { grid-template-columns: minmax(0, 1fr); } }

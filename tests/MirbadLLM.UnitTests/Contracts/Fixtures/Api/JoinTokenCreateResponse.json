@@ -1,0 +1,29 @@
+{
+  "nodeId": "pc-office",
+  "token": "am9pbi1maXh0dXJlLXRva2VuLW5vdC1yZWFs",
+  "caHash": "sha256:q3vYc2ZpeHR1cmUtY2EtaGFzaA",
+  "enrollUrl": "https://mirbad.example.com:8443",
+  "expiresAt": "2026-10-06T10:00:00+00:00",
+  "purpose": "Join",
+  "commands": {
+    "linux": "sudo mirbadllm-agent join --enroll-url https://mirbad.example.com:8443 --token am9pbi1maXh0dXJlLXRva2VuLW5vdC1yZWFs --ca-hash sha256:q3vYc2ZpeHR1cmUtY2EtaGFzaA --node-id pc-office",
+    "windows": null,
+    "macos": null
+  },
+  "agentDownload": {
+    "bundles": [
+      {
+        "rid": "linux-x64",
+        "url": "http://192.0.2.191:8080/agent/bundles/linux-x64.tar.gz",
+        "sha256": "3e8a555c82f619c2b1a5ad3f9358e136d9bc3743253615ae0f70c46f2301cc0f",
+        "version": "0123456789ab"
+      },
+      {
+        "rid": "linux-arm64",
+        "url": "http://192.0.2.191:8080/agent/bundles/linux-arm64.tar.gz",
+        "sha256": "6b58891a65d3b39a5cb875c6faf8db0b5281ba8220adcc2cb1321607b2399138",
+        "version": "0123456789ab"
+      }
+    ]
+  }
+}

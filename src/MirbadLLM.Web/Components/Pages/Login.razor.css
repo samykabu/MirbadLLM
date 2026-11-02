@@ -1,0 +1,35 @@
+/* Sign in: the brand, one calm panel, and a line for the people who landed here looking for the API. */
+.login {
+    display: grid;
+    justify-items: center;
+    gap: var(--ss-sp-5);
+    width: min(400px, 100%);
+}
+
+.login-brand { font-size: var(--ss-fs-300); }
+
+.login-panel {
+    width: 100%;
+    gap: var(--ss-sp-5);
+    padding: var(--ss-sp-6) var(--ss-sp-5) var(--ss-sp-5);
+}
+
+.login-head {
+    display: grid;
+    gap: var(--ss-sp-2);
+}
+
+.login-lede {
+    color: var(--ss-text-muted);
+    text-wrap: pretty;
+}
+
+.login-submit { width: 100%; }
+
+.login-foot {
+    max-width: 44ch;
+    color: var(--ss-text-muted);
+    font-size: var(--ss-fs-100);
+    text-align: center;
+    text-wrap: balance;
+}

@@ -1,0 +1,13 @@
+# Build context of deploy/agent.Dockerfile (BuildKit reads <Dockerfile>.dockerignore): sources and the agent config only.
+**
+!global.json
+!Directory.Build.props
+!Directory.Packages.props
+!src/MirbadLLM.Core/**
+!src/MirbadLLM.Agent.Contracts/**
+!src/MirbadLLM.Pki/**
+!src/MirbadLLM.NodeRuntime/**
+!src/MirbadLLM.Agent/**
+!deploy/agent/agent.dgx.json
+**/bin
+**/obj

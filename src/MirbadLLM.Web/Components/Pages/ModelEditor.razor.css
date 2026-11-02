@@ -1,0 +1,16 @@
+/* The single node, shown read-only where a field would be (MN-118): aligned with the controls next to it, not one. */
+.field-static {
+    display: flex;
+    align-items: center;
+    min-height: var(--ss-control-h);
+    overflow-wrap: anywhere;
+}
+
+/* One line under the model header saying what Settings changes, kept to a readable measure. */
+.editor-lede {
+    max-width: 78ch;
+    margin: calc(-1 * var(--ss-sp-2)) 0 var(--ss-sp-4);
+    color: var(--ss-text-muted);
+    text-wrap: pretty;
+}
+

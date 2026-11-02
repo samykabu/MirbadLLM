@@ -1,0 +1,133 @@
+/* Nodes list: state, headroom, models and alerts per node; the facts behind them live on the node's page. */
+.nodes-table td {
+    vertical-align: top;
+}
+
+.nodes-name {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    font-family: var(--ss-font-mono);
+    font-weight: 600;
+    color: var(--ss-text);
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.nodes-name:hover {
+    color: var(--ss-accent-text);
+    text-decoration: underline;
+}
+
+.nodes-col-node {
+    white-space: nowrap;
+}
+
+.nodes-col-state {
+    min-width: 12rem;
+}
+
+.nodes-reasons {
+    max-width: 36ch;
+    margin-top: var(--ss-sp-1);
+    font-size: var(--ss-fs-100);
+    text-wrap: pretty;
+}
+
+.nodes-seen {
+    margin-top: var(--ss-sp-1);
+    font-size: var(--ss-fs-100);
+}
+
+.nodes-col-headroom {
+    white-space: nowrap;
+}
+
+.nodes-col-headroom > .muted,
+.nodes-gpu-free + .muted {
+    font-size: var(--ss-fs-100);
+}
+
+.nodes-gpu-free {
+    display: grid;
+    grid-template-columns: auto auto;
+    justify-content: start;
+    gap: 2px var(--ss-sp-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.nodes-gpu-free li {
+    display: contents;
+}
+
+.nodes-alerts {
+    display: grid;
+    gap: var(--ss-sp-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.nodes-alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: var(--ss-fs-100);
+    line-height: 1.4;
+}
+
+.nodes-alert ::deep .icon {
+    margin-top: 1px;
+}
+
+.nodes-alert--failed { color: var(--ss-failed); }
+.nodes-alert--busy { color: var(--ss-busy); }
+.nodes-alert--neutral { color: var(--ss-text-muted); }
+
+.nodes-table .row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ss-sp-2);
+}
+
+@media (pointer: coarse) {
+    .nodes-name {
+        min-height: 44px;
+    }
+}
+
+/* Stacked (phone) rows: each cell's value is one block beside its label, so its lines stay together. */
+.nodes-cell {
+    min-width: 0;
+}
+
+.nodes-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--ss-sp-4); margin-top:var(--ss-sp-5); }
+.node-fleet-card { position:relative; padding:var(--ss-sp-4); display:grid; gap:var(--ss-sp-3); min-width:0; }
+.node-fleet-card .col-actions { position:absolute; top:var(--ss-sp-3); right:var(--ss-sp-3); }
+.node-fleet-card .nodes-col-node { padding-right:var(--ss-sp-6); white-space:normal; }
+.nodes-name { font-size:15px; white-space:normal; overflow-wrap:anywhere; }
+.node-runtime-chips, .node-model-pills { display:flex; flex-wrap:wrap; gap:var(--ss-sp-2); }
+.node-model-pills a { text-decoration:none; }
+.node-model-dot { width:6px; height:6px; border-radius:50%; display:inline-block; background:var(--ss-idle); margin-right:6px; }
+.node-model-dot[data-ready=true] { background:var(--ss-ready); }
+.node-open { justify-self:end; }
+.node-fleet-card { gap: 10px; }
+.node-fleet-card .nodes-col-state ::deep .state { padding: 0; background: transparent; border: 0; }
+.node-fleet-card .nodes-col-state { min-width: 0; }
+.node-fleet-card .nodes-col-node { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.nodes-col-node .tag-list { margin: 0; }
+.nodes-agent-version { order: 3; flex-basis: 100%; font-size: 11px; }
+.nodes-col-headroom .nodes-cell:has(> .ring) { display: grid; grid-template-columns: 56px minmax(0,1fr); align-items: center; column-gap: 12px; }
+.nodes-col-headroom .nodes-cell ::deep > .ring { grid-row: span 2; }
+.nodes-col-headroom .nodes-cell > div { font-size: 12px; }
+.node-fleet-card .nodes-col-alerts { border-top: 1px solid var(--ss-border); padding-top: 10px; font-size: 12px; }
+.node-model-pills .tag-chip { border: 1px solid var(--ss-border); background: var(--ss-panel); color: var(--ss-text); }
+.nodes-grid { margin-top: 16px; align-items: start; }
+.nodes-gpu-free { display:grid; grid-template-columns:1fr; }
+.nodes-gpu-free li { display:grid; grid-template-columns:auto 1fr; gap:var(--ss-sp-2); }
+.node-gpu-bar { width:100%; height:6px; align-self:center; }
+.nodes-gpu-free li > span:last-child { grid-column:1/-1; }
+@media (max-width:1200px) { .nodes-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:760px) { .nodes-grid { grid-template-columns:minmax(0,1fr); } }

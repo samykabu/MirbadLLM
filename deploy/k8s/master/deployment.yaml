@@ -1,0 +1,96 @@
+# The master pod (design §11.1–§11.4). No Docker socket, no /models, no hostd, no GPU, no host networking (§11.8).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mirbadllm-master
+  labels:
+    app.kubernetes.io/name: mirbadllm-master
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mirbadllm-master
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mirbadllm-master
+    spec:
+      # SIGTERM: stop accepting /v1, let streams finish (up to 50 s), write state, release the lock (§11.3).
+      terminationGracePeriodSeconds: 60
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        runAsUser: 1654
+        runAsGroup: 1654
+        runAsNonRoot: true
+        fsGroup: 1654
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: master
+          image: registry.example.com/mirbadllm/master:000000000000
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: enroll
+              containerPort: 8443
+          env:
+            - name: ASPNETCORE_HTTP_PORTS
+              value: "8080"
+            - name: MirbadLLM__DataPath
+              value: /data
+            - name: MirbadLLM__Backup__Directory
+              value: /backups
+            - name: MirbadLLM__Backup__HostName
+              value: k8s
+            # No co-located agent: every node joins with a join token (P2), the DGX included (D59: it then reads lan).
+            - name: MirbadLLM__Enrollment__BootstrapEnabled
+              value: "false"
+            - name: MirbadLLM__Enrollment__Port
+              value: "8443"
+            - name: MirbadLLM__Enrollment__ListenerAddresses__0
+              value: enroll.mirbad.example.com
+          envFrom:
+            - secretRef:
+                name: mirbadllm-master
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: backups
+              mountPath: /backups
+            # The image's root filesystem is read-only; .NET and ASP.NET write temp files here.
+            - name: tmp
+              mountPath: /tmp
+          # /readyz (registry, PKI, /data writable, lock held) is P5 work; /healthz until then.
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1536Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mirbadllm-data
+        - name: backups
+          persistentVolumeClaim:
+            claimName: mirbadllm-backups
+        - name: tmp
+          emptyDir: {}

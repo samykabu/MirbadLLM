@@ -1,0 +1,18 @@
+/* A date groups the merged pull requests; kind filters keep their original release identities. */
+.release-filter { margin-bottom:var(--ss-sp-5); }
+.release-filter .num { margin-left:var(--ss-sp-2); color:var(--ss-text-muted); }
+.release-timeline { display:grid; gap:20px; max-width:860px; }
+.release-day { display:grid; grid-template-columns:110px minmax(0,1fr); gap:var(--ss-sp-5); }
+.release-date { padding-top:var(--ss-sp-4); text-align:right; display:grid; align-content:start; gap:var(--ss-sp-1); font-family:var(--ss-font-mono); font-size:var(--ss-fs-100); color:var(--ss-text-muted); }
+.release-date b { color:var(--ss-text); font-family:var(--ss-font-sans); font-size:var(--ss-fs-200); font-weight:600; }
+.release-day .release-list { border-left:1px solid var(--ss-border); padding-left:var(--ss-sp-5); }
+.release-card { position:relative; }
+.release-card { padding: 14px 18px; }
+.release-card-head { display: grid; gap: 6px; }
+.release-card-title { font-size: 15px; line-height: 1.4; }
+.release-card-title a { text-decoration: none; }
+.release-card-title a:hover { color: var(--ss-accent-text); text-decoration: underline; }
+.release-card-head > .num { font-size: 11px; }
+.release-card-head .chip { justify-self: start; }
+.release-card::before { content:""; position:absolute; width:6px; height:6px; border-radius:50%; background:var(--ss-border-control); left:-28px; top:var(--ss-sp-5); }
+@media (max-width:760px) { .release-day { grid-template-columns:minmax(0,1fr); gap:var(--ss-sp-2); } .release-date { display:flex; gap:var(--ss-sp-2); text-align:left; padding:0; } .release-filter { max-width:100%; flex-wrap:wrap; } }

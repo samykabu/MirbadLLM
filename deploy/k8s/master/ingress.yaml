@@ -1,0 +1,30 @@
+# Traefik (design §11.5). UI, /api, /v1, /metrics, /healthz on the cluster certificate; Blazor's WebSockets pass by
+# default. No retry or buffering middleware on inference routes (§7.3); set long timeouts on the entry point in P5.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: mirbadllm-master
+spec:
+  entryPoints: [websecure]
+  routes:
+    - kind: Rule
+      match: Host(`mirbad.example.com`)
+      services:
+        - name: mirbadllm-master
+          port: 8080
+  tls: {}
+---
+# Enrollment: TLS passthrough to the master's own listener (agents pin the CA hash, so Traefik must not terminate it).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: mirbadllm-enroll
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: HostSNI(`enroll.mirbad.example.com`)
+      services:
+        - name: mirbadllm-master
+          port: 8443
+  tls:
+    passthrough: true

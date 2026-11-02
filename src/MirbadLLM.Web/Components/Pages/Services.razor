@@ -1,0 +1,15 @@
+@page "/services"
+@rendermode InteractiveServer
+
+<PageTitle>Services · MirbadLLM</PageTitle>
+
+<PageHeader Title="Services">
+    <Subtitle>
+        Daemons, containers and Windows services that share a node's memory with the models. Stop what you don't need to free
+        memory; autostart decides what comes back after a reboot. Each node's page has the same list under its Services tab.
+    </Subtitle>
+</PageHeader>
+
+@* The body is the node's Services tab (NodeServices), with the node selector: it opens on ?node=, else on a node whose agent
+   manages services, and explains the ones that can't. *@
+<NodeServices ShowNodeSelector="true" TestId="services-body" />

@@ -1,0 +1,26 @@
+/* The join command needs more room than a confirm dialog's 480px; phones keep the 16px side gutters. */
+.add-node ::deep .ss-dialog {
+    width: min(640px, calc(100vw - 32px));
+}
+
+.add-node ::deep .ss-dialog-body {
+    min-width: 0;
+}
+
+.add-node-wait {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ss-sp-2);
+}
+
+.add-node-wait > p {
+    margin: 0;
+}
+
+.add-node-wait-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-2);
+}

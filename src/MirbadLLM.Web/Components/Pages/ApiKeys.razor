@@ -1,0 +1,331 @@
+@page "/keys"
+@page "/access/keys"
+@rendermode InteractiveServer
+@inject IApiKeyStore ApiKeyStore
+@inject IJSRuntime JS
+
+<PageTitle>API keys · Access · MirbadLLM</PageTitle>
+
+<AccessHeader Current="AccessPage.Keys" KeyCount="@_keys.Count(k => k.IsActive)" />
+
+<p class="keys-intro" data-testid="keys-intro">
+    Inference keys call the models on <code>/v1</code>; metrics keys only read <code>/metrics</code> for Prometheus.
+    A key is shown once, when it is created, so copy it straight into the client.
+</p>
+
+@if (_error is not null)
+{
+    <div class="callout callout--failed page-alert" role="alert" data-testid="keys-error">
+        <Icon Name="state-failed" />
+        <div class="callout-body">@_error</div>
+    </div>
+}
+
+<section class="section" aria-labelledby="keys-title">
+    <div class="section-head">
+        <h2 id="keys-title">Keys</h2>
+        @if (_keys.Count > 0)
+        {
+            <span class="section-note num">@_keys.Count(k => k.IsActive) active of @_keys.Count</span>
+            <button type="button" class="btn btn-sm btn-primary keys-add" data-testid="add-key" @ref="_addButton" @onclick="OpenAdd"><Icon Name="key" /> Add key</button>
+        }
+    </div>
+    @if (_keys.Count == 0)
+    {
+        <EmptyState Title="No API keys yet" HeadingLevel="3" Inline="true" TestId="keys-empty">
+            <ChildContent>
+                <p>Until the first inference key exists, anyone who can reach this host can call <code>/v1</code>. Creating one makes a key required from then on, so every client needs a key after that.</p>
+            </ChildContent>
+            <Actions>
+                <button type="button" class="btn btn-sm btn-primary" data-testid="add-key" @ref="_addButton" @onclick="OpenAdd"><Icon Name="key" /> Add key</button>
+            </Actions>
+        </EmptyState>
+    }
+    else
+    {
+        <div class="panel panel--scroll-x">
+            <table class="data-table data-table--stack data-table--stack-wide" data-testid="keys-table">
+                <caption class="visually-hidden">API keys</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Name</th>
+                        <th scope="col">Scope</th>
+                        <th scope="col">Key</th>
+                        <th scope="col">Last used</th>
+                        <th scope="col">Status</th>
+                        <th scope="col"><span class="visually-hidden">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var key in Pager.Slice(_keys, _page, _size))
+                    {
+                        <tr data-testid="key-row-@key.Id">
+                            <td class="col-primary">@key.Name<div class="muted keys-created">created <span class="num">@key.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span></div></td>
+                            <td data-label="Scope"><span class="tag-chip">@key.Scope</span></td>
+                            <td data-label="Key"><code class="num">ssk_@(key.Prefix)&hellip;</code></td>
+                            <td data-label="Last used" class="num">@(key.LastUsedAt is null ? "Never" : key.LastUsedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm"))</td>
+                            <td data-label="Status">
+                                <span class="state @(key.IsActive ? "state--ready" : "state--stopped")" data-testid="status-@key.Id">
+                                    <Icon Name="@(key.IsActive ? "state-ready" : "state-stopped")" /> @(key.IsActive ? "Active" : "Revoked")
+                                </span>
+                            </td>
+                            <td class="col-actions">
+                                @if (key.IsActive)
+                                {
+                                    <button class="btn btn-sm btn-outline-danger" type="button" data-testid="revoke-@key.Id"
+                                            aria-label="@($"Revoke {key.Name}")" @onclick="() => AskRevoke(key)">
+                                        Revoke
+                                    </button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-outline-danger" type="button" data-testid="delete-@key.Id"
+                                            aria-label="@($"Delete {key.Name}")" @onclick="() => AskDelete(key)">
+                                        <Icon Name="trash" /> Delete
+                                    </button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <Pager Total="_keys.Count" @bind-Page="_page" @bind-Size="_size" Noun="keys" TestId="keys-pager" />
+    }
+</section>
+
+<dialog @ref="_dialog" class="ss-dialog key-dialog" aria-labelledby="add-key-title" data-testid="add-key-dialog"
+        data-open="@(_addOpen ? "true" : "false")" @oncancel="OnDialogCancelAsync" @onclick="CloseAddAsync">
+    @* A click inside never reaches the dialog element; one on the backdrop does, and closes it. *@
+    <div class="ss-dialog-inner" @onclick:stopPropagation="true">
+        @if (_createdKey is null)
+        {
+            <h2 id="add-key-title">Add an API key</h2>
+            @if (_createError is not null)
+            {
+                <div class="callout callout--failed" role="alert" data-testid="add-key-error">
+                    <Icon Name="state-failed" />
+                    <div class="callout-body">@_createError</div>
+                </div>
+            }
+
+            <EditForm Model="_newKey" OnValidSubmit="CreateAsync" data-testid="create-key-form" class="create-key-form">
+                <DataAnnotationsValidator />
+                <div class="field">
+                    <label class="field-label" for="key-name">Name</label>
+                    <InputText id="key-name" class="form-control" @bind-Value="_newKey.Name" data-testid="field-key-name" autofocus
+                               placeholder="e.g. laptop-cline" aria-describedby="key-name-hint key-name-error" />
+                    <span class="field-hint" id="key-name-hint">Who or what uses it, so you know what breaks when you revoke it.</span>
+                    <div id="key-name-error"><ValidationMessage For="() => _newKey.Name" /></div>
+                </div>
+                <div class="field">
+                    <span class="field-label" id="key-scope-label">Scope</span>
+                    <div id="key-scope" class="segmented" role="radiogroup" data-testid="field-key-scope" aria-labelledby="key-scope-label" aria-describedby="key-scope-hint">
+                        <InputRadioGroup @bind-Value="_newKey.Scope">
+                            <label class="segmented-option"><InputRadio Value="ApiKeyScope.Inference" data-testid="key-scope-inference" /><span>Inference</span></label>
+                            <label class="segmented-option"><InputRadio Value="ApiKeyScope.Metrics" data-testid="key-scope-metrics" /><span>Metrics</span></label>
+                        </InputRadioGroup>
+                    </div>
+                    <span class="field-hint" id="key-scope-hint">Inference keys call the models; metrics keys only read Prometheus metrics.</span>
+                </div>
+                <div class="ss-dialog-actions">
+                    <button type="button" class="btn btn-outline-secondary" data-testid="add-key-cancel" @onclick="CloseAddAsync">Cancel</button>
+                    <button type="submit" class="btn btn-primary" data-testid="create-key-submit"><Icon Name="key" /> Create key</button>
+                </div>
+            </EditForm>
+        }
+        else
+        {
+            <h2 id="add-key-title">Key created</h2>
+            <div class="callout callout--ready" role="status" data-testid="created-key-banner">
+                <Icon Name="state-ready" />
+                <div class="callout-body">
+                    <span class="callout-title">Copy it now: it is shown once and won't be shown again.</span>
+                    <div class="created-key">
+                        <code class="num" data-testid="created-key-value">@_createdKey</code>
+                        <button class="btn btn-sm btn-outline-secondary" type="button" aria-label="Copy the new API key" data-testid="created-key-copy" @onclick="CopyCreatedKeyAsync">
+                            <Icon Name="@(_copied ? "check" : "copy")" /> @(_copied ? "Copied" : "Copy")
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="ss-dialog-actions">
+                <button type="button" class="btn btn-primary" data-testid="add-key-done" autofocus @onclick="CloseAddAsync">Done</button>
+            </div>
+        }
+    </div>
+</dialog>
+
+<ConfirmDialog @bind-Open="_revokeOpen" Title="@($"Revoke {_revokeTarget?.Name}?")" ConfirmLabel="Revoke key" Destructive="true"
+               OnConfirm="ConfirmRevokeAsync" TestId="revoke-dialog" ConfirmTestId="@($"confirm-revoke-{_revokeTarget?.Id}")">
+    <p>
+        Clients using <code class="num">ssk_@(_revokeTarget?.Prefix)&hellip;</code> start getting <strong>401 Unauthorized</strong> on
+        @(_revokeTarget?.Scope == ApiKeyScope.Metrics ? "/metrics" : "/v1") immediately. This can't be undone; create a new key to restore access.
+    </p>
+</ConfirmDialog>
+
+<ConfirmDialog @bind-Open="_deleteOpen" Title="@($"Delete {_deleteTarget?.Name}?")" ConfirmLabel="Delete key" Destructive="true"
+               OnConfirm="ConfirmDeleteAsync" TestId="delete-dialog" ConfirmTestId="@($"confirm-delete-{_deleteTarget?.Id}")">
+    <p data-testid="delete-dialog-body">
+        Delete revoked key '@(_deleteTarget?.Name)' (ssk_@(_deleteTarget?.Prefix)&hellip;)? This removes it from the list permanently.
+    </p>
+</ConfirmDialog>
+
+@code {
+    private List<ApiKeyRecord> _keys = [];
+    private int _page = 1;
+    private int? _size;
+    private readonly NewKeyModel _newKey = new();
+    private string? _createdKey;
+    private string? _createError;
+    private string? _error;
+    private bool _addOpen;
+    private bool _addShown;
+    private ElementReference _dialog;
+    private ElementReference _addButton;
+    private bool _copied;
+    private bool _revokeOpen;
+    private ApiKeyRecord? _revokeTarget;
+    private bool _deleteOpen;
+    private ApiKeyRecord? _deleteTarget;
+    private IJSObjectReference? _module;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_addOpen == _addShown)
+        {
+            return;
+        }
+
+        bool closing = _addShown;
+        _addShown = _addOpen;
+        try
+        {
+            await (await ModuleAsync()).InvokeVoidAsync(_addOpen ? "showDialog" : "closeDialog", _dialog);
+            if (closing)
+            {
+                await _addButton.FocusAsync(); // back where the dialog was opened from
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            // Circuit gone; nothing to show.
+        }
+    }
+
+    private void OpenAdd()
+    {
+        _createdKey = null;
+        _createError = null;
+        _copied = false;
+        _newKey.Name = "";
+        _newKey.Scope = ApiKeyScope.Inference;
+        _addOpen = true;
+    }
+
+    private Task CloseAddAsync()
+    {
+        _addOpen = false;
+        _createdKey = null; // shown once: gone with the dialog
+        _createError = null;
+        return Task.CompletedTask;
+    }
+
+    // Esc: the browser closes the dialog itself; keep the state in step.
+    private Task OnDialogCancelAsync()
+    {
+        _addShown = true; // so the next render still returns focus to the button
+        return CloseAddAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var all = await ApiKeyStore.ListAsync();
+        _keys = all.OrderByDescending(k => k.CreatedAt).ToList();
+    }
+
+    private async Task CreateAsync()
+    {
+        _createError = null;
+        string name = _newKey.Name.Trim();
+        if (_keys.Any(k => k.IsActive && string.Equals(k.Name, name, StringComparison.OrdinalIgnoreCase)))
+        {
+            _createError = $"An active key is already named {name}. Pick another name, so each client's key can be told apart.";
+            return;
+        }
+
+        try
+        {
+            var created = await ApiKeyStore.CreateAsync(name, _newKey.Scope);
+            _createdKey = created.FullKey;
+            _copied = false;
+            _newKey.Name = "";
+            await LoadAsync();
+        }
+        catch (ArgumentException ex)
+        {
+            _createError = ex.Message;
+        }
+    }
+
+    private void AskRevoke(ApiKeyRecord key)
+    {
+        _revokeTarget = key;
+        _revokeOpen = true;
+    }
+
+    private async Task ConfirmRevokeAsync()
+    {
+        if (_revokeTarget is null)
+        {
+            return;
+        }
+
+        await ApiKeyStore.RevokeAsync(_revokeTarget.Id);
+        await LoadAsync();
+    }
+
+    private void AskDelete(ApiKeyRecord key)
+    {
+        _deleteTarget = key;
+        _deleteOpen = true;
+    }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_deleteTarget is null)
+        {
+            return;
+        }
+
+        var result = await ApiKeyStore.DeleteAsync(_deleteTarget.Id);
+        _error = result switch
+        {
+            ApiKeyDeleteResult.StillActive => $"{_deleteTarget.Name} is active again; revoke it before deleting it.",
+            ApiKeyDeleteResult.NotFound => null,
+            _ => null,
+        };
+        await LoadAsync();
+    }
+
+    private async Task<IJSObjectReference> ModuleAsync()
+        => _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./interop.js");
+
+    private async Task CopyCreatedKeyAsync()
+    {
+        if (_createdKey is not null)
+        {
+            _copied = await (await ModuleAsync()).InvokeAsync<bool>("copyText", _createdKey);
+        }
+    }
+
+    private sealed class NewKeyModel
+    {
+        [Required]
+        public string Name { get; set; } = "";
+
+        public ApiKeyScope Scope { get; set; } = ApiKeyScope.Inference;
+    }
+}

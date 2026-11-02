@@ -1,0 +1,27 @@
+﻿@page "/Error"
+@using System.Diagnostics
+
+<PageTitle>Error · MirbadLLM</PageTitle>
+
+<PageHeader Title="Something went wrong" />
+<div class="callout callout--failed" role="alert">
+    <Icon Name="state-failed" />
+    <div class="callout-body">
+        <span>The server hit an error while handling this request. Reload the page, or go back to the Dashboard.</span>
+        @if (ShowRequestId)
+        {
+            <span class="muted">Request ID: <code>@RequestId</code> (look for it in the controller log).</span>
+        }
+    </div>
+</div>
+
+@code{
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string? RequestId { get; set; }
+    private bool ShowRequestId => !string.IsNullOrEmpty(RequestId);
+
+    protected override void OnInitialized() =>
+        RequestId = Activity.Current?.Id ?? HttpContext?.TraceIdentifier;
+}

@@ -1,0 +1,302 @@
+@namespace MirbadLLM.Web.Components.Ui
+@implements IAsyncDisposable
+@using System.Globalization
+@inject IJSRuntime JS
+@* The join (or rekey) command of a freshly minted token (design §12.1 Add node, MN-114 rekey): Line tabs per OS (only
+   the systems the master has a command for), and under Linux and Windows (design-p3p4 §A.4.5, MN-227) a choice of how the
+   token travels. "Paste it at a prompt"
+   (the default, MN-126) runs the installer without the token on the command line, so it never shows in `ps` or the shell
+   history, and the installer asks for it; "Token in the command" is the one-line form the master builds. Every value has
+   a Copy button that copies the exact, unwrapped text. The token lives only in this component's parameters: it is never
+   put in the URL, logged, or kept after the dialog closes. *@
+<div class="join-command" data-testid="@TestId">
+    <Tabs Items="OsTabs" @bind-SelectedId="_os" AriaLabel="Operating system" TestId="@($"{TestId}-os")">
+        <ChildContent Context="os">
+            @if (os == "linux")
+            {
+                @if (PromptCommand is { } prompt)
+                {
+                    <div class="segmented" role="radiogroup" aria-label="How to pass the token" data-testid="@($"{TestId}-mode")">
+                        <label class="segmented-option">
+                            <input type="radio" name="@($"{TestId}-mode")" checked="@(!_inline)" data-testid="@($"{TestId}-mode-prompt")"
+                                   @onchange="() => _inline = false" />
+                            <span>Paste the token at a prompt</span>
+                        </label>
+                        <label class="segmented-option">
+                            <input type="radio" name="@($"{TestId}-mode")" checked="@_inline" data-testid="@($"{TestId}-mode-inline")"
+                                   @onchange="() => _inline = true" />
+                            <span>Token in the command</span>
+                        </label>
+                    </div>
+                    @if (_inline)
+                    {
+                        @if (DownloadsAgent)
+                        {
+                            <p class="muted" data-testid="@($"{TestId}-inline-note")">One line to paste on the PC (needs <code>curl</code> and <code>sudo</code>): it downloads the agent for the PC's architecture from this master, checks its SHA-256 before running anything, and installs it. The token is briefly visible to other users in <code>ps</code> and stays in the shell history.</p>
+                        }
+                        else
+                        {
+                            <p class="muted" data-testid="@($"{TestId}-inline-note")">One line to paste. The token is briefly visible to other users in <code>ps</code> and stays in the shell history.</p>
+                        }
+                        @CommandBlock(Response.Commands.Linux, "linux", "Copy the command")
+                    }
+                    else
+                    {
+                        @if (DownloadsAgent)
+                        {
+                            <p class="muted" data-testid="@($"{TestId}-prompt-note")">Paste this on the PC (needs <code>curl</code> and <code>sudo</code>; no checkout or Docker build). It downloads the agent for the PC's architecture from this master, checks its SHA-256 before running anything, and asks for the token, which then never appears on the command line or in the shell history.</p>
+                        }
+                        else
+                        {
+                            <p class="muted" data-testid="@($"{TestId}-prompt-note")">Run this in the folder with <code>install-agent.sh</code>; it asks for the token, which then never appears on the command line or in the shell history.</p>
+                        }
+                        @CommandBlock(prompt, "linux-prompt", "Copy the command")
+                        <div class="join-token-row">
+                            <span class="field-label">@(IsRekey ? "Rekey token" : "Join token")</span>
+                            @CommandBlock(Response.Token, "token", "Copy the token")
+                        </div>
+                    }
+                }
+                else
+                {
+                    @CommandBlock(Response.Commands.Linux, "linux", "Copy the command")
+                }
+            }
+            else if (os == "windows" && Response.Commands.Windows is { } windows)
+            {
+                @if (WindowsPromptCommand is { } windowsPrompt)
+                {
+                    <div class="segmented" role="radiogroup" aria-label="How to pass the token" data-testid="@($"{TestId}-windows-mode")">
+                        <label class="segmented-option">
+                            <input type="radio" name="@($"{TestId}-windows-mode")" checked="@(!_windowsInline)" data-testid="@($"{TestId}-windows-mode-prompt")"
+                                   @onchange="() => _windowsInline = false" />
+                            <span>Paste the token at a prompt</span>
+                        </label>
+                        <label class="segmented-option">
+                            <input type="radio" name="@($"{TestId}-windows-mode")" checked="@_windowsInline" data-testid="@($"{TestId}-windows-mode-inline")"
+                                   @onchange="() => _windowsInline = true" />
+                            <span>Token in the command</span>
+                        </label>
+                    </div>
+                    @if (_windowsInline)
+                    {
+                        <p class="muted" data-testid="@($"{TestId}-windows-inline-note")">One paste into <strong>Windows PowerShell run as administrator</strong>: it downloads the agent from this master, checks its SHA-256 before running anything, and @(IsRekey ? "re-pairs it" : "installs it with the pinned llama.cpp"). The token is in the pasted text, so it is on screen; PSReadLine keeps a line with "token" in it out of the history file, but it stays in this window's Up-arrow history and scrollback until the window closes, and <code>Start-Transcript</code> would record it. The line clears the token from the environment when it ends.</p>
+                        @CommandBlock(windows, "windows", "Copy the command")
+                    }
+                    else
+                    {
+                        <p class="muted" data-testid="@($"{TestId}-windows-prompt-note")">Paste this into <strong>Windows PowerShell run as administrator</strong> (no checkout needed). It downloads the agent from this master, checks its SHA-256 before running anything, @(IsRekey ? "re-pairs it" : "installs it with the pinned llama.cpp") and asks for the token (<code>Read-Host -AsSecureString</code>), so it never appears on the command line, in the window's history or in a transcript. This is the safer line, and the one selected here.</p>
+                        @CommandBlock(windowsPrompt, "windows-prompt", "Copy the command")
+                        <div class="join-token-row">
+                            <span class="field-label">@(IsRekey ? "Rekey token" : "Join token")</span>
+                            @CommandBlock(Response.Token, "windows-token", "Copy the token")
+                        </div>
+                    }
+                }
+                else
+                {
+                    @CommandBlock(windows, "windows", "Copy the command")
+                }
+            }
+            else if (os == "macos" && Response.Commands.Macos is { } macos)
+            {
+                @CommandBlock(macos, "macos", "Copy the command")
+            }
+        </ChildContent>
+    </Tabs>
+    @if (Response.Commands.Windows is null || Response.Commands.Macos is null)
+    {
+        <p class="muted" data-testid="@($"{TestId}-os-note")">@MissingOsNote</p>
+    }
+
+    <dl class="kv kv--wide join-facts">
+        @if (NodeUid is not null)
+        {
+            <dt>Node uid</dt>
+            <dd><code class="num" data-testid="@($"{TestId}-uid")">@NodeUid</code></dd>
+        }
+        <dt>Enroll URL</dt>
+        <dd><code data-testid="@($"{TestId}-enroll-url")">@Response.EnrollUrl</code></dd>
+        <dt>CA hash</dt>
+        <dd><code class="join-hash" data-testid="@($"{TestId}-ca-hash")">@Response.CaHash</code></dd>
+        @if (DownloadsAgent)
+        {
+            <dt>Agent</dt>
+            <dd data-testid="@($"{TestId}-agent")">
+                @foreach (AgentBundleLink bundle in Response.AgentDownload!.Bundles)
+                {
+                    <div><code>@bundle.Rid</code> <span class="num">@bundle.Version</span> · sha256 <code class="join-hash">@bundle.Sha256</code></div>
+                }
+            </dd>
+        }
+        <dt>Expires</dt>
+        <dd><span class="num" data-testid="@($"{TestId}-expires")">@ExpiryText(Response.ExpiresAt, Now)</span></dd>
+    </dl>
+    @if (_copyFailed)
+    {
+        <p class="muted" role="status" data-testid="@($"{TestId}-copy-failed")">The browser did not allow copying; select the text and copy it by hand.</p>
+    }
+</div>
+
+@code {
+    private string _os = "linux";
+    private bool _inline;
+    private bool _windowsInline;
+    private JoinTokenCreateResponse? _shown;
+    private string? _copied;
+    private bool _copyFailed;
+    private IJSObjectReference? _module;
+
+    /// <summary>The minted token and its commands (secret: never logged or put in the URL).</summary>
+    [Parameter, EditorRequired]
+    public JoinTokenCreateResponse Response { get; set; } = null!;
+
+    /// <summary>The node uid a rekey line carries (shown so the operator can check it); null for a join token.</summary>
+    [Parameter]
+    public string? NodeUid { get; set; }
+
+    /// <summary>The clock for the expiry text.</summary>
+    [Parameter]
+    public DateTimeOffset Now { get; set; }
+
+    [Parameter]
+    public string TestId { get; set; } = "join-command";
+
+    /// <summary>
+    /// The OS tab to open on (<c>linux</c>, <c>windows</c>, <c>macos</c>; MN-227): the rekey dialog of a Windows node opens
+    /// on Windows. Falls back to Linux when the master gave no command for that OS. Read when a new token is shown.
+    /// </summary>
+    [Parameter]
+    public string? InitialOs { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(_shown, Response))
+        {
+            // A new token: start on the requested OS, token at a prompt.
+            _shown = Response;
+            _os = InitialTab(InitialOs, Response);
+            _inline = false;
+            _windowsInline = false;
+            _copied = null;
+            _copyFailed = false;
+        }
+    }
+
+    /// <summary>The tab a token opens on: <paramref name="os"/> when the response has a command for it, else Linux.</summary>
+    public static string InitialTab(string? os, JoinTokenCreateResponse response)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        return os switch
+        {
+            "windows" when response.Commands.Windows is not null => "windows",
+            "macos" when response.Commands.Macos is not null => "macos",
+            _ => "linux",
+        };
+    }
+
+    private bool IsRekey => Response.Purpose == JoinTokenPurpose.Rekey;
+
+    /// <summary>The master's line downloads and checks the agent bundle itself (the master serves bundles).</summary>
+    private bool DownloadsAgent => Response.AgentDownload is { Bundles.Count: > 0 } && MirbadLLM.Web.Api.LinuxInstallerLine.Of(Response, NodeUid)?.DownloadsAgent == true;
+
+    private IReadOnlyList<TabItem> OsTabs =>
+    [
+        new("linux", "Linux (systemd)"),
+        .. Response.Commands.Windows is null ? Array.Empty<TabItem>() : [new TabItem("windows", "Windows")],
+        .. Response.Commands.Macos is null ? Array.Empty<TabItem>() : [new TabItem("macos", "macOS")],
+    ];
+
+    private string MissingOsNote => (Response.Commands.Windows, Response.Commands.Macos) switch
+    {
+        (null, null) => "Windows and macOS agents are not available yet; this master gives a Linux command only.",
+        (null, _) => "A Windows agent is not available yet.",
+        _ => "A macOS agent is not available yet.",
+    };
+
+    /// <summary>The Linux line without the token (the installer prompts for it), or null when the master's line is not one this page can rebuild.</summary>
+    private string? PromptCommand => PromptVariant(Response, NodeUid);
+
+    /// <summary>The Windows line with <c>-PromptToken</c> instead of the token, or null when the master's line is not one this page can rebuild.</summary>
+    private string? WindowsPromptCommand => WindowsPromptVariant(Response, NodeUid);
+
+    /// <summary>
+    /// The prompt form of a minted token's Windows line (design-p3p4 §A.4.5, §A.4.6; MN-227), rebuilt with the master's
+    /// own builder (<see cref="MirbadLLM.Web.Api.WindowsInstallerLine"/>: the same line without the <c>$env:</c>
+    /// statement and with <c>-PromptToken</c>, no secret); null when the rebuilt one-line form is not exactly the master's
+    /// line (another master version or shape: the page then shows only that line).
+    /// </summary>
+    public static string? WindowsPromptVariant(JoinTokenCreateResponse response, string? nodeUid) =>
+        MirbadLLM.Web.Api.WindowsInstallerLine.Of(response, nodeUid)?.Prompt();
+
+    /// <summary>
+    /// The prompt form of a minted token's Linux line (MN-103; MN-126 "consider a prompt variant"), built from the
+    /// response's parts with the master's own builder (<see cref="MirbadLLM.Web.Api.LinuxInstallerLine"/>, W8 review
+    /// MN-128) instead of cutting the token out of the text; null when rebuilding the one-line form from the same parts does
+    /// not give the master's line exactly (the page then shows only that line).
+    /// </summary>
+    public static string? PromptVariant(JoinTokenCreateResponse response, string? nodeUid) =>
+        MirbadLLM.Web.Api.LinuxInstallerLine.Of(response, nodeUid)?.Prompt();
+
+    /// <summary>"2026-10-07 13:05 UTC (in 60 min)", "… (expired)".</summary>
+    public static string ExpiryText(DateTimeOffset expiresAt, DateTimeOffset now)
+    {
+        string at = expiresAt.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture);
+        TimeSpan left = expiresAt - now;
+        if (left <= TimeSpan.Zero)
+        {
+            return $"{at} (expired)";
+        }
+
+        return left.TotalMinutes < 120
+            ? string.Create(CultureInfo.InvariantCulture, $"{at} (in {Math.Max(1, (int)Math.Ceiling(left.TotalMinutes))} min)")
+            : string.Create(CultureInfo.InvariantCulture, $"{at} (in {left.TotalHours:0.#} h)");
+    }
+
+    private RenderFragment CommandBlock(string text, string key, string label) => __builder =>
+    {
+        <div class="join-block">
+            <pre class="code-block join-code" data-testid="@($"{TestId}-{key}")"><code>@text</code></pre>
+            <button type="button" class="btn btn-sm btn-outline-secondary join-copy" aria-label="@label" data-testid="@($"{TestId}-{key}-copy")"
+                    @onclick="() => CopyAsync(text, key)">
+                <Icon Name="@(_copied == key ? "check" : "copy")" /> @(_copied == key ? "Copied" : "Copy")
+            </button>
+        </div>
+    };
+
+    private async Task CopyAsync(string text, string key)
+    {
+        bool ok;
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./interop.js");
+            ok = await _module.InvokeAsync<bool>("copyText", text);
+        }
+        catch (JSException)
+        {
+            ok = false;
+        }
+        catch (JSDisconnectedException)
+        {
+            return;
+        }
+
+        _copied = ok ? key : null;
+        _copyFailed = !ok;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Circuit gone.
+            }
+        }
+    }
+}

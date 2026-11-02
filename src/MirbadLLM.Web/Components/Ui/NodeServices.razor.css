@@ -1,0 +1,93 @@
+/* The services of one node (Node detail's Services tab, and the /services page). */
+.node-services {
+    min-width: 0;
+}
+
+/* /services: which node the list is for, a link to that node's own page, and how fresh it is. */
+.svc-scope {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ss-sp-2) var(--ss-sp-3);
+    margin-bottom: var(--ss-sp-4);
+}
+
+.svc-scope-label {
+    font-family: var(--ss-font-mono);
+    font-size: var(--ss-fs-100);
+    font-weight: 500;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ss-text-muted);
+}
+
+.svc-scope-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    font-family: var(--ss-font-mono);
+    font-size: 0.8125rem;
+}
+
+/* A node switch inside the "can't manage services" explanation reads as a link but is a button (it changes the node). */
+.btn-link-inline {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ss-accent-text);
+    font: inherit;
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+    text-decoration-thickness: 1px;
+    cursor: pointer;
+}
+
+.svc-unsupported p {
+    max-width: 75ch;
+}
+
+/* Kind filter of Discovered: a segmented radio group beside the text filter (one level, not nested tabs). */
+.discovered-kind {
+    display: grid;
+    gap: var(--ss-sp-1);
+    min-width: 0;
+    max-width: 100%;
+}
+
+.discovered-kind .segmented {
+    flex-wrap: wrap;
+    max-width: 100%;
+}
+
+.svc-kind-count {
+    padding: 0 6px;
+    border-radius: var(--ss-radius-sm);
+    background: var(--ss-panel);
+    color: var(--ss-text-muted);
+    font-size: var(--ss-fs-100);
+    font-weight: 500;
+}
+
+.segmented-option:has(input:checked) .svc-kind-count {
+    background: var(--ss-idle-subtle);
+    color: var(--ss-text);
+}
+
+@media (pointer: coarse) {
+    .discovered-kind .segmented-option {
+        min-height: 44px;
+    }
+
+    .svc-scope-link {
+        min-height: 44px;
+    }
+}
+
+@media (max-width: 639.98px) {
+    .discovered-kind {
+        flex: 1 1 100%;
+    }
+}

@@ -1,0 +1,78 @@
+@page "/releases"
+@rendermode InteractiveServer
+@using System.Globalization
+@inject ReleaseNotes Notes
+
+<PageTitle>Releases · MirbadLLM</PageTitle>
+
+<PageHeader Title="Releases">
+    <Subtitle>This is MirbadLLM <span class="num" data-testid="releases-version">@ProductVersion.Display(ProductVersion.Controller)</span>. Every change, newest first, from the merged pull requests.</Subtitle>
+</PageHeader>
+
+@if (!Notes.Available || Notes.Entries.Count == 0)
+{
+    <EmptyState Title="No release notes in this build" TestId="releases-unavailable">
+        <ChildContent>
+            <p>The deploy job writes them from the merged pull requests. A build made locally, or one whose deploy could not reach GitHub, carries none.</p>
+        </ChildContent>
+    </EmptyState>
+}
+else
+{
+    var current = ProductVersion.RevisionOf(ProductVersion.Controller);
+    var running = Notes.Find(current);
+    <div class="release-filter segmented" role="radiogroup" aria-label="Kind of change" data-testid="releases-kind">
+        @foreach (var (id, label) in Kinds)
+        {
+            <label class="segmented-option"><input type="radio" name="release-kind" checked="@(_kind == id)" data-testid="@($"releases-kind-{id}")" @onchange="() => _kind = id" /><span>@label <span class="num">@Count(id)</span></span></label>
+        }
+    </div>
+    var visible = Notes.Entries.Where(e => _kind == "all" || Lines(e, _kind).Count > 0).OrderByDescending(e => e.MergedAt).ToList();
+    @if (visible.Count == 0) { <EmptyState Title="No changes in this category" TestId="releases-filter-empty" /> }
+    <div class="release-timeline" data-testid="releases-list">
+        @foreach (var day in visible.GroupBy(e => e.MergedAt.UtcDateTime.Date))
+        {
+            <section class="release-day" aria-label="@($"Merged {day.Key:yyyy-MM-dd} UTC")">
+                <time class="release-date" datetime="@day.Key.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)"><b>@day.Key.ToString("MMM d", CultureInfo.InvariantCulture)</b><span>@day.Key.Year</span></time>
+                <ol class="release-list">
+                @foreach (var entry in day)
+                {
+            bool isRunning = running is not null && entry.Number == running.Number;
+            bool future = running is not null && entry.MergedAt > running.MergedAt;
+            <li class="release-card panel @(isRunning ? "release-card--current" : null)" data-testid="@($"release-{entry.Number}")">
+                <div class="release-card-head">
+                    <h2 class="release-card-title">
+                        @if (entry.Url is { } url)
+                        {
+                            <a href="@url" target="_blank" rel="noopener">@entry.Title</a>
+                        }
+                        else
+                        {
+                            @entry.Title
+                        }
+                    </h2>
+                    <span class="muted num">#@entry.Number · @entry.Commit[..7] · @UiFormat.RunTime(entry.MergedAt)</span>
+                    @if (isRunning)
+                    {
+                        <span class="chip chip--ready chip--inline" data-testid="releases-current">Running</span>
+                    }
+                    else if (future)
+                    {
+                        <span class="chip chip--busy chip--inline">Not deployed yet</span>
+                    }
+                </div>
+                <ReleaseSummary Entries="[entry]" Kind="@_kind" TestId="@($"release-{entry.Number}-notes")" />
+            </li>
+                }
+                </ol>
+            </section>
+        }
+    </div>
+}
+
+@code {
+    private static readonly (string Id, string Label)[] Kinds = [("all", "All"), ("added", "Added"), ("fixed", "Fixed"), ("changed", "Changed")];
+    private string _kind = "all";
+    private int Count(string kind) => kind == "all" ? Notes.Entries.Count : Notes.Entries.Count(e => Lines(e, kind).Count > 0);
+    private static IReadOnlyList<string> Lines(ReleaseEntry entry, string kind) => kind switch { "added" => entry.Added, "fixed" => entry.Fixed, "changed" => entry.Changed, _ => [] };
+}

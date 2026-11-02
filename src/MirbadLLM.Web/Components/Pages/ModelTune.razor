@@ -1,0 +1,1015 @@
+@page "/models/{Id}/tune"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using System.Globalization
+@using MirbadLLM.Orchestration
+@using MirbadLLM.Orchestration.Benchmarking
+@inject IModelRegistry Registry
+@inject IModelRuntime Runtime
+@inject ModelJobService Jobs
+@inject BenchmarkStore Store
+@inject IServiceProvider Services
+
+<PageTitle>@(_model?.ServedName ?? Id) · Tune · MirbadLLM</PageTitle>
+
+@if (_notFound)
+{
+    <PageHeader Title="Tune" BackHref="models" BackLabel="Models" />
+    <EmptyState Title="@($"No model called \"{Id}\"")" TestId="tune-not-found">
+        <ChildContent><p>It may have been deleted. Pick a model from the list.</p></ChildContent>
+        <Actions><a class="btn btn-outline-secondary" href="models">Go to Models</a></Actions>
+    </EmptyState>
+}
+else if (_model is not null)
+{
+    <ModelHeader ModelId="@_model.Id" Current="tune" />
+    <p class="job-lede">Find faster @(IsLlamaCpp ? "llama-server" : "vLLM") settings for this model with a repeatable search. You apply the winner yourself; nothing changes automatically.</p>
+
+    @if (_error is not null)
+    {
+        <div class="callout callout--failed page-alert" role="alert" data-testid="tune-error">
+            <Icon Name="state-failed" />
+            <div class="callout-body">@_error</div>
+        </div>
+    }
+    @if (_info is not null)
+    {
+        <div class="callout callout--ready page-alert" role="status" data-testid="tune-info">
+            <Icon Name="state-ready" />
+            <div class="callout-body">@_info</div>
+        </div>
+    }
+
+    @if (RunningHere is { } job)
+    {
+        <JobProgressPanel Job="job" Now="_now" OnCancel="CancelAsync" />
+        @if (job.Candidates.Count > 0)
+        {
+            <section class="section" aria-labelledby="sofar-title">
+                <div class="section-head"><h2 id="sofar-title">Measured so far</h2></div>
+                @CandidateTable(job.Candidates, job.Goal ?? TuningGoal.Balanced, null, null)
+                <p class="table-legend" data-testid="tune-legend-live">@BenchGlossary.Legend</p>
+            </section>
+        }
+    }
+    else
+    {
+        <section class="panel form-section job-intro" aria-labelledby="goal-title">
+            <div class="form-section-intro">
+                <h2 id="goal-title">Goal</h2>
+                <p>What "best" means. Each workload runs its own benchmark, weighs its own scores and applies its own guards.</p>
+            </div>
+            <div class="job-intro-body">
+                @* Native radios: arrow keys move and select in the browser, like the model editor's source picker. *@
+                <div class="segmented" role="radiogroup" aria-labelledby="goal-title" aria-describedby="goal-description" data-testid="goal-selector" data-tip="tune">
+                    @foreach (var goal in Goals)
+                    {
+                        <label class="segmented-option">
+                            <input type="radio" name="tuning-goal" value="@goal" checked="@(goal == _goal)" data-testid="@($"goal-{goal}")"
+                                   @onchange="() => SelectGoalAsync(goal)" />
+                            <span>@GoalName(goal)</span>
+                        </label>
+                    }
+                </div>
+                <p class="field-hint" id="goal-description" data-testid="goal-description">@GoalDescription(_goal)</p>
+
+                @if (_preview is { } preview)
+                {
+                    <div class="tune-cost" data-testid="tune-cost">
+                        <div class="tune-cost-figure">
+                            <span class="tune-cost-label">Takes</span>
+                            <span class="tune-cost-value num" data-testid="tune-cost-value">@UiFormat.About(preview.Estimate)</span>
+                        </div>
+                        <p class="tune-cost-note" data-testid="tune-warning">
+                            <span class="num">@preview.Plan.PreviewCandidates.Count</span> candidates if the baseline stays best, each a restart plus a benchmark.
+                            While it runs the API is paused for every model (503) and @_model.ServedName restarts once per candidate. The saved settings come back
+                            at the end; the winner is applied only if you choose Apply best.
+                        </p>
+                    </div>
+                    <div class="job-intro-actions">
+                        <button type="button" class="btn btn-primary" data-testid="start-tuning" data-shortcut="tune" disabled="@(StartBlockedReason is not null)"
+                                aria-describedby="@(StartBlockedReason is null ? null : "tune-blocked")" @onclick="OpenStart">
+                            <Icon Name="sliders" /> Start tuning
+                        </button>
+                        @if (StartBlockedReason is not null)
+                        {
+                            <span class="muted form-footer-note" id="tune-blocked" data-testid="tune-blocked">@StartBlockedReason</span>
+                        }
+                    </div>
+
+                    <details class="tune-customize" data-testid="tune-customize">
+                        <summary>Customize the search <span class="muted">· @SearchScope search, @(WorkloadProfiles.IsPreset(_goal) ? "scoring and phases" : "phases")</span></summary>
+                        <div class="tune-customize-body">
+                            @if (WorkloadProfiles.IsPreset(_goal))
+                            {
+                                var profile = WorkloadProfiles.For(_goal);
+                                <p class="field-hint" data-testid="goal-scoring">Scored on: @profile.WeightsText. Guards: @GuardsText(profile.Guards).
+                                    The top two candidates and the baseline are re-measured at the end; a candidate must beat the baseline by 5 % with non-overlapping ranges, or the saved settings stay.</p>
+                            }
+                            <div class="field">
+                                <span class="field-label" id="search-title">Search</span>
+                                <div class="segmented" role="radiogroup" aria-labelledby="search-title" aria-describedby="search-description" data-testid="search-selector">
+                                    @foreach (var (key, label) in SearchOptions)
+                                    {
+                                        <label class="segmented-option">
+                                            <input type="radio" name="tuning-search" value="@key" checked="@(SearchScope == key)" data-testid="@($"search-{key}")"
+                                                   @onchange="() => SelectSearchAsync(key)" />
+                                            <span>@label</span>
+                                        </label>
+                                    }
+                                </div>
+                                <p class="field-hint" id="search-description" data-testid="search-description">@SearchDescription</p>
+                            </div>
+                            <p class="field-hint">
+                                Coordinate descent by phase: each step tries its values on top of the best result so far; capability gates leave out what
+                                this model can't run, and a configuration already measured is never measured twice.
+                                Max model len (<span class="num">@_model.MaxModelLen.ToString("N0", CultureInfo.InvariantCulture)</span>) and the memory budget
+                                (<span class="num">@UiFormat.GiB(_model.MemoryBudgetGiB)</span>) never change.
+                            </p>
+                            <ol class="plan-steps" data-testid="tune-plan">
+                                <li>
+                                    <span class="plan-step-title">Baseline</span>
+                                    <span class="num">@SettingChanges.Summary(preview.Baseline)</span>
+                                    <span class="muted">@(preview.ReusesRunningBaseline ? "measured on the running container, no restart" : "started with the saved settings")</span>
+                                </li>
+                                @{ string? lastPhase = null; string? phaseText = null; int stepIndex = 0; }
+                                @foreach (var step in preview.Plan.Steps)
+                                {
+                                    int index = stepIndex++;
+                                    if (step.Phase is { } phase && phase != lastPhase)
+                                    {
+                                        lastPhase = phase;
+                                        phaseText = TuningDescriptions.Phase(phase).Text;
+                                        <li class="plan-phase" data-testid="@($"plan-phase-{index}")">
+                                            <span class="plan-step-title">@phase</span>
+                                            <span class="muted">@phaseText</span>
+                                        </li>
+                                    }
+                                    var dims = StepDimensions(step);
+                                    bool included = dims.Count == 0 ? _steps.Contains(step.Dimension) : dims.Any(_steps.Contains);
+                                    <li class="@(step.SkipReason is not null && included ? "plan-step--skipped" : null) @(dims.Count > 1 ? "plan-step--multi" : null)">
+                                        @if (dims.Count == 0)
+                                        {
+                                            <span class="plan-step-title">@step.Title</span>
+                                        }
+                                        else if (dims.Count == 1)
+                                        {
+                                            var d = dims[0];
+                                            <label class="plan-step-check">
+                                                <input type="checkbox" class="form-check-input" checked="@_steps.Contains(d)" data-testid="@($"step-{d}")"
+                                                       @onchange="() => ToggleStepAsync(d)" />
+                                                <span class="plan-step-title">@step.Title</span>
+                                            </label>
+                                        }
+                                        else
+                                        {
+                                            @* A combined step: its title heads the row, the dimensions it combines are ticked beside it. *@
+                                            <span class="plan-step-title">@step.Title</span>
+                                            <span class="plan-step-checks">
+                                                @foreach (var dim in dims)
+                                                {
+                                                    var d = dim;
+                                                    <label class="plan-step-check">
+                                                        <input type="checkbox" class="form-check-input" checked="@_steps.Contains(d)" data-testid="@($"step-{d}")"
+                                                               @onchange="() => ToggleStepAsync(d)" />
+                                                        <span>@DimensionName(d)</span>
+                                                    </label>
+                                                }
+                                            </span>
+                                        }
+                                        <span class="num plan-step-values">@string.Join(", ", step.Values.Select(v => v.Label))</span>
+                                        @* A step whose "why" is its phase's own line (the refinement steps) does not repeat it. *@
+                                        @if (step.Description is not null && step.Description != phaseText)
+                                        {
+                                            <span class="muted plan-step-why" data-testid="@($"step-desc-{index}")">@step.Description</span>
+                                        }
+                                        @if (step.SkipReason is not null && step.SkipReason != "Not selected.")
+                                        {
+                                            <span class="muted" data-testid="@($"step-skip-{step.Dimension}")">@step.SkipReason</span>
+                                        }
+                                        else if (step.Note is not null)
+                                        {
+                                            <span class="muted">@step.Note</span>
+                                        }
+                                    </li>
+                                }
+                            </ol>
+                            <dl class="kv kv--wide">
+                                <dt>Candidates</dt>
+                                <dd data-testid="tune-candidates">
+                                    <span>
+                                        <span class="num">@preview.Plan.PreviewCandidates.Count</span> if the baseline stays best
+                                        (about <span class="num">@preview.Plan.ExpectedCandidates</span> with follow-ups and refinement, up to
+                                        <span class="num">@preview.Plan.MaxCandidates</span>)@(WorkloadProfiles.IsPreset(_goal) ? ", then the top two and the baseline re-measured" : "");
+                                        duplicates of a measured configuration are skipped.
+                                    </span>
+                                    <details class="qa-details" data-testid="tune-candidate-list">
+                                        <summary>Show candidates</summary>
+                                        <ul class="qa-list">
+                                            @for (int i = 0; i < preview.Plan.PreviewCandidates.Count; i++)
+                                            {
+                                                var c = preview.Plan.PreviewCandidates[i];
+                                                <li data-testid="@($"preview-candidate-{i}")">
+                                                    <span class="qa-question">@c.Label</span>
+                                                    @if (c.Description is not null)
+                                                    {
+                                                        <span class="muted">@c.Description</span>
+                                                    }
+                                                </li>
+                                            }
+                                        </ul>
+                                    </details>
+                                </dd>
+                                <dt>Takes</dt>
+                                <dd data-testid="tune-estimate">
+                                    <span>
+                                        @UiFormat.About(preview.Estimate).
+                                        @if (preview.EstimateBasis is { } basis)
+                                        {
+                                            <text>Per candidate: a restart (<span class="num">@UiFormat.Duration(preview.StartupEstimate)</span>) plus the benchmark
+                                            (<span class="num">@UiFormat.Duration(preview.BenchmarkEstimate)</span>, @basis); the estimate is recomputed from this run's own
+                                            pace while it runs.</text>
+                                        }
+                                        else
+                                        {
+                                            <text>Per candidate: a restart
+                                            (<span class="num">@UiFormat.Duration(Jobs.EstimateStartup(Id))</span>, the last measured start or an estimate)
+                                            plus the benchmark (@UiFormat.About(preview.PerCandidate - Jobs.EstimateStartup(Id))).</text>
+                                        }
+                                    </span>
+                                </dd>
+                            </dl>
+                        </div>
+                    </details>
+                }
+            </div>
+        </section>
+    }
+
+    @if (_selected is { } run)
+    {
+        <section class="section" aria-labelledby="results-title">
+            <div class="section-head">
+                <h2 id="results-title">Results</h2>
+                <span class="section-note num">@UiFormat.RunTime(run.StartedAt) · @GoalName(run.Goal) · @run.Status · took @UiFormat.Duration(run.FinishedAt - run.StartedAt)</span>
+            </div>
+            @if (run.Error is not null)
+            {
+                <div class="callout callout--failed" role="status" data-testid="tune-run-error">
+                    <Icon Name="state-failed" />
+                    <div class="callout-body">@run.Error</div>
+                </div>
+            }
+            @if (run.Winner is { } winner && run.Status == TuningRunStatus.Completed)
+            {
+                bool isBaseline = winner.Index == 0;
+                bool isCurrent = IsCurrent(winner);
+                var applies = AppliedSettings(winner);
+                <div class="panel panel-body winner" data-testid="tune-winner">
+                    <div class="winner-text">
+                        <span class="winner-title"><Icon Name="trophy" /> Best for @GoalName(run.Goal): @winner.Label</span>
+                        <span class="num" data-testid="tune-winner-summary">@SettingChanges.Summary(applies)</span>
+                        @if (LegacyNote(winner) is { } legacy)
+                        {
+                            <span class="muted" data-testid="tune-winner-legacy">@legacy</span>
+                        }
+                        @if (isBaseline)
+                        {
+                            <span>The saved settings are already the best of what was tried. Nothing to apply.</span>
+                        }
+                        else if (isCurrent)
+                        {
+                            <span>Already the model's current settings. Nothing to apply.</span>
+                        }
+                        else
+                        {
+                            <span><span class="num" data-testid="tune-gain">@UiFormat.SignedPercent(run.WinnerGainPercent)</span> vs the baseline on the goal's score.</span>
+                        }
+                    </div>
+                    @if (!isBaseline && !isCurrent)
+                    {
+                        <button type="button" class="btn btn-primary" data-testid="apply-best" disabled="@(RunningHere is not null || _applying)" @onclick="() => ApplyCandidateAsync(run.Id, winner)">
+                            Apply best
+                        </button>
+                    }
+                </div>
+            }
+            @CandidateTable(run.Candidates, run.Goal, run.WinnerIndex, run.Id)
+            <p class="table-legend" data-testid="tune-legend">@BenchGlossary.Legend</p>
+            @if (run.Candidates.Any(c => c.Score is not null))
+            {
+                <div class="panel panel-body section-tight">
+                    <BarList Title="@($"Score ({ScoreUnit(run.Goal)})")" TestId="tune-score-bars"
+                             Items="@run.Candidates.Select(c => new BarItem(c.Label, c.Score, FormatScore(run.Goal, c.Score), c.Index == run.WinnerIndex, c.Outcome != CandidateOutcome.Accepted)).ToList()" />
+                </div>
+            }
+            @if (run.Notes.Count > 0)
+            {
+                <ul class="plain-list muted section-tight" data-testid="tune-notes">
+                    @foreach (string note in run.Notes)
+                    {
+                        <li>@note</li>
+                    }
+                </ul>
+            }
+        </section>
+    }
+
+    <section class="section" aria-labelledby="tune-history-title">
+        <div class="section-head"><h2 id="tune-history-title">Past tuning runs</h2></div>
+        @if (_history.Count == 0)
+        {
+            <EmptyState Title="No tuning runs yet" HeadingLevel="3" Inline="true" TestId="tune-history-empty">
+                <ChildContent><p>Every run is kept with its full results, so you can come back to a winner later.</p></ChildContent>
+            </EmptyState>
+        }
+        else
+        {
+            <div class="panel panel--scroll-x">
+                <table class="data-table data-table--stack" data-testid="tune-history">
+                    <caption class="visually-hidden">Past tuning runs of @_model.ServedName</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">When</th>
+                            <th scope="col">Goal</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">Candidates</th>
+                            <th scope="col">Winner</th>
+                            <th scope="col"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var past in Pager.Slice(_history, _runsPage, _runsSize))
+                        {
+                            <tr class="@(past == _selected ? "is-selected" : null)">
+                                <td class="col-primary num">@UiFormat.RunTime(past.StartedAt)</td>
+                                <td data-label="Goal">@GoalName(past.Goal)</td>
+                                <td data-label="Status">@past.Status</td>
+                                <td data-label="Candidates" class="num">@past.Candidates.Count</td>
+                                <td data-label="Winner">@(past.Winner is { } w ? $"{w.Label} ({UiFormat.SignedPercent(past.WinnerGainPercent)})" : UiFormat.Missing)</td>
+                                <td class="col-actions"><button type="button" class="btn btn-sm btn-ghost" @onclick="() => _selected = past">View</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <Pager Total="_history.Count" @bind-Page="_runsPage" @bind-Size="_runsSize" QueryPrefix="runs" Noun="runs" TestId="tune-history-pager" />
+        }
+    </section>
+
+    <StartJobDialog @ref="_start" ModelId="@_model.Id" Title="@($"Tune {_model.ServedName}?")" ConfirmLabel="Start tuning"
+                    Estimate="@(_preview is null ? "" : UiFormat.About(_preview.Estimate))" OnConfirm="StartAsync" TestId="tune-dialog">
+        <p>
+            Goal: <strong>@GoalName(_goal)</strong>. <span class="num">@(_preview?.Plan.PreviewCandidates.Count ?? 0)</span> candidates or more;
+            @_model.ServedName restarts for each and is unavailable to clients until the saved settings are restored at the end.
+        </p>
+    </StartJobDialog>
+
+    <ApplyChangesDialog @ref="_apply" OnFinished="AfterApplyAsync" />
+}
+
+@code {
+    /// <summary>The presets this model can be tuned on: embeddings for a pooling model, the four generation presets otherwise.</summary>
+    private IReadOnlyList<TuningGoal> Goals => _model is not null && PoolingDetection.Detect(_model) != PoolingMode.None
+        ? [TuningGoal.Embeddings]
+        : [TuningGoal.InteractiveChat, TuningGoal.AgentsTools, TuningGoal.Throughput, TuningGoal.LongDocuments];
+
+    [Parameter]
+    public string Id { get; set; } = "";
+
+    private ModelDefinition? _model;
+    private ModelStatus? _status;
+    private bool _notFound;
+    private string? _error;
+    private string? _info;
+    private TuningGoal _goal = TuningGoal.InteractiveChat;
+    private readonly HashSet<TuningDimension> _steps = [.. SearchPlanner.Quick];
+
+    private static readonly (string Key, string Label)[] VllmSearchOptions = [("Quick", "Quick"), ("Full", "Full"), ("Custom", "Custom")];
+
+    /// <summary>The llama.cpp small tune has no Quick preset: its whole search is four steps (design-p3p4 §A.6).</summary>
+    private static readonly (string Key, string Label)[] LlamaCppSearchOptions = [("Full", "Full"), ("Custom", "Custom")];
+
+    /// <summary>True for a llama.cpp model: the steps are <see cref="LlamaCppTuning.Dimensions"/>, not the vLLM ones (MN-230).</summary>
+    private bool IsLlamaCpp => _model is not null && LlamaCppTuning.Applies(_model);
+
+    private (string Key, string Label)[] SearchOptions => IsLlamaCpp ? LlamaCppSearchOptions : VllmSearchOptions;
+
+    /// <summary>Every step of the search this model has: the llama.cpp dimensions, else <see cref="SearchPlanner.Full"/>.</summary>
+    private IReadOnlyList<TuningDimension> AllSteps => IsLlamaCpp ? LlamaCppTuning.Dimensions : SearchPlanner.Full;
+
+    /// <summary>True once the owner chose Custom or ticked a step by hand: the checkboxes are the plan, whatever they match.</summary>
+    private bool _customSearch;
+
+    /// <summary>Custom when chosen (or a step was ticked by hand), otherwise Quick or Full by the ticked steps.</summary>
+    private string SearchScope => _customSearch ? "Custom"
+        : IsLlamaCpp ? (_steps.SetEquals(AllSteps) ? "Full" : "Custom")
+        : _steps.SetEquals(SearchPlanner.Quick) ? "Quick" : _steps.SetEquals(SearchPlanner.Full) ? "Full" : "Custom";
+
+    private string SearchDescription => (IsLlamaCpp, SearchScope) switch
+    {
+        (true, "Full") => "Full: the whole small tune — parallel slots, flash attention, KV cache types and batch × micro-batch, one dimension at a time from the saved settings, at most 12 candidates.",
+        (true, _) => "Custom: exactly the steps ticked below. Untick a step to leave that dimension at its saved value; the candidate count and time update.",
+        (_, "Quick") => "Quick: the capability gates, max num seqs, and speculative decoding with FULL_AND_PIECEWISE graphs — usually 8–12 candidates.",
+        (_, "Full") => "Full: every phase — KV cache × prefix caching, max num seqs, max batched tokens, speculative × CUDA graphs with PIECEWISE follow-ups, async scheduling and the refinement pass.",
+        _ => "Custom: exactly the steps ticked below. Tick or untick any step; the candidate count and time update.",
+    };
+
+    /// <summary>Quick and Full tick their preset steps; Custom keeps the current ticks and makes them the plan.</summary>
+    private async Task SelectSearchAsync(string key)
+    {
+        _customSearch = key == "Custom";
+        if (!_customSearch)
+        {
+            _steps.Clear();
+            _steps.UnionWith(key == "Full" ? AllSteps : SearchPlanner.Quick);
+        }
+
+        await RefreshPreviewAsync();
+    }
+
+    /// <summary>The checkboxes one plan step shows: both axes of a joint step, none on the second refinement step.</summary>
+    private static IReadOnlyList<TuningDimension> StepDimensions(TuningStepPlan step) => step switch
+    {
+        { Dimension: TuningDimension.KvCacheDtype or TuningDimension.PrefixCaching, Phase: not null } => [TuningDimension.KvCacheDtype, TuningDimension.PrefixCaching],
+        { Dimension: TuningDimension.SpeculativeDecoding or TuningDimension.CudaGraphMode, Phase: not null } => [TuningDimension.SpeculativeDecoding, TuningDimension.CudaGraphMode],
+        { Dimension: TuningDimension.Refinement, Key: SearchPlanner.PrefixCheckKey } => [],
+        _ => [step.Dimension],
+    };
+
+    private static string DimensionName(TuningDimension dimension) => dimension switch
+    {
+        TuningDimension.KvCacheDtype => "KV cache",
+        TuningDimension.PrefixCaching => "Prefix caching",
+        TuningDimension.SpeculativeDecoding => "Speculative",
+        TuningDimension.CudaGraphMode => "CUDA graph follow-ups",
+        _ => TuningPlanner.StepTitle(dimension),
+    };
+    private TuningPreview? _preview;
+    private string? _currentConfigHash;
+
+    /// <summary>Indices of the selected run's candidates whose tuned settings are already the saved ones.</summary>
+    private HashSet<int> _currentCandidates = [];
+    private bool _applying;
+    private JobSnapshot? _job;
+    private IReadOnlyList<TuningRun> _history = [];
+    private int _runsPage = 1;
+    private int? _runsSize;
+    private int _candPage = 1;
+    private int? _candSize;
+    private int _livePage = 1;
+    private int? _liveSize;
+    private TuningRun? _selected;
+    private DateTimeOffset _now = DateTimeOffset.UtcNow;
+    private StartJobDialog? _start;
+    private ApplyChangesDialog? _apply;
+    private CancellationTokenSource? _cts;
+    private Task? _loop;
+
+    private JobSnapshot? RunningHere => _job is { Kind: JobKind.Tuning } j && j.ModelId == Id ? j : null;
+
+    private string? StartBlockedReason =>
+        _job is not null ? ModelJobService.ConflictMessage(_job, JobKind.Tuning)
+        : _steps.Count == 0 ? "Choose at least one step."
+        : _status?.State is ModelState.Starting or ModelState.Stopping ? $"Wait until the model is {(_status.State == ModelState.Starting ? "Ready" : "Stopped")}."
+        : null;
+
+    public static string GoalName(TuningGoal goal) => goal switch
+    {
+        TuningGoal.ManyAgents => "Many agents",
+        TuningGoal.SingleUser => "Single user",
+        TuningGoal.Balanced => "Balanced",
+        _ => WorkloadProfiles.For(goal).Name,
+    };
+
+    public static string GuardsText(SloGuards guards)
+    {
+        ArgumentNullException.ThrowIfNull(guards);
+        var parts = new List<string>();
+        if (guards.ShortTtftP95AtN1Seconds is { } n1)
+        {
+            parts.Add(string.Create(CultureInfo.InvariantCulture, $"TTFT p95 ≤ {n1:0.##} s at N=1"));
+        }
+
+        if (guards.ShortTtftP95AtN16Seconds is { } n16)
+        {
+            parts.Add(string.Create(CultureInfo.InvariantCulture, $"≤ {n16:0.##} s at N=16"));
+        }
+
+        if (guards.MixedShortTtftP95Seconds is { } mixed)
+        {
+            parts.Add(string.Create(CultureInfo.InvariantCulture, $"≤ {mixed:0.##} s under a long request"));
+        }
+
+        if (guards.LongTtftMaxRatio is { } ratio)
+        {
+            parts.Add(string.Create(CultureInfo.InvariantCulture, $"long-prompt TTFT ≤ baseline +{(ratio - 1) * 100:0} %"));
+        }
+
+        if (guards.MaxPreemptions is { } preemptions)
+        {
+            parts.Add(string.Create(CultureInfo.InvariantCulture, $"preemptions ≤ {preemptions}"));
+        }
+
+        if (guards.RequireToolValidity)
+        {
+            parts.Add("tool calls 100 % valid");
+        }
+
+        if (guards.ObjectiveAnswers)
+        {
+            parts.Add("objective answers ≥ baseline");
+        }
+
+        if (guards.LatencyP95MaxRatio is { } lat)
+        {
+            parts.Add(string.Create(CultureInfo.InvariantCulture, $"latency p95 at N=16 ≤ {lat:0.#}× baseline, valid vectors"));
+        }
+
+        parts.Add(guards.MaxErrorRate <= 0 ? "no failed requests" : string.Create(CultureInfo.InvariantCulture, $"error rate ≤ {guards.MaxErrorRate:P0}"));
+        return string.Join(", ", parts);
+    }
+
+    public static string GoalDescription(TuningGoal goal) => WorkloadProfiles.IsPreset(goal) ? WorkloadProfiles.For(goal).Description : goal switch
+    {
+        TuningGoal.ManyAgents => "Most total tokens per second with 16 concurrent requests (median aggregate tok/s at N=16), as long as the 95th-percentile time to first token at N=16 at most doubles.",
+        TuningGoal.SingleUser => "The fastest stream for one client at a time: median tok/s at N=1, ties broken by the lower time to first token.",
+        _ => "Good single-stream speed and good throughput under load: the geometric mean of the N=1 tok/s gain and the N=16 aggregate gain over the baseline, with the same time-to-first-token guard as Many agents.",
+    };
+
+    public static string ScoreUnit(TuningGoal goal) =>
+        goal == TuningGoal.Balanced || WorkloadProfiles.IsPreset(goal) ? "× baseline, higher is better" : "tok/s, higher is better";
+
+    public static string FormatScore(TuningGoal goal, double? score) =>
+        !UiFormat.HasValue(score) ? UiFormat.Missing
+        : goal == TuningGoal.Balanced || WorkloadProfiles.IsPreset(goal) ? $"×{score!.Value.ToString("0.000", CultureInfo.InvariantCulture)}"
+        : $"{UiFormat.Number(score)} tok/s";
+
+    private RenderFragment CandidateTable(IReadOnlyList<TuningCandidateResult> candidates, TuningGoal goal, int? winnerIndex, string? runId) => __builder =>
+    {
+        string scope = runId is null ? "tune-live" : $"tune-{runId}";
+        bool live = runId is null;
+        bool pooling = candidates.Any(c => c.Result?.Embeddings is not null) ||
+            candidates.FirstOrDefault() is { } first && PoolingDetection.Detect(first.Settings) != PoolingMode.None;
+        var labels = BenchmarkCells.Labels(pooling);
+        var helps = BenchmarkCells.Help(pooling);
+        <div class="panel panel--scroll-x">
+            <table class="data-table data-table--stack" data-testid="tune-results">
+                <caption class="visually-hidden">Tuning candidates</caption>
+                <thead>
+                    <tr>
+                        <th scope="col"><ColumnHelp Label="Candidate" Key="settings" Scope="@scope" Text="@BenchGlossary.Settings" /></th>
+                        <th scope="col"><ColumnHelp Label="@labels.N1" Key="n1" Scope="@scope" Text="@helps.N1" /></th>
+                        <th scope="col"><ColumnHelp Label="@labels.N16" Key="n16" Scope="@scope" Text="@helps.N16" /></th>
+                        <th scope="col" class="col-wide"><ColumnHelp Label="@labels.P95" Key="ttft95" Scope="@scope" Text="@helps.P95" /></th>
+                        <th scope="col"><ColumnHelp Label="@labels.Check" Key="answers" Scope="@scope" Text="@helps.Check" /></th>
+                        <th scope="col"><ColumnHelp Label="Score" Key="score" Scope="@scope" Text="@BenchGlossary.Score" /></th>
+                        <th scope="col">Outcome</th>
+                        @if (runId is not null)
+                        {
+                            <th scope="col"><span class="visually-hidden">Actions</span></th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var c in Pager.Slice(candidates, live ? _livePage : _candPage, live ? _liveSize : _candSize))
+                    {
+                        var r = c.Result;
+                        bool winner = c.Index == winnerIndex;
+                        <tr class="@(winner ? "is-winner" : null)" data-testid="@($"candidate-{c.Index}")">
+                            <td class="col-primary">
+                                <div>@if (winner) { <Icon Name="trophy" /> }@c.Label</div>
+                                <div class="model-card-id" data-testid="@($"candidate-effective-{c.Index}")">@(c.EffectiveConfig ?? SettingChanges.Summary(VllmArgsNormalizer.Apply(c.Settings)))</div>
+                                @if (c.Description is not null)
+                                {
+                                    <div class="muted candidate-why" data-testid="@($"candidate-desc-{c.Index}")">@c.Description</div>
+                                }
+                                @if (c.RuntimeNotes is { Count: > 0 } runtimeNotes)
+                                {
+                                    <div class="muted" data-testid="@($"candidate-runtime-{c.Index}")">Runtime: @string.Join("; ", runtimeNotes)</div>
+                                }
+                                @if (c.KvPool is { } kvPool)
+                                {
+                                    <div class="muted num" data-testid="@($"candidate-kv-{c.Index}")">@kvPool</div>
+                                }
+                            </td>
+                            <td data-label="@labels.N1" class="num">@BenchmarkCells.N1(r)</td>
+                            <td data-label="@labels.N16" class="num">@BenchmarkCells.N16(r)</td>
+                            <td data-label="@labels.P95" class="num col-wide">@BenchmarkCells.P95At16(r)</td>
+                            <td data-label="@labels.Check" class="num">
+                                @BenchmarkCells.Check(r)
+                                @if (r is not null && r.Embeddings is null && !r.Guardrails.ToolCallValid)
+                                {
+                                    <span class="verdict verdict--bad"><Icon Name="state-failed" /> tool call</span>
+                                }
+                                @if (r?.Noise.Noisy == true)
+                                {
+                                    <span class="chip chip--busy chip--inline" title="@string.Join("; ", r.Noise.Reasons)"><Icon Name="warning" /> Noisy</span>
+                                }
+                            </td>
+                            <td data-label="Score" class="num">
+                                @FormatScore(goal, c.Score)
+                                @if (c.ScoreMin is { } lo && c.ScoreMax is { } hi)
+                                {
+                                    <div class="model-card-id" data-testid="@($"candidate-range-{c.Index}")">range @lo.ToString("0.000", CultureInfo.InvariantCulture)–@hi.ToString("0.000", CultureInfo.InvariantCulture)</div>
+                                }
+                            </td>
+                            <td data-label="Outcome">
+                                @switch (c.Outcome)
+                                {
+                                    case CandidateOutcome.Accepted:
+                                        <span class="verdict verdict--ok"><Icon Name="check" /> @(winner ? "Best" : "Accepted")</span>
+                                        break;
+                                    case CandidateOutcome.Rejected:
+                                        <span class="verdict verdict--warn"><Icon Name="warning" /> Rejected</span>
+                                        @OutcomeReason(c.Reason, c.Index)
+                                        break;
+                                    default:
+                                        <span class="verdict verdict--bad"><Icon Name="state-failed" /> Failed</span>
+                                        @OutcomeReason(c.Reason, c.Index)
+                                        break;
+                                }
+                            </td>
+                            @if (runId is not null)
+                            {
+                                <td class="col-actions">
+                                    @if (c.Outcome == CandidateOutcome.Accepted)
+                                    {
+                                        @if (IsCurrent(c))
+                                        {
+                                            <span class="tag-managed" data-testid="@($"candidate-current-{c.Index}")"><Icon Name="check" /> Current</span>
+                                        }
+                                        else
+                                        {
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="@($"candidate-apply-{c.Index}")"
+                                                    disabled="@(RunningHere is not null || _applying)" aria-label="@($"Apply {c.Label}")"
+                                                    @onclick="() => ApplyCandidateAsync(runId, c)">
+                                                Apply
+                                            </button>
+                                        }
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (live)
+        {
+            <Pager Total="candidates.Count" Page="_livePage" PageChanged="p => _livePage = p" Size="_liveSize" SizeChanged="s => _liveSize = s"
+                   QueryPrefix="live" Noun="candidates" TestId="tune-live-pager" />
+        }
+        else
+        {
+            <Pager Total="candidates.Count" Page="_candPage" PageChanged="p => _candPage = p" Size="_candSize" SizeChanged="s => _candSize = s"
+                   ResetKey="@runId" QueryPrefix="cand" Noun="candidates" TestId="tune-results-pager" />
+        }
+    };
+
+    /// <summary>A rejected or failed candidate's reason: one short line inline, and the full raw text (a vLLM
+    /// traceback, say) behind "Full output", the same pattern as a model card's failure.</summary>
+    private static RenderFragment OutcomeReason(string? reason, int index) => __builder =>
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return;
+        }
+
+        string summary = ShortReason(reason);
+        <div class="outcome-reason" data-testid="@($"candidate-reason-{index}")">
+            <span class="outcome-reason-summary">@summary</span>
+            @if (!string.Equals(summary, reason.Trim(), StringComparison.Ordinal))
+            {
+                <details class="outcome-reason-details">
+                    <summary>Full output</summary>
+                    <pre>@reason</pre>
+                </details>
+            }
+        </div>
+    };
+
+    /// <summary>The reason's first line, cut at 140 characters; multi-line raw output goes to its root cause
+    /// the same way a failed model's error does.</summary>
+    public static string ShortReason(string reason)
+    {
+        const int Max = 140;
+        string trimmed = reason.Trim();
+        if (trimmed.Contains('\n', StringComparison.Ordinal))
+        {
+            return UiFormat.FailureSummary(trimmed, Max);
+        }
+
+        return trimmed.Length <= Max ? trimmed : string.Concat(trimmed.AsSpan(0, Max - 1), "…");
+    }
+
+    // Resolved once (MN-132): the poll loop reloads until DisposeAsync awaits it, and a lookup from a scope that is being
+    // disposed throws ObjectDisposedException.
+    private IModelLauncher? _launcher;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _launcher = Services.GetService<IModelLauncher>();
+        _model = await Registry.GetAsync(Id);
+        if (_model is null)
+        {
+            _notFound = true;
+            return;
+        }
+
+        if (PoolingDetection.Detect(_model) != PoolingMode.None)
+        {
+            _goal = TuningGoal.Embeddings;
+        }
+
+        if (IsLlamaCpp)
+        {
+            // The small tune's own steps, all ticked: the vLLM Quick preset names no llama.cpp dimension, so the whole
+            // tune ran while every checkbox read unticked and ticking one narrowed the plan to it (MN-230, D130).
+            _steps.Clear();
+            _steps.UnionWith(AllSteps);
+        }
+
+        await LoadAsync();
+        _cts = new CancellationTokenSource();
+        _loop = PollAsync(_cts.Token);
+    }
+
+    private async Task LoadAsync()
+    {
+        _model = await Registry.GetAsync(Id) ?? _model;
+        _status = await Runtime.GetStatusAsync(Id);
+        _job = Jobs.JobAffecting(_model);
+        _history = await Store.ListTuningAsync(Id);
+        _selected = _selected is null ? _history.FirstOrDefault() : _history.FirstOrDefault(r => r.Id == _selected.Id) ?? _history.FirstOrDefault();
+        await RefreshPreviewAsync();
+        await RefreshCurrentConfigHashAsync();
+    }
+
+    /// <summary>
+    /// The saved definition's launch-config hash, used to show "Current" on a candidate row instead of Apply
+    /// when that candidate's settings are already what's saved — compared by hash/settings, not by whether
+    /// the candidate happens to be labelled "Baseline" (the baseline is only "current" until something else
+    /// is applied).
+    /// </summary>
+    private async Task RefreshCurrentConfigHashAsync()
+    {
+        if (_model is null || _launcher is not { } launcher)
+        {
+            _currentConfigHash = null;
+            return;
+        }
+
+        try
+        {
+            _currentConfigHash = await launcher.ComputeConfigHashAsync(_model);
+            var current = new HashSet<int>();
+            foreach (var c in _selected?.Candidates ?? [])
+            {
+                // Compared on the normalized merge too, not only the stored hash: a legacy run's hash was taken from a
+                // command line with duplicate owned flags, so it never equals the hash of the canonical saved definition.
+                if (c.Outcome == CandidateOutcome.Accepted &&
+                    (c.ConfigHash == _currentConfigHash ||
+                     await launcher.ComputeConfigHashAsync(ModelJobService.MergeTuned(_model, c.Settings)) == _currentConfigHash))
+                {
+                    current.Add(c.Index);
+                }
+            }
+
+            _currentCandidates = current;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or DockerApiException)
+        {
+            _currentConfigHash = null;
+            _currentCandidates = [];
+        }
+    }
+
+    private bool IsCurrent(TuningCandidateResult candidate) =>
+        _currentCandidates.Contains(candidate.Index) || (_currentConfigHash is not null && candidate.ConfigHash == _currentConfigHash);
+
+    /// <summary>What Apply would save for <paramref name="candidate"/>: its tuned fields, normalized, on the saved definition.</summary>
+    private ModelDefinition AppliedSettings(TuningCandidateResult candidate) =>
+        _model is null ? VllmArgsNormalizer.Apply(candidate.Settings) : ModelJobService.MergeTuned(_model, candidate.Settings);
+
+    /// <summary>
+    /// For a run recorded before the canonical config: the candidate's raw ExtraArgs carried owned flags that
+    /// overrode its typed values when it ran (vLLM keeps the last flag), so its label can name settings it
+    /// did not measure. Says what it actually ran, which is what Apply saves; null for a canonical candidate.
+    /// </summary>
+    public static string? LegacyNote(TuningCandidateResult candidate)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        var normalized = VllmArgsNormalizer.Normalize(candidate.Settings);
+        if (normalized.Lifted.Count == 0)
+        {
+            return null;
+        }
+
+        string recorded = SettingChanges.Summary(candidate.Settings);
+        string ran = SettingChanges.Summary(normalized.Definition);
+        string flags = string.Join(", ", normalized.Lifted.Select(l => l.Flag).Distinct(StringComparer.Ordinal));
+        return string.Equals(recorded, ran, StringComparison.Ordinal)
+            ? $"Recorded before settings were canonicalized: {flags} came from extra args. Apply saves them as typed settings."
+            : $"Recorded before settings were canonicalized: the extra args ({flags}) overrode the typed values when it ran, so it measured {ran}, not {recorded}. Apply saves what it measured.";
+    }
+
+    private async Task RefreshPreviewAsync()
+    {
+        try
+        {
+            _preview = await Jobs.PreviewTuningAsync(Id, _steps.ToList(), _goal);
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or HttpRequestException or InvalidOperationException or DockerApiException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task SelectGoalAsync(TuningGoal goal)
+    {
+        _goal = goal;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task ToggleStepAsync(TuningDimension dimension)
+    {
+        if (!_steps.Remove(dimension))
+        {
+            _steps.Add(dimension);
+        }
+
+        // A hand-ticked step is a custom plan, even when it happens to match a preset again.
+        _customSearch = true;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task PollAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        int tick = 0;
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                tick++;
+                _now = DateTimeOffset.UtcNow;
+                var job = Jobs.JobAffecting(_model);
+                bool finished = _job is not null && job is null;
+                _job = job;
+                if (finished)
+                {
+                    _selected = null;
+                }
+
+                if (finished || tick % 15 == 0)
+                {
+                    // On the renderer's dispatcher: LoadAsync replaces the state the markup and handlers read.
+                    await InvokeAsync(LoadAsync);
+                }
+
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Page closed.
+        }
+    }
+
+    private void OpenStart()
+    {
+        _error = null;
+        _info = null;
+        _start?.Show();
+    }
+
+    private async Task StartAsync()
+    {
+        try
+        {
+            _job = await Jobs.StartTuningAsync(Id, _goal, _steps.ToList());
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private Task CancelAsync()
+    {
+        // This model's tuning run only (MN-126): never the jobs on other nodes.
+        if (RunningHere is { } job)
+        {
+            Jobs.CancelJob(job.JobId);
+        }
+
+        _job = Jobs.JobAffecting(_model);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Applies one accepted candidate's tuned settings from run <paramref name="runId"/> — the run's winner
+    /// (from the primary "Apply best" button) or any other accepted row's own "Apply" button — onto the
+    /// current saved definition, then offers the restart. Server-side guarded by
+    /// <see cref="ModelJobService.ApplyTuningCandidateAsync"/>: refuses a candidate that wasn't accepted, a
+    /// run for another model, or applying while any job is running.
+    /// </summary>
+    private async Task ApplyCandidateAsync(string runId, TuningCandidateResult candidate)
+    {
+        if (_applying)
+        {
+            return;
+        }
+
+        _applying = true;
+        try
+        {
+            await ApplyCandidateCoreAsync(runId, candidate);
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    private async Task ApplyCandidateCoreAsync(string runId, TuningCandidateResult candidate)
+    {
+        _error = null;
+        _info = null;
+        ModelDefinition? before;
+        ModelDefinition merged;
+        try
+        {
+            before = await Registry.GetAsync(Id);
+            merged = await Jobs.ApplyTuningCandidateAsync(Id, runId, candidate.Index);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Any refusal (job running, unknown run, a save the registry rejects, an I/O error) is shown, never swallowed.
+            _error = $"Couldn't apply {candidate.Label}: {ex.Message}";
+            return;
+        }
+
+        _model = merged;
+        await RefreshCurrentConfigHashAsync();
+
+        ModelStatus status;
+        try
+        {
+            status = await Runtime.GetStatusAsync(Id);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or DockerApiException)
+        {
+            _info = $"Saved {candidate.Label}. It applies the next time {merged.ServedName} starts.";
+            return;
+        }
+
+        if (status.State is not (ModelState.Starting or ModelState.Ready) || _apply is null)
+        {
+            _info = $"Saved {candidate.Label}. It applies the next time {merged.ServedName} starts.";
+            return;
+        }
+
+        ModelDefinition launched = before ?? merged;
+        if (_launcher is { } launcher)
+        {
+            try
+            {
+                launched = await launcher.GetLaunchedDefinitionAsync(Id) ?? launched;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or DockerApiException)
+            {
+                // Keep the pre-apply saved definition as the fallback baseline.
+            }
+        }
+
+        await _apply.OpenAsync(merged, SettingChanges.RestartNeeded(launched, merged), launched.MemoryBudgetGiB);
+    }
+
+    private async Task AfterApplyAsync(bool restarted)
+    {
+        _info = restarted
+            ? $"Saved and restarting {_model?.ServedName} with the winning settings."
+            : $"Saved. {_model?.ServedName} keeps its current settings until it restarts.";
+        await LoadAsync();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts?.Cancel();
+        if (_loop is not null)
+        {
+            try
+            {
+                await _loop;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected.
+            }
+        }
+
+        _cts?.Dispose();
+    }
+}

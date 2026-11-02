@@ -1,0 +1,34 @@
+{
+  "nodeId": "pc-office",
+  "model": "discrete",
+  "fits": false,
+  "needGiB": 24,
+  "freeGiB": 1.8,
+  "reserveGiB": 4,
+  "gpus": [
+    {
+      "uuid": "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f601",
+      "index": 0,
+      "needGiB": 12,
+      "freeGiB": 13.9,
+      "reserveGiB": 1,
+      "fits": true
+    },
+    {
+      "uuid": "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f602",
+      "index": 1,
+      "needGiB": 12,
+      "freeGiB": 1.8,
+      "reserveGiB": 0.5,
+      "fits": false
+    }
+  ],
+  "host": {
+    "needGiB": 10,
+    "freeGiB": 44.1,
+    "estimated": true,
+    "fits": true
+  },
+  "message": "needs 12 GiB on GPU 1, 1.8 GiB free after reserve — does not fit now",
+  "measuredAt": "2026-10-06T09:00:00+00:00"
+}

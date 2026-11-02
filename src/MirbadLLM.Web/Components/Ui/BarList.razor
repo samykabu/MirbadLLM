@@ -1,0 +1,50 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* Horizontal bars for comparing a few measured values (tok/s per concurrency level, candidate scores). The
+   value is always printed as text next to its bar, so the bar only illustrates; a highlighted row also says
+   why in words. A missing value renders "—" and no bar. *@
+<figure class="bars" data-testid="@TestId">
+    @if (!string.IsNullOrEmpty(Title))
+    {
+        <figcaption class="chart-title">@Title</figcaption>
+    }
+    <ul class="bar-list" aria-label="@(Title ?? "Values")">
+        @foreach (var item in Items)
+        {
+            <li class="@RowClass(item)">
+                <span class="bar-label">
+                    @if (item.Highlight)
+                    {
+                        <Icon Name="trophy" />
+                    }
+                    <span>@item.Label</span>
+                </span>
+                <span class="bar-track" aria-hidden="true">
+                    @if (UiFormat.HasValue(item.Value) && Max > 0)
+                    {
+                        <span class="@(item.Secondary ? "bar-fill bar-fill--secondary" : "bar-fill")" style="width:@Width(item.Value!.Value)%"></span>
+                    }
+                </span>
+                <span class="bar-value num">@(UiFormat.HasValue(item.Value) ? item.Display : UiFormat.Missing)</span>
+            </li>
+        }
+    </ul>
+</figure>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<BarItem> Items { get; set; } = [];
+
+    [Parameter]
+    public string? Title { get; set; }
+
+    [Parameter]
+    public string? TestId { get; set; }
+
+    private static string RowClass(BarItem item) =>
+        "bar-row" + (item.Highlight ? " bar-row--highlight" : "") + (item.Muted ? " bar-row--muted" : "");
+
+    private double Max => Items.Where(i => UiFormat.HasValue(i.Value)).Select(i => i.Value!.Value).DefaultIfEmpty(0).Max();
+
+    private string Width(double value) =>
+        Math.Clamp(value / Max * 100, 0.5, 100).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+}

@@ -1,0 +1,20 @@
+{
+  "type": "download",
+  "download": {
+    "folder": "Qwen3.6-35B-A3B-NVFP4",
+    "repoId": "Qwen/Qwen3.6-35B-A3B-NVFP4",
+    "revision": "main",
+    "state": "downloading",
+    "bytesDownloaded": 1073741824,
+    "totalBytes": 4294967296,
+    "bytesPerSecond": 104857600.0,
+    "error": null,
+    "operationId": "op-002",
+    "needsToken": false,
+    "startedAt": "2026-10-03T10:00:00+00:00",
+    "endedAt": null
+  },
+  "bootId": "b11ac10b-58cc-4372-a567-0e02b2c3d479",
+  "seq": 4,
+  "at": "2026-10-03T10:00:15+00:00"
+}

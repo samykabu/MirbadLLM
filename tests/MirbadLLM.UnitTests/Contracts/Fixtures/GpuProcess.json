@@ -1,0 +1,8 @@
+{
+  "pid": 1234,
+  "name": "python3",
+  "usedMiB": 40960,
+  "containerId": "9c8b7a6d5e4f",
+  "unit": null,
+  "displayName": "ss-qwen36-35b-a3b-nvfp4"
+}

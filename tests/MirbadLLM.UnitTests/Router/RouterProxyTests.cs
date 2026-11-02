@@ -1,0 +1,174 @@
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using MirbadLLM.Core;
+using MirbadLLM.Router;
+using MirbadLLM.UnitTests.Router.Fakes;
+using System.Net.Http.Json;
+using System.Net;
+using System.Text.Json;
+using System.Text;
+
+namespace MirbadLLM.UnitTests.Router;
+
+public sealed class RouterProxyTests
+{
+    [Fact]
+    public async Task RoutesByModel_ToTheRightUpstream_WithPathAndQuery()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var resolver = new FakeModelEndpointResolver();
+        resolver.Set(new ModelEndpoint("chat-1", "chat-model", new Uri("http://upstream-chat/"), ModelState.Ready));
+        resolver.Set(new ModelEndpoint("embed-1", "embed-model", new Uri("http://upstream-embed/"), ModelState.Ready));
+
+        var handler = new FakeUpstreamHandler
+        {
+            Handler = (request, _) =>
+            {
+                var body = new
+                {
+                    host = request.RequestUri!.Host,
+                    path = request.RequestUri!.AbsolutePath,
+                    query = request.RequestUri!.Query,
+                };
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(body),
+                });
+            },
+        };
+
+        using var app = await RouterHostFactory.CreateAsync(resolver, new FakeModelRuntime(), configureServices: services => ConfigureUpstream(services, handler));
+        using var client = app.GetTestClient();
+
+        using var response = await client.PostAsJsonAsync("/v1/chat/completions?stream=true", new { model = "chat-model" }, ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        Assert.Equal("upstream-chat", document.RootElement.GetProperty("host").GetString());
+        Assert.Equal("/v1/chat/completions", document.RootElement.GetProperty("path").GetString());
+        Assert.Equal("?stream=true", document.RootElement.GetProperty("query").GetString());
+    }
+
+    [Fact]
+    public async Task UnknownModel_Returns404WithOpenAiErrorShape()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var resolver = new FakeModelEndpointResolver();
+        using var app = await RouterHostFactory.CreateAsync(resolver, new FakeModelRuntime());
+        using var client = app.GetTestClient();
+
+        using var response = await client.PostAsJsonAsync("/v1/chat/completions", new { model = "does-not-exist" }, ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        var error = document.RootElement.GetProperty("error");
+        Assert.Equal("invalid_request_error", error.GetProperty("type").GetString());
+        Assert.Equal("model_not_found", error.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task RequestNamingNoModel_Returns400()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var resolver = new FakeModelEndpointResolver();
+        using var app = await RouterHostFactory.CreateAsync(resolver, new FakeModelRuntime());
+        using var client = app.GetTestClient();
+
+        using var response = await client.GetAsync("/v1/models-that-are-not-the-list-endpoint", ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        Assert.Equal("invalid_request_error", document.RootElement.GetProperty("error").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public async Task HopByHopHeadersStripped_AndAuthorizationNotForwarded()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var resolver = new FakeModelEndpointResolver();
+        resolver.Set(new ModelEndpoint("chat-1", "chat-model", new Uri("http://upstream/"), ModelState.Ready));
+
+        var handler = new FakeUpstreamHandler
+        {
+            Handler = (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("ok"),
+                Headers = { { "Connection", "close" }, { "X-Upstream", "yes" } },
+            }),
+        };
+
+        using var app = await RouterHostFactory.CreateAsync(
+            resolver,
+            new FakeModelRuntime(),
+            configureOptions: o => o.ApiKey = "secret",
+            configureServices: services => ConfigureUpstream(services, handler));
+        using var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = new StringContent("""{"model":"chat-model"}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "secret");
+        request.Headers.Add("Connection", "keep-alive");
+        request.Headers.Add("X-Test", "1");
+
+        using var response = await client.SendAsync(request, ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(response.Headers.Contains("Connection"));
+        Assert.True(response.Headers.Contains("X-Upstream"));
+
+        var forwarded = handler.LastRequest!;
+        Assert.False(forwarded.Headers.Contains("Authorization"));
+        Assert.False(forwarded.Headers.Contains("Connection"));
+        Assert.True(forwarded.Headers.Contains("X-Test"));
+    }
+
+    [Fact]
+    public async Task BodyOverLimit_Returns413()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var resolver = new FakeModelEndpointResolver();
+        using var app = await RouterHostFactory.CreateAsync(resolver, new FakeModelRuntime());
+        using var client = app.GetTestClient();
+
+        var oversized = new byte[(64 * 1024 * 1024) + 1];
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/v1/chat/completions")
+        {
+            Content = new ByteArrayContent(oversized),
+        };
+        request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+
+        using var response = await client.SendAsync(request, ct);
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        Assert.Equal("request_too_large", document.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task UpstreamDown_Returns502()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var resolver = new FakeModelEndpointResolver();
+        resolver.Set(new ModelEndpoint("chat-1", "chat-model", new Uri("http://upstream/"), ModelState.Ready));
+
+        var handler = new FakeUpstreamHandler
+        {
+            Handler = (_, _) => throw new HttpRequestException("Connection refused"),
+        };
+
+        using var app = await RouterHostFactory.CreateAsync(resolver, new FakeModelRuntime(), configureServices: services => ConfigureUpstream(services, handler));
+        using var client = app.GetTestClient();
+
+        using var response = await client.PostAsJsonAsync("/v1/chat/completions", new { model = "chat-model" }, ct);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        Assert.Equal("api_error", document.RootElement.GetProperty("error").GetProperty("type").GetString());
+    }
+
+    internal static void ConfigureUpstream(IServiceCollection services, HttpMessageHandler handler)
+        => services.AddHttpClient(RouterExtensions.UpstreamHttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => handler);
+}

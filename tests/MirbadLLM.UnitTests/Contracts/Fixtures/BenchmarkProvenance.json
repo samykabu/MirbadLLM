@@ -1,0 +1,23 @@
+{
+  "nodeId": "pc-office",
+  "nodeUid": "7d1e5b0c9a2f4e3d8c6b5a4f3e2d1c0b",
+  "gpus": [
+    {
+      "uuid": "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f601",
+      "name": "NVIDIA GeForce RTX 4060 Ti",
+      "index": 0
+    },
+    {
+      "uuid": "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f602",
+      "name": "NVIDIA GeForce RTX 4060 Ti",
+      "index": 1
+    }
+  ],
+  "runtime": "vllm",
+  "delivery": "container",
+  "imageDigest": "sha256:5b0c9a2f4e3d8c6b5a4f3e2d1c0b7d1e5b0c9a2f4e3d8c6b5a4f3e2d1c0b7d1e",
+  "configHash": "9f2c1a3b",
+  "executionFingerprint": "41ab5c8d9e0f1a2b",
+  "proxy": "agent-mtls-lan",
+  "noise": "quiet"
+}

@@ -1,0 +1,4 @@
+/* The SHA-256 fingerprint (95 characters) wraps anywhere rather than widening the dialog on a phone. */
+.pending-fingerprint {
+    overflow-wrap: anywhere;
+}

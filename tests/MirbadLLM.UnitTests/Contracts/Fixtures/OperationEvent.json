@@ -1,0 +1,26 @@
+{
+  "type": "operation",
+  "operation": {
+    "id": "op-001",
+    "kind": "launch",
+    "target": "qwen36-35b-a3b-nvfp4",
+    "payloadDigest": "sha256:9f2c1e7a4b0d",
+    "state": "running",
+    "stage": "created",
+    "error": null,
+    "progress": {
+      "percent": 50.0,
+      "bytesDone": 1073741824,
+      "bytesTotal": 2147483648,
+      "message": "pulling image"
+    },
+    "issuedAt": "2026-10-03T10:00:00+00:00",
+    "expiresAt": "2026-10-04T10:00:00+00:00",
+    "startedAt": "2026-10-03T10:00:05+00:00",
+    "endedAt": null,
+    "result": null
+  },
+  "bootId": "b11ac10b-58cc-4372-a567-0e02b2c3d479",
+  "seq": 3,
+  "at": "2026-10-03T10:00:10+00:00"
+}

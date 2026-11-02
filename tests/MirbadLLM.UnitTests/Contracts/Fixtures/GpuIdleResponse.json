@@ -1,0 +1,14 @@
+{
+  "averagePercent": 15.5,
+  "maxPercent": 31,
+  "samples": 10,
+  "perGpu": [
+    {
+      "index": 0,
+      "uuid": "GPU-5967aaaa-0000-0000-0000-000000000000",
+      "averagePercent": 15.5,
+      "samples": 10,
+      "maxPercent": 31
+    }
+  ]
+}

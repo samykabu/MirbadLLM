@@ -1,0 +1,300 @@
+<header class="model-header" data-testid="model-header"><a class="page-header-back" href="models" data-testid="model-header-back"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m12 19-7-7 7-7M19 12H5"/></svg> Models</a>
+
+    <div class="model-header-main"><div class="model-header-title"><h1 tabindex="-1" data-testid="page-title">M1</h1>
+            <span class="model-header-id num" data-testid="model-header-id">m1</span><span class="state state--stopped" data-testid="model-header-state" data-state="stopped"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M8 12h8"/></svg>
+        <span>Stopped</span></span></div>
+
+        <div class="model-header-actions" role="group" aria-label="Actions for M1" data-tour="model-actions"><button type="button" class="btn btn-primary" data-testid="header-start" aria-label="Start M1" blazor:onclick=""><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 4v16l13-8Z"/></svg> Start</button><button type="button" class="btn btn-outline-secondary" disabled data-testid="header-chat-disabled" aria-describedby="model-header-chat-why"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Chat</button>
+                <span class="visually-hidden" id="model-header-chat-why">Chat opens once the model is Ready.</span></div></div><ul class="model-header-chips" aria-label="Placement and budget"><li><a class="chip model-chip" href="nodes/dgx" data-testid="model-header-node" aria-label="Node dgx"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/></svg> dgx</a></li>
+            <li><span class="chip model-chip" data-testid="model-header-runtime"><span class="model-chip-key">runtime</span> vLLM</span></li>
+            <li><span class="chip model-chip" data-testid="model-header-budget"><span class="model-chip-key">budget</span> 36.0 GiB</span></li></ul><nav class="model-tabs" aria-label="M1 pages" data-tour="model-tabs" data-testid="model-tabs"><a href="models/m1/overview" data-testid="model-tab-overview"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg> Overview</a><a href="models/m1" aria-current="page" data-testid="model-tab-settings"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg> Settings</a><a href="models/m1/logs" data-testid="model-tab-logs"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5M9 13h6M9 17h6M9 9h1"/></svg> Logs</a><a href="models/m1/benchmark" data-testid="model-tab-benchmark"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 14l4-4"/><path d="M3.3 17a9 9 0 1 1 17.4 0"/><circle cx="12" cy="14" r="1.5"/></svg> Benchmark</a><a href="models/m1/tune" data-testid="model-tab-tune"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg> Tune</a></nav></header><dialog class="ss-dialog" aria-labelledby="dialog-n-title" aria-describedby="dialog-n-body" blazor:oncancel="" data-testid="header-force-start-dialog" data-open="false"><div class="ss-dialog-inner"><h2 id="dialog-n-title">Start M1 anyway?</h2>
+        <div class="ss-dialog-body" id="dialog-n-body"><p data-testid="header-force-start-numbers">M1 needs <strong class="num">0.0 GiB</strong>, but only
+        <strong class="num">0.0 GiB</strong> is free after the
+        <span class="num">8.0 GiB</span> reserve (<span class="num">0.0 GiB</span> free in total).
+    </p>
+    <p class="muted">
+        Starting anyway can push ComfyUI, Ollama or other models on this node out of memory, or leave this model failing while it loads.
+    </p></div>
+        <div class="ss-dialog-actions"><button type="button" class="btn btn-outline-secondary" autofocus data-testid="header-force-start-dialog-cancel" blazor:onclick="">Cancel</button>
+            <button type="button" class="btn btn-danger" data-testid="header-force-start-dialog-confirm" blazor:onclick="">Start anyway</button></div></div></dialog>
+        <p class="editor-lede" data-testid="editor-lede">
+            Every setting is a vLLM launch argument: a running model picks changes up when it restarts. Saving asks whether to restart now.
+        </p><div class="form-sections"><form data-testid="model-form" class="form-sections" blazor:onsubmit="">
+
+            <section class="panel form-section" aria-labelledby="sec-identity"><div class="form-section-intro"><h2 id="sec-identity">Identity</h2>
+                    <p>How the controller and API clients refer to this model.</p></div>
+                <div class="field-grid"><div class="field"><div class="field-head"><label class="field-label" for="field-id">Id</label><button type="button" class="info-btn" aria-label="About: Id" popovertarget="field-id-help" style="anchor-name: --field-id-help" data-testid="info-toggle-field-id"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-id-help" popover role="note" aria-label="About Id" style="position-anchor: --field-id-help" data-testid="info-panel-field-id"><p class="help-popover-title">Id</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>A stable slug for this model: lowercase letters, digits and hyphens, starting with a letter or digit, max 40 characters.</dd>
+        <dt>Why it matters</dt>
+        <dd>The controller names the container ss-{id} and uses {id} as the registry key. It can't be changed after creation without deleting and re-adding the model.</dd>
+        <dt>Example</dt>
+        <dd>ornith-9b-fp8 — the seeded Phase 0 model's id; its container is named ss-ornith-9b-fp8.</dd></dl></div>
+                        <input id="field-id" disabled data-testid="field-id" autocomplete="off" spellcheck="false" aria-describedby="field-id-error" name="_model.Id" class="form-control num valid" value="m1" blazor:onchange=""></input>
+                        <div id="field-id-error"></div></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="field-served-name">Served name</label><button type="button" class="info-btn" aria-label="About: Served name" popovertarget="field-served-name-help" style="anchor-name: --field-served-name-help" data-testid="info-toggle-field-served-name"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-served-name-help" popover role="note" aria-label="About Served name" style="position-anchor: --field-served-name-help" data-testid="info-panel-field-served-name"><p class="help-popover-title">Served name</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>The name clients put in the OpenAI "model" field of a chat request.</dd>
+        <dt>Why it matters</dt>
+        <dd>The router matches incoming requests to an upstream by this exact name (case-insensitive), and it is passed to vLLM as --served-model-name so /v1/models advertises it too. Two models can't share one.</dd>
+        <dt>Example</dt>
+        <dd>Ornith-Uncensored-FP8 — what VS Code/Cline would put in its model picker to reach the seeded model.</dd></dl></div>
+                        <input id="field-served-name" data-testid="field-served-name" autocomplete="off" spellcheck="false" aria-describedby="field-served-name-error" name="_model.ServedName" class="form-control valid" value="M1" blazor:onchange=""></input>
+                        <div id="field-served-name-error"></div></div><div class="field"><span class="field-label" id="field-node-label">Node</span>
+                            <div class="field-static num" aria-labelledby="field-node-label" data-testid="field-node-readonly">dgx</div></div><div class="field field--wide"><div class="field-head"><label class="field-label" for="field-model-path">Model path</label><button type="button" class="info-btn" aria-label="About: Model path" popovertarget="field-model-path-help" style="anchor-name: --field-model-path-help" data-testid="info-toggle-field-model-path"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-model-path-help" popover role="note" aria-label="About Model path" style="position-anchor: --field-model-path-help" data-testid="info-panel-field-model-path"><p class="help-popover-title">Model path</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>The checkpoint's folder name, relative to the models root (bound read-only at /models in the container).</dd>
+        <dt>Why it matters</dt>
+        <dd>Passed straight through as --model /models/{ModelPath}. It must be the exact folder name containing config.json and the *.safetensors weight files.</dd>
+        <dt>Example</dt>
+        <dd>Ornith-1.5-9B-uncensored, or Ornith-1.5-9B-NVFP4 for the pre-quantized variant.</dd></dl></div>
+                        <input id="field-model-path" data-testid="field-model-path" autocomplete="off" spellcheck="false" aria-describedby="field-model-path-error" name="_model.ModelPath" class="form-control num valid" value="m1" blazor:onchange=""></input>
+                        <div id="field-model-path-error"></div></div>
+                    <div class="field field--wide"><div class="field-head"><span class="field-label" id="tags-label">Tags</span><button type="button" class="info-btn" aria-label="About: Tags" popovertarget="field-tag-input-help" style="anchor-name: --field-tag-input-help" data-testid="info-toggle-field-tag-input"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-tag-input-help" popover role="note" aria-label="About Tags" style="position-anchor: --field-tag-input-help" data-testid="info-panel-field-tag-input"><p class="help-popover-title">Tags</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Labels for finding the model: built-in ones (Chat, Embedding, Vision, Tool calling, …) and your own, lowercase letters, digits and hyphens, up to 24 characters, at most 12 per model.</dd>
+        <dt>Why it matters</dt>
+        <dd>The Dashboard and the Models page filter by tag (a model must have every selected tag), and the admin API accepts ?tag=…. Tags are not vLLM arguments: changing them never restarts the model. "Suggested" marks the tags the parsers, extra args and the checkpoint's config.json point to; they are only applied when you pick them.</dd>
+        <dt>Example</dt>
+        <dd>An embedding model started with --runner pooling gets Embedding suggested; Ornith-9B with the qwen3 parsers gets Chat, Tool calling and Reasoning.</dd></dl></div>
+                        <div class="tag-editor" role="group" aria-labelledby="tags-label" aria-describedby="tags-hint" data-testid="tag-editor"><div class="tag-editor-row"><button type="button" class="tag-toggle tag-toggle--suggested" aria-pressed="true" title="Generates text for chat completions." data-testid="tag-toggle-chat" blazor:onclick=""><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span>Chat</span><span class="tag-suggested">· suggested</span></button><button type="button" class="tag-toggle tag-toggle--suggested" aria-pressed="false" title="Thinks before it answers; a reasoning parser splits the thinking out." data-testid="tag-toggle-reasoning" blazor:onclick=""><span>Reasoning</span><span class="tag-suggested">· suggested</span></button><button type="button" class="tag-toggle tag-toggle--suggested" aria-pressed="false" title="Returns OpenAI tool calls through a tool-call parser." data-testid="tag-toggle-tool-calling" blazor:onclick=""><span>Tool calling</span><span class="tag-suggested">· suggested</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Reads images as well as text." data-testid="tag-toggle-vision" blazor:onclick=""><span>Vision</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Takes more than one kind of input (text plus images or audio)." data-testid="tag-toggle-multimodal" blazor:onclick=""><span>Multimodal</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Turns text into vectors (/v1/embeddings), not a chat model." data-testid="tag-toggle-embedding" blazor:onclick=""><span>Embedding</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Scores how well documents match a query (/v1/score, /v1/rerank)." data-testid="tag-toggle-reranker" blazor:onclick=""><span>Reranker</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Tuned for writing and editing code." data-testid="tag-toggle-code" blazor:onclick=""><span>Code</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Decodes speculatively (MTP, n-gram or a draft model) for faster output." data-testid="tag-toggle-speculative" blazor:onclick=""><span>Speculative</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Plans or routes work, e.g. intent detection for agents." data-testid="tag-toggle-planner" blazor:onclick=""><span>Planner</span></button></div><div class="tag-editor-add"><input class="form-control" id="field-tag-input" form="tag-input-detached" data-testid="field-tag-input" aria-label="Add a custom tag" placeholder="Add your own, e.g. long-context" autocomplete="off" spellcheck="false" maxlength="40" aria-describedby="tags-hint" blazor:onkeydown="" value="" blazor:oninput="" />
+                                <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="tag-add" blazor:onclick=""><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg> Add tag
+                                </button><button type="button" class="btn btn-sm btn-ghost" data-testid="tag-add-suggested" blazor:onclick="">
+                                        Add suggested (2)
+                                    </button></div><div class="field-hint" id="tags-hint" data-testid="tags-hint"><span class="num">1</span> of <span class="num">12</span>.
+                                Changing tags never needs a restart.</div></div></div></div></section>
+
+            <section class="panel form-section" aria-labelledby="sec-download-source"><div class="form-section-intro"><h2 id="sec-download-source">Source</h2>
+                    <p>Where the checkpoint comes from, so a restore from a backup can download it again.</p></div>
+                <div class="field-grid"><div class="field"><div class="field-head"><label class="field-label" for="field-source-repo">Repo id</label><button type="button" class="info-btn" aria-label="About: Repo id" popovertarget="field-source-repo-help" style="anchor-name: --field-source-repo-help" data-testid="info-toggle-field-source-repo"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-source-repo-help" popover role="note" aria-label="About Repo id" style="position-anchor: --field-source-repo-help" data-testid="info-panel-field-source-repo"><p class="help-popover-title">Repo id</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>The Hugging Face repo this model's checkpoint folder (Model path) was downloaded from.</dd>
+        <dt>Why it matters</dt>
+        <dd>A restore from a backup downloads every missing checkpoint again from here. Without it, a restored model has no weights until you copy the folder back by hand. Set automatically when the model is added through "Download from Hugging Face".</dd>
+        <dt>Example</dt>
+        <dd>ornith-ai/Ornith-1.5-9B for a model whose Model path is Ornith-1.5-9B.</dd></dl></div>
+                        <input class="form-control num" id="field-source-repo" data-testid="field-source-repo" placeholder="owner/name" autocomplete="off" spellcheck="false" aria-describedby="source-repo-hint" value="org/m1" blazor:onchange="" />
+                        <div class="field-hint" id="source-repo-hint">
+                            Downloads into <code>/models/m1</code> (the model path).
+                        </div></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="field-source-revision">Revision</label><button type="button" class="info-btn" aria-label="About: Revision" popovertarget="field-source-revision-help" style="anchor-name: --field-source-revision-help" data-testid="info-toggle-field-source-revision"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-source-revision-help" popover role="note" aria-label="About Revision" style="position-anchor: --field-source-revision-help" data-testid="info-panel-field-source-revision"><p class="help-popover-title">Revision</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Branch, tag or commit SHA the restore downloads. Blank means the repo's default branch.</dd>
+        <dt>Why it matters</dt>
+        <dd>Pinning a commit makes a restore fetch exactly the files the model ran with, even if the repo changes later.</dd>
+        <dt>Example</dt>
+        <dd>Blank for most repos; a 40-character commit SHA to pin a known-good snapshot.</dd></dl></div>
+                        <input class="form-control num" id="field-source-revision" data-testid="field-source-revision" placeholder="Default branch" autocomplete="off" spellcheck="false" value="" blazor:onchange="" /></div>
+                    <div class="field field--wide"><div class="field-head"><label class="field-label" for="field-source-patterns">Allow patterns</label><button type="button" class="info-btn" aria-label="About: Allow patterns" popovertarget="field-source-patterns-help" style="anchor-name: --field-source-patterns-help" data-testid="info-toggle-field-source-patterns"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-source-patterns-help" popover role="note" aria-label="About Allow patterns" style="position-anchor: --field-source-patterns-help" data-testid="info-panel-field-source-patterns"><p class="help-popover-title">Allow patterns</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Glob patterns of the files the restore fetches (comma-separated). Blank uses the download defaults.</dd>
+        <dt>Why it matters</dt>
+        <dd>Keeps a restore from pulling files the model never used, such as other GGUF quantizations in the same repo.</dd>
+        <dt>Example</dt>
+        <dd>Blank for a safetensors repo; "Model-Q4_K_M.gguf, *.json" for one GGUF variant.</dd></dl></div>
+                        <input class="form-control num" id="field-source-patterns" data-testid="field-source-patterns" placeholder="Download defaults" autocomplete="off" spellcheck="false" value="" blazor:onchange="" /></div>
+                    <div class="field field--wide"><div class="field-head"><span class="field-label" id="extra-sources-label">Extra checkpoints</span><button type="button" class="info-btn" aria-label="About: Extra checkpoints" popovertarget="add-extra-source-help" style="anchor-name: --add-extra-source-help" data-testid="info-toggle-add-extra-source"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="add-extra-source-help" popover role="note" aria-label="About Extra checkpoints" style="position-anchor: --add-extra-source-help" data-testid="info-panel-add-extra-source"><p class="help-popover-title">Extra checkpoints</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Other checkpoint folders this model needs, each with the repo it comes from.</dd>
+        <dt>Why it matters</dt>
+        <dd>Some settings point at a second folder under /models — a speculative-decoding draft model in Extra args, for example. A restore downloads these too, before it starts the model.</dd>
+        <dt>Example</dt>
+        <dd>Folder Qwen3-0.6B from Qwen/Qwen3-0.6B, referenced as --speculative-config {"model": "/models/Qwen3-0.6B", …}.</dd></dl></div><div><button type="button" class="btn btn-sm btn-outline-secondary" id="add-extra-source" data-testid="add-extra-source" blazor:onclick=""><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg> Add a checkpoint
+                            </button></div></div></div></section><section class="panel form-section" aria-labelledby="sec-memory"><div class="form-section-intro"><h2 id="sec-memory">Memory and context</h2>
+                    <p>The budget is checked against free memory before the model starts, so it must cover weights, KV cache and activations.</p></div>
+                <div class="field-grid"><div class="field"><div class="field-head"><label class="field-label" for="field-memory-budget">Memory budget (GiB)</label><button type="button" class="info-btn" aria-label="About: Memory budget (GiB)" popovertarget="field-memory-budget-help" style="anchor-name: --field-memory-budget-help" data-testid="info-toggle-field-memory-budget"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-memory-budget-help" popover role="note" aria-label="About Memory budget (GiB)" style="position-anchor: --field-memory-budget-help" data-testid="info-panel-field-memory-budget"><p class="help-popover-title">Memory budget (GiB)</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Unified memory reserved for this model's container: weights + runtime overhead + KV cache, in GiB.</dd>
+        <dt>Why it matters</dt>
+        <dd>Converted to --gpu-memory-utilization (this value / total unified memory) since the DGX Spark's CPU and GPU share one memory pool. Starting a model that would push used+reserve past what's available is refused unless you force it.</dd>
+        <dt>Example</dt>
+        <dd>36 GiB of the box's 121.7 GiB total -&gt; --gpu-memory-utilization 0.3000 (4 decimal places). The suggested value shown when you pick a folder uses: weights GiB + 7 GiB runtime overhead (measured on this box) + KV cache for up to 131072 tokens at fp8, rounded up to a whole GiB. The budget must hold at least one request of Max model len tokens, or vLLM refuses to start: 262,144 tokens on the 9B model needs about 20 GiB.</dd></dl></div>
+                        <input step="any" type="number" id="field-memory-budget" data-testid="field-memory-budget" aria-describedby="field-memory-budget-error memory-budget-hint" name="_model.MemoryBudgetGiB" class="form-control num valid" value="36" blazor:onchange=""></input>
+                        <div id="field-memory-budget-error"></div>
+                        <div class="field-hint" id="memory-budget-hint" data-testid="memory-budget-hint"><div class="budget-check budget-check--ok"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg>
+                                        <span>Fits right now: <span class="num">56.0 GiB</span> free after the <span class="num">8.0 GiB</span> reserve (of <span class="num">128.0 GiB</span>).</span></div></div></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="field-max-model-len">Max model len</label><button type="button" class="info-btn" aria-label="About: Max model len" popovertarget="field-max-model-len-help" style="anchor-name: --field-max-model-len-help" data-testid="info-toggle-field-max-model-len"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-max-model-len-help" popover role="note" aria-label="About Max model len" style="position-anchor: --field-max-model-len-help" data-testid="info-panel-field-max-model-len"><p class="help-popover-title">Max model len</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Maximum context length (prompt + generation) in tokens that this model instance will accept.</dd>
+        <dt>Why it matters</dt>
+        <dd>Bounds how much KV cache memory a single request can use; requests longer than this are rejected by vLLM rather than silently truncated. Presets are filtered to the checkpoint's own max_position_embeddings.</dd>
+        <dt>Example</dt>
+        <dd>262144 (256K) is the checkpoint's own limit and what Phase 0 tested up to (137 s cold prefill, 1.2 s with a prefix-cache hit).</dd></dl></div>
+                        <select class="form-select num" id="field-max-model-len" data-testid="field-max-model-len" aria-describedby="field-max-model-len-error" value="262144" blazor:onchange=""><option value="8192">8,192 tokens</option><option value="16384">16,384 tokens</option><option value="32768">32,768 tokens</option><option value="65536">65,536 tokens</option><option value="131072">131,072 tokens</option><option value="262144" selected>262,144 tokens</option><option value="custom">Custom…</option></select><div id="field-max-model-len-error"></div></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="field-max-num-seqs">Max num seqs</label><button type="button" class="info-btn" aria-label="About: Max num seqs" popovertarget="field-max-num-seqs-help" style="anchor-name: --field-max-num-seqs-help" data-testid="info-toggle-field-max-num-seqs"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-max-num-seqs-help" popover role="note" aria-label="About Max num seqs" style="position-anchor: --field-max-num-seqs-help" data-testid="info-panel-field-max-num-seqs"><p class="help-popover-title">Max num seqs</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Maximum number of requests vLLM will batch and run concurrently.</dd>
+        <dt>Why it matters</dt>
+        <dd>Raising it increases throughput (more requests share the same forward pass) up to a point, but each concurrent sequence needs its own slice of the KV cache budget.</dd>
+        <dt>Example</dt>
+        <dd>16 was the concurrency Phase 0 measured aggregate throughput at: 326 tok/s (FP8) and 485 tok/s (NVFP4) with 256-token outputs.</dd></dl></div>
+                        <select class="form-select num" id="field-max-num-seqs" data-testid="field-max-num-seqs" aria-describedby="field-max-num-seqs-error" value="16" blazor:onchange=""><option value="1">1</option><option value="4">4</option><option value="8">8</option><option value="16" selected>16</option><option value="32">32</option><option value="64">64</option><option value="custom">Custom…</option></select><div id="field-max-num-seqs-error"></div></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="field-max-num-batched-tokens">Max batched tokens</label><button type="button" class="info-btn" aria-label="About: Max batched tokens" popovertarget="field-max-num-batched-tokens-help" style="anchor-name: --field-max-num-batched-tokens-help" data-testid="info-toggle-field-max-num-batched-tokens"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-max-num-batched-tokens-help" popover role="note" aria-label="About Max batched tokens" style="position-anchor: --field-max-num-batched-tokens-help" data-testid="info-panel-field-max-num-batched-tokens"><p class="help-popover-title">Max batched tokens</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>vLLM --max-num-batched-tokens: how many tokens one scheduler step may process, which is also the chunk size for long prompts (chunked prefill).</dd>
+        <dt>Why it matters</dt>
+        <dd>A larger budget prefills long prompts in fewer, bigger steps (faster time to first token) but makes decode steps of other requests wait longer behind them; a smaller one keeps streaming smooth under load. Default lets vLLM pick for this model.</dd>
+        <dt>Example</dt>
+        <dd>Tuning tries 2,048, 8,192 and 16,384 on this box and keeps whichever scores best for the chosen goal.</dd></dl></div>
+                        <select class="form-select num" id="field-max-num-batched-tokens" data-testid="field-max-num-batched-tokens" value="" blazor:onchange=""><option value>vLLM default</option><option value="2048">2,048</option><option value="4096">4,096</option><option value="8192">8,192</option><option value="16384">16,384</option><option value="32768">32,768</option></select></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="field-kv-cache-dtype">KV cache dtype</label><button type="button" class="info-btn" aria-label="About: KV cache dtype" popovertarget="field-kv-cache-dtype-help" style="anchor-name: --field-kv-cache-dtype-help" data-testid="info-toggle-field-kv-cache-dtype"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-kv-cache-dtype-help" popover role="note" aria-label="About KV cache dtype" style="position-anchor: --field-kv-cache-dtype-help" data-testid="info-panel-field-kv-cache-dtype"><p class="help-popover-title">KV cache dtype</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Storage format for the attention KV cache: auto (same dtype as the weights) or fp8.</dd>
+        <dt>Why it matters</dt>
+        <dd>The KV cache, not the weights, is usually what limits how much context you can serve concurrently. fp8 halves that memory, roughly doubling how many tokens of context fit in the same budget.</dd>
+        <dt>Example</dt>
+        <dd>fp8 on every Phase 0 model — it's what turns a 36 GiB budget into ~1.45M tokens of KV cache for the 9B model.</dd></dl></div>
+                        <select class="form-select" id="field-kv-cache-dtype" data-testid="field-kv-cache-dtype" aria-describedby="field-kv-cache-dtype-error field-kv-cache-dtype-hint" value="fp8" blazor:onchange=""><option value="auto">Auto</option><option value="fp8" selected>FP8</option></select>
+                        <div id="field-kv-cache-dtype-error"></div><div class="field-hint" id="field-kv-cache-dtype-hint" data-testid="field-kv-cache-dtype-hint">Halves KV cache memory vs. auto.</div></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="field-quantization">Quantization</label><button type="button" class="info-btn" aria-label="About: Quantization" popovertarget="field-quantization-help" style="anchor-name: --field-quantization-help" data-testid="info-toggle-field-quantization"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-quantization-help" popover role="note" aria-label="About Quantization" style="position-anchor: --field-quantization-help" data-testid="info-panel-field-quantization"><p class="help-popover-title">Quantization</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Online quantization vLLM applies while loading full-precision weights. "None" means the checkpoint is already quantized (compressed-tensors/ModelOpt NVFP4, FP8, etc.) and needs no conversion at load time.</dd>
+        <dt>Why it matters</dt>
+        <dd>Quantizing at load time trades a little extra load time and (usually) a little quality for roughly half the weight memory of BF16 — the difference between 18 GiB and ~9 GiB of weights for this 9B model.</dd>
+        <dt>Example</dt>
+        <dd>fp8 for the uncensored BF16 checkpoint (Phase 0: 23.4 -&gt; 326.0 tok/s from N=1 to N=16). Pre-quantized NVFP4 checkpoints use "None" here — they're already compressed on disk.</dd></dl></div>
+                        <select class="form-select" id="field-quantization" data-testid="field-quantization" aria-describedby="field-quantization-hint" blazor:onchange=""><option value="">None</option><option value="fp8">FP8 (online)</option></select><div class="field-hint" id="field-quantization-hint" data-testid="field-quantization-hint">Checkpoint already quantized, or run at full precision.</div></div></div></section><section class="panel form-section" aria-labelledby="sec-parsers"><div class="form-section-intro"><h2 id="sec-parsers">Parsers</h2>
+                    <p>Turn the model's raw output into OpenAI tool calls and reasoning content. They must match the model family.</p></div>
+                <div class="field-grid"><div class="field"><div class="field-head"><label class="field-label" for="field-tool-call-parser">Tool call parser</label><button type="button" class="info-btn" aria-label="About: Tool call parser" popovertarget="field-tool-call-parser-help" style="anchor-name: --field-tool-call-parser-help" data-testid="info-toggle-field-tool-call-parser"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-tool-call-parser-help" popover role="note" aria-label="About Tool call parser" style="position-anchor: --field-tool-call-parser-help" data-testid="info-panel-field-tool-call-parser"><p class="help-popover-title">Tool call parser</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Which vLLM parser extracts OpenAI-style tool calls from this model's raw output.</dd>
+        <dt>Why it matters</dt>
+        <dd>Different model families emit tool calls in different textual formats (JSON blocks, XML tags, Python-call syntax); the parser has to match the family or tool calls won't be recognized at all.</dd>
+        <dt>Example</dt>
+        <dd>qwen3_coder — Qwen3.5/Qwen3-Next/Qwen3 models emit XML-style &lt;tool_call&gt;&lt;function=...&gt; calls, which is what this parser expects. Phase 0 confirmed it works even with VS Code's schema-without-properties case.</dd></dl></div>
+                        <select class="form-select" id="field-tool-call-parser" data-testid="field-tool-call-parser" value="qwen3_coder" blazor:onchange=""><option value>None</option><option value="apertus">apertus</option><option value="cohere_command3">cohere_command3</option><option value="cohere_command4">cohere_command4</option><option value="deepseek_v3">deepseek_v3</option><option value="deepseek_v31">deepseek_v31</option><option value="deepseek_v32">deepseek_v32</option><option value="deepseek_v4">deepseek_v4</option><option value="dots">dots</option><option value="ernie45">ernie45</option><option value="functiongemma">functiongemma</option><option value="gemma4">gemma4</option><option value="gigachat3">gigachat3</option><option value="glm45">glm45</option><option value="glm47">glm47</option><option value="granite">granite</option><option value="granite-20b-fc">granite-20b-fc</option><option value="granite4">granite4</option><option value="hermes">hermes</option><option value="hunyuan_a13b">hunyuan_a13b</option><option value="hy_v3">hy_v3</option><option value="inkling">inkling</option><option value="internlm">internlm</option><option value="jamba">jamba</option><option value="kimi_k2">kimi_k2</option><option value="kimi_k3">kimi_k3</option><option value="lfm2">lfm2</option><option value="ling3">ling3</option><option value="llama3_json">llama3_json</option><option value="llama4_json">llama4_json</option><option value="llama4_pythonic">llama4_pythonic</option><option value="longcat">longcat</option><option value="mimo">mimo</option><option value="minicpm5">minicpm5</option><option value="minimax_m2">minimax_m2</option><option value="minimax_m3">minimax_m3</option><option value="mistral">mistral</option><option value="muse_glimmer">muse_glimmer</option><option value="olmo3">olmo3</option><option value="openai">openai</option><option value="phi4_mini_json">phi4_mini_json</option><option value="poolside_v1">poolside_v1</option><option value="pythonic">pythonic</option><option value="qwen3_coder" selected>qwen3_coder</option><option value="qwen3_xml">qwen3_xml</option><option value="seed_oss">seed_oss</option><option value="step3">step3</option><option value="step3p5">step3p5</option><option value="xlam">xlam</option></select></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="field-reasoning-parser">Reasoning parser</label><button type="button" class="info-btn" aria-label="About: Reasoning parser" popovertarget="field-reasoning-parser-help" style="anchor-name: --field-reasoning-parser-help" data-testid="info-toggle-field-reasoning-parser"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-reasoning-parser-help" popover role="note" aria-label="About Reasoning parser" style="position-anchor: --field-reasoning-parser-help" data-testid="info-panel-field-reasoning-parser"><p class="help-popover-title">Reasoning parser</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Which vLLM parser separates this model's "thinking" text from its final answer.</dd>
+        <dt>Why it matters</dt>
+        <dd>Reasoning models wrap chain-of-thought in a family-specific delimiter; the right parser strips it into a separate reasoning field instead of leaving it mixed into the visible reply.</dd>
+        <dt>Example</dt>
+        <dd>qwen3 for every Qwen3/Qwen3.5 model on this box. Leave both parsers unset for a model whose family isn't in the list.</dd></dl></div>
+                        <select class="form-select" id="field-reasoning-parser" data-testid="field-reasoning-parser" value="qwen3" blazor:onchange=""><option value>None</option><option value="cohere_command3">cohere_command3</option><option value="cohere_command4">cohere_command4</option><option value="deepseek_r1">deepseek_r1</option><option value="deepseek_v3">deepseek_v3</option><option value="deepseek_v4">deepseek_v4</option><option value="ernie45">ernie45</option><option value="gemma4">gemma4</option><option value="glm45">glm45</option><option value="glm47">glm47</option><option value="granite">granite</option><option value="holo2">holo2</option><option value="hunyuan_a13b">hunyuan_a13b</option><option value="hy_v3">hy_v3</option><option value="inkling">inkling</option><option value="kimi_k2">kimi_k2</option><option value="kimi_k3">kimi_k3</option><option value="ling3">ling3</option><option value="mimo">mimo</option><option value="minimax_m2">minimax_m2</option><option value="minimax_m2_append_think">minimax_m2_append_think</option><option value="minimax_m3">minimax_m3</option><option value="mistral">mistral</option><option value="nemotron_v3">nemotron_v3</option><option value="olmo3">olmo3</option><option value="openai_gptoss">openai_gptoss</option><option value="poolside_v1">poolside_v1</option><option value="qwen3" selected>qwen3</option><option value="seed_oss">seed_oss</option><option value="step3">step3</option><option value="step3p5">step3p5</option></select></div></div></section><section class="panel form-section" aria-labelledby="sec-performance"><div class="form-section-intro"><h2 id="sec-performance">Performance</h2>
+                    <p>Compilation and decoding options. The defaults are the settings measured on this box.</p></div>
+                <div class="field-grid"><div class="field"><div class="field-head"><label class="field-label" for="field-cuda-graph-mode">CUDA graph mode</label><button type="button" class="info-btn" aria-label="About: CUDA graph mode" popovertarget="field-cuda-graph-mode-help" style="anchor-name: --field-cuda-graph-mode-help" data-testid="info-toggle-field-cuda-graph-mode"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-cuda-graph-mode-help" popover role="note" aria-label="About CUDA graph mode" style="position-anchor: --field-cuda-graph-mode-help" data-testid="info-panel-field-cuda-graph-mode"><p class="help-popover-title">CUDA graph mode</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>vLLM's CUDA graph capture mode: how much of the forward pass gets captured as a replayable graph.</dd>
+        <dt>Why it matters</dt>
+        <dd>Graphs cut per-step launch overhead, but on this GB10 board FULL graphs crash when combined with MTP (CUBLAS_STATUS_INTERNAL_ERROR / illegal instruction on sm121); PIECEWISE is what actually worked in Phase 0.</dd>
+        <dt>Example</dt>
+        <dd>PIECEWISE — required whenever speculative decoding (MTP) is enabled on this box. Leave blank (vLLM default) for a plain model.</dd></dl></div>
+                        <select class="form-select" id="field-cuda-graph-mode" data-testid="field-cuda-graph-mode" blazor:onchange=""><option value="">vLLM default</option><option value="PIECEWISE">PIECEWISE</option><option value="FULL">FULL</option><option value="FULL_AND_PIECEWISE">FULL_AND_PIECEWISE</option><option value="NONE">NONE</option></select></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="field-prefix-caching">Prefix caching</label><button type="button" class="info-btn" aria-label="About: Prefix caching" popovertarget="field-prefix-caching-help" style="anchor-name: --field-prefix-caching-help" data-testid="info-toggle-field-prefix-caching"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-prefix-caching-help" popover role="note" aria-label="About Prefix caching" style="position-anchor: --field-prefix-caching-help" data-testid="info-panel-field-prefix-caching"><p class="help-popover-title">Prefix caching</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Reuses the KV cache of a previously seen prompt prefix instead of recomputing it. On passes --enable-prefix-caching, Off passes --no-enable-prefix-caching, vLLM default passes neither.</dd>
+        <dt>Why it matters</dt>
+        <dd>Huge win for repeated system prompts or long shared context (agent loops, RAG). Phase 0 measured a 242K-token prompt drop from 137 s cold prefill to 1.2 s on a prefix-cache hit.</dd>
+        <dt>Example</dt>
+        <dd>Enabled for every Phase 0 model; there's essentially no reason to turn it off on this workload.</dd></dl></div>
+                        <select class="form-select" id="field-prefix-caching" data-testid="field-prefix-caching" value="on" blazor:onchange=""><option value>vLLM default</option>
+                            <option value="on" selected>On</option>
+                            <option value="off">Off</option></select></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="field-async-scheduling">Async scheduling</label><button type="button" class="info-btn" aria-label="About: Async scheduling" popovertarget="field-async-scheduling-help" style="anchor-name: --field-async-scheduling-help" data-testid="info-toggle-field-async-scheduling"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-async-scheduling-help" popover role="note" aria-label="About Async scheduling" style="position-anchor: --field-async-scheduling-help" data-testid="info-panel-field-async-scheduling"><p class="help-popover-title">Async scheduling</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>vLLM's asynchronous scheduler: On passes --async-scheduling, Off --no-async-scheduling, vLLM default neither.</dd>
+        <dt>Why it matters</dt>
+        <dd>Overlaps scheduling with the GPU step, which NVIDIA's DGX Spark recipes use; whether it helps depends on the model.</dd>
+        <dt>Example</dt>
+        <dd>On for qwen36-35b-a3b-nvfp4 (it used to be a raw --async-scheduling extra arg).</dd></dl></div>
+                        <select class="form-select" id="field-async-scheduling" data-testid="field-async-scheduling" value="" blazor:onchange=""><option value>vLLM default</option>
+                            <option value="on">On</option>
+                            <option value="off">Off</option></select></div><div class="field field--wide"><div class="field-head"><label class="field-label" for="field-compilation-config">Other compilation-config keys (JSON)</label><button type="button" class="info-btn" aria-label="About: Other compilation-config keys (JSON)" popovertarget="field-compilation-config-help" style="anchor-name: --field-compilation-config-help" data-testid="info-toggle-field-compilation-config"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-compilation-config-help" popover role="note" aria-label="About Other compilation-config keys (JSON)" style="position-anchor: --field-compilation-config-help" data-testid="info-panel-field-compilation-config"><p class="help-popover-title">Other compilation-config keys (JSON)</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Any other --compilation-config key besides the CUDA graph mode, as a JSON object; merged with it into one argument.</dd>
+        <dt>Why it matters</dt>
+        <dd>Keeps advanced compilation settings in the definition instead of a raw -cc/--compilation-config extra arg that would override the graph mode.</dd>
+        <dt>Example</dt>
+        <dd>Leave empty unless a recipe asks for e.g. {"pass_config":{"enable_fusion":true}}.</dd></dl></div>
+                        <input id="field-compilation-config" data-testid="field-compilation-config" placeholder="{}" spellcheck="false" name="_model.CompilationExtraJson" class="form-control num valid" value="" blazor:onchange=""></input></div>
+                    <div class="field field--wide"><div class="field-head"><div class="form-check form-switch switch-row"><input role="switch" id="speculativeEnabled" data-testid="field-speculative-enabled" type="checkbox" name="_model.SpeculativeEnabled" class="form-check-input valid" value="True" blazor:onchange=""></input>
+                                    <label class="form-check-label" for="speculativeEnabled">Speculative decoding</label></div><button type="button" class="info-btn" aria-label="About: Speculative decoding" popovertarget="speculativeEnabled-help" style="anchor-name: --speculativeEnabled-help" data-testid="info-toggle-speculativeEnabled"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="speculativeEnabled-help" popover role="note" aria-label="About Speculative decoding" style="position-anchor: --speculativeEnabled-help" data-testid="info-panel-speculativeEnabled"><p class="help-popover-title">Speculative decoding</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Speculative decoding: a cheap draft step proposes several tokens, the model verifies them in one pass.</dd>
+        <dt>Why it matters</dt>
+        <dd>Can raise single-stream throughput noticeably when the draft's guesses are often right, at the cost of extra GPU work per verification step that doesn't pay off when the draft is wrong a lot.</dd>
+        <dt>Example</dt>
+        <dd>MTP on the official NVFP4 checkpoint: 48.1 tok/s at N=1 vs 41.0 without it (matching acceptance ~1.76 on story prompts). The uncensored checkpoint has no MTP weights, so speculative decoding isn't available for it.</dd></dl></div></div></div></section><section class="panel form-section" aria-labelledby="sec-container"><div class="form-section-intro"><h2 id="sec-container">Container</h2>
+                    <p>The image the model runs in, raw vLLM arguments, and whether it starts with the controller.</p></div>
+                <div class="field-grid"><div class="field field--wide"><div class="field-head"><label class="field-label" for="field-image">Image override</label><button type="button" class="info-btn" aria-label="About: Image override" popovertarget="field-image-help" style="anchor-name: --field-image-help" data-testid="info-toggle-field-image"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-image-help" popover role="note" aria-label="About Image override" style="position-anchor: --field-image-help" data-testid="info-panel-field-image"><p class="help-popover-title">Image override</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>The Docker image to run this model's container from. Blank uses the deployment's default vLLM image.</dd>
+        <dt>Why it matters</dt>
+        <dd>Different images can carry different vLLM builds/model support (the nvcr vllm:26.01 image, for example, lacks Qwen3_5 support, which is why Phase 0 used a locally built image instead).</dd>
+        <dt>Example</dt>
+        <dd>local/qwen38-vllm-dflash2:66e5414c6d75 — the default, and the only image Phase 0 tested Qwen3.5 on.</dd></dl></div>
+                        <select class="form-select num" id="field-image" data-testid="field-image" blazor:onchange=""><option value data-testid="field-image-default">Default image (local/qwen38-vllm-dflash2:66e5414c6d75)</option><option value="local/qwen38-vllm-dflash2:66e5414c6d75">local/qwen38-vllm-dflash2:66e5414c6d75</option></select></div><div class="field field--wide"><div class="field-head"><label class="field-label" for="field-extra-args">Extra args (one per line)</label><button type="button" class="info-btn" aria-label="About: Extra args (one per line)" popovertarget="field-extra-args-help" style="anchor-name: --field-extra-args-help" data-testid="info-toggle-field-extra-args"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-extra-args-help" popover role="note" aria-label="About Extra args (one per line)" style="position-anchor: --field-extra-args-help" data-testid="info-panel-field-extra-args"><p class="help-popover-title">Extra args (one per line)</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Additional raw vLLM command-line arguments, one per line, appended after every other flag. Flags with a field of their own (speculative/compilation config, max num seqs, max batched tokens, KV cache dtype, prefix caching, async scheduling, mamba cache mode) are moved into that field on save, in any spelling.</dd>
+        <dt>Why it matters</dt>
+        <dd>An escape hatch for flags this editor doesn't have a dedicated field for, without needing a code change. Owned flags are lifted because a raw copy would silently override the field (vLLM keeps the last one).</dd>
+        <dt>Example</dt>
+        <dd>--disable-log-requests would suppress vLLM's own per-request access log line, on top of the flags this editor already sets.</dd></dl></div>
+                        <textarea id="field-extra-args" data-testid="field-extra-args" rows="3" spellcheck="false" aria-describedby="field-extra-args-hint" name="_model.ExtraArgsText" class="form-control num valid" value="" blazor:onchange=""></textarea>
+                        <div class="field-hint" id="field-extra-args-hint">
+                            Flags that have their own field above (speculative and compilation config, max num seqs, max batched tokens,
+                            KV cache dtype, prefix caching, async scheduling, mamba cache mode) are moved into that field when you save,
+                            so each is passed to vLLM exactly once.
+                        </div></div>
+                    <div class="field"><div class="field-head"><div class="form-check form-switch switch-row"><input role="switch" id="autoStart" type="checkbox" name="_model.AutoStart" class="form-check-input valid" value="True" blazor:onchange=""></input>
+                                    <label class="form-check-label" for="autoStart">Start when the controller boots</label></div><button type="button" class="info-btn" aria-label="About: Auto-start on boot" popovertarget="autoStart-help" style="anchor-name: --autoStart-help" data-testid="info-toggle-autoStart"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="autoStart-help" popover role="note" aria-label="About Auto-start on boot" style="position-anchor: --autoStart-help" data-testid="info-panel-autoStart"><p class="help-popover-title">Auto-start on boot</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Start this model automatically when the controller process boots.</dd>
+        <dt>Why it matters</dt>
+        <dd>Without it, a model stays Stopped after a controller restart until someone starts it (or a request arrives, if AutoStartOnRequest is on) — useful to avoid keeping every model resident by default.</dd>
+        <dt>Example</dt>
+        <dd>Enabled for the seeded ornith-9b-fp8 model, so it's ready right after the controller comes up.</dd></dl></div></div></div></section><div class="form-footer"><button type="submit" class="btn btn-primary" data-testid="save-button">Save changes</button>
+                <a class="btn btn-outline-secondary" href="models">Cancel</a></div></form><section class="danger-zone" aria-labelledby="sec-danger" data-testid="danger-zone"><div class="danger-zone-text"><h2 class="panel-label" id="sec-danger">Delete this model</h2>
+                    <p class="muted">
+                        Removes the definition from MirbadLLM. The checkpoint files stay on disk, so you can add it again later.
+</p></div>
+                <button type="button" class="btn btn-outline-danger" data-testid="delete-button" blazor:onclick=""><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6"/></svg> Delete model…
+                </button></section></div><dialog class="ss-dialog" aria-labelledby="dialog-n-title" aria-describedby="dialog-n-body" blazor:oncancel="" data-testid="apply-dialog" data-open="false"><div class="ss-dialog-inner"><h2 id="dialog-n-title">Apply changes now?</h2>
+        <div class="ss-dialog-body" id="dialog-n-body"><p><strong></strong> is running with other settings than the saved ones.
+        A restart launches it with the saved settings.</p><p class="muted" data-testid="apply-estimate"></p>
+    </div>
+        <div class="ss-dialog-actions"><button type="button" class="btn btn-outline-secondary" autofocus data-testid="apply-dialog-cancel" blazor:onclick="">Later</button>
+            <button type="button" class="btn btn-primary" data-testid="apply-dialog-confirm" blazor:onclick="">Restart now</button></div></div></dialog>
+
+<dialog class="ss-dialog" aria-labelledby="dialog-n-title" aria-describedby="dialog-n-body" blazor:oncancel="" data-testid="force-restart-dialog" data-open="false"><div class="ss-dialog-inner"><h2 id="dialog-n-title">Restart anyway?</h2>
+        <div class="ss-dialog-body" id="dialog-n-body"><p data-testid="force-restart-numbers"> needs <strong class="num">0.0 GiB</strong>, but only
+        <strong class="num">0.0 GiB</strong> is free after the
+        <span class="num">0.0 GiB</span> reserve (<span class="num">0.0 GiB</span> free in total,
+        counting the <span class="num">0.0 GiB</span> its running container releases).
+    </p>
+    <p class="muted">
+        Restarting anyway can push ComfyUI, Ollama or other models on this box out of memory, or leave this model failing while it loads.
+    </p>
+    </div>
+        <div class="ss-dialog-actions"><button type="button" class="btn btn-outline-secondary" autofocus data-testid="force-restart-dialog-cancel" blazor:onclick="">Cancel</button>
+            <button type="button" class="btn btn-danger" data-testid="force-restart-dialog-confirm" blazor:onclick="">Restart anyway</button></div></div></dialog><dialog class="ss-dialog" aria-labelledby="dialog-n-title" aria-describedby="dialog-n-body" blazor:oncancel="" data-testid="delete-dialog" data-open="false"><div class="ss-dialog-inner"><h2 id="dialog-n-title">Delete m1?</h2>
+        <div class="ss-dialog-body" id="dialog-n-body"><p>
+                This removes the model definition from MirbadLLM. The checkpoint files in
+                <code>/models/m1</code> stay on disk, so you can add the model again later.
+            </p></div>
+        <div class="ss-dialog-actions"><button type="button" class="btn btn-outline-secondary" autofocus data-testid="delete-dialog-cancel" blazor:onclick="">Cancel</button>
+            <button type="button" class="btn btn-danger" data-testid="confirm-delete" blazor:onclick="">Delete model</button></div></div></dialog>

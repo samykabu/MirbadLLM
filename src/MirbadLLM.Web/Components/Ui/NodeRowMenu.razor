@@ -1,0 +1,134 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using MirbadLLM.Web.Components.Pages
+@* A node's actions (design §12.1): Approve / Reject for a node waiting for approval; Drain or Undrain, Rotate certificate,
+   Re-pair and Revoke for an approved one. Each opens its confirm dialog (NodeActionDialogs); nothing runs from here itself.
+   The Nodes list keeps them behind "⋯" (RowMenu); Node detail shows them as buttons in its header (Inline), the routine
+   ones together and the destructive one (Revoke, Reject) set apart in the dashed danger outline. *@
+@if (Inline)
+{
+    <div class="node-actions" role="group" aria-label="@($"Actions for {Row.Name}")" data-testid="@($"{TestIdPrefix}-actions")">
+        <div class="node-actions-main">
+            @if (NodeActionRules.CanApprove(Row))
+            {
+                <button type="button" class="btn btn-primary" data-testid="@($"{TestIdPrefix}-approve-open")"
+                        @onclick="() => Pick(NodeAction.Approve)"><Icon Name="check" /> Approve…</button>
+            }
+            @if (NodeActionRules.CanDrain(Row))
+            {
+                @if (Row.Draining)
+                {
+                    @Button(NodeAction.Undrain, "play", "Undrain…", "undrain")
+                }
+                else
+                {
+                    @Button(NodeAction.Drain, "pause", "Drain…", "drain")
+                }
+            }
+            @if (CanRotate && NodeActionRules.CanRotate(Row))
+            {
+                @Button(NodeAction.RotateCertificate, "restart", "Rotate certificate…", "rotate")
+            }
+            @if (NodeActionRules.CanRekey(Row))
+            {
+                @Button(NodeAction.Rekey, "key", "Re-pair…", "rekey")
+            }
+        </div>
+        @if (NodeActionRules.CanReject(Row) || (ShowRevoke && NodeActionRules.CanRevoke(Row)))
+        {
+            <div class="node-actions-danger">
+                @if (NodeActionRules.CanReject(Row))
+                {
+                    @Button(NodeAction.Reject, "close", "Reject…", "reject", danger: true)
+                }
+                @if (ShowRevoke && NodeActionRules.CanRevoke(Row))
+                {
+                    @Button(NodeAction.Revoke, "trash", "Revoke…", "revoke", danger: true)
+                }
+            </div>
+        }
+    </div>
+}
+else
+{
+    <RowMenu Id="@($"node-{Row.Id}")" Label="@($"More actions for {Row.Name}")" TestId="@($"{TestIdPrefix}-more-{Row.Id}")">
+        @if (NodeActionRules.CanApprove(Row))
+        {
+            @Item(NodeAction.Approve, "check", "Approve…", "approve")
+        }
+        @if (NodeActionRules.CanReject(Row))
+        {
+            @Item(NodeAction.Reject, "close", "Reject…", "reject")
+        }
+        @if (NodeActionRules.CanDrain(Row))
+        {
+            @if (Row.Draining)
+            {
+                @Item(NodeAction.Undrain, "play", "Undrain…", "undrain")
+            }
+            else
+            {
+                @Item(NodeAction.Drain, "pause", "Drain…", "drain")
+            }
+        }
+        @if (CanRotate && NodeActionRules.CanRotate(Row))
+        {
+            @Item(NodeAction.RotateCertificate, "restart", "Rotate certificate…", "rotate")
+        }
+        @if (NodeActionRules.CanRekey(Row))
+        {
+            @Item(NodeAction.Rekey, "key", "Re-pair (rekey)…", "rekey")
+        }
+        @if (NodeActionRules.CanRevoke(Row))
+        {
+            @Item(NodeAction.Revoke, "trash", "Revoke…", "revoke")
+        }
+    </RowMenu>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public Nodes.NodeRow Row { get; set; } = null!;
+
+    [Parameter]
+    public EventCallback<NodeActionRequest> OnPick { get; set; }
+
+    /// <summary>False when certificate rotation does not run on this master (the item is left out).</summary>
+    [Parameter]
+    public bool CanRotate { get; set; }
+
+    [Parameter]
+    public string TestIdPrefix { get; set; } = "nodes";
+
+    /// <summary>Visible buttons (Node detail's header) instead of the "⋯" menu (the Nodes list).</summary>
+    [Parameter]
+    public bool Inline { get; set; }
+
+    /// <summary>
+    /// Inline only: false leaves Revoke out (Node detail's header), because Revoke lives alone in the Settings tab's
+    /// danger zone. Reject stays beside Approve: for a pending node the two are one decision.
+    /// </summary>
+    [Parameter]
+    public bool ShowRevoke { get; set; } = true;
+
+    /// <summary>True when the node offers at least one action (the list leaves an empty menu out).</summary>
+    public static bool HasAny(Nodes.NodeRow row) =>
+        NodeActionRules.CanApprove(row) || NodeActionRules.CanReject(row) || NodeActionRules.CanDrain(row) || NodeActionRules.CanRevoke(row);
+
+    private Task Pick(NodeAction action) => OnPick.InvokeAsync(new NodeActionRequest(action, Row));
+
+    private RenderFragment Item(NodeAction action, string icon, string label, string key) => __builder =>
+    {
+        <button type="button" class="row-menu-item" role="menuitem" tabindex="-1" data-testid="@($"{TestIdPrefix}-{key}-{Row.Id}")"
+                @onclick="() => Pick(action)">
+            <Icon Name="@icon" /> @label
+        </button>
+    };
+
+    private RenderFragment Button(NodeAction action, string icon, string label, string key, bool danger = false) => __builder =>
+    {
+        <button type="button" class="btn @(danger ? "btn-outline-danger" : "btn-outline-secondary")" data-testid="@($"{TestIdPrefix}-{key}-{Row.Id}")"
+                @onclick="() => Pick(action)">
+            <Icon Name="@icon" /> @label
+        </button>
+    };
+}

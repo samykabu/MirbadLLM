@@ -1,0 +1,12 @@
+{
+  "index": 1,
+  "uuid": "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f602",
+  "utilizationPercent": 97,
+  "powerWatts": 158.4,
+  "temperatureC": 71,
+  "smClockMHz": 2535,
+  "memoryUsedGiB": 13.2,
+  "memoryTotalGiB": 16,
+  "memoryFreeGiB": 2.6,
+  "name": "NVIDIA GeForce RTX 4060 Ti"
+}

@@ -1,0 +1,155 @@
+# mirbadllm on the DGX Spark after the agent split (P1, topology a; design §2.2, MN-041): the master and the DGX's
+# node agent, two containers on the "mirbadllm" network. Model containers (ss-<id>) are created by the AGENT as
+# siblings on that network; they are not part of this file. hostd keeps its own systemd install (deploy/hostd).
+#
+# Deployed by deploy/ci-deploy-multinode.sh (DRY_RUN=1 prints its steps); deploy/compose.yaml is the pre-split single
+# controller, kept for the way back.
+#
+#   docker compose -f deploy/compose.multinode.yaml --env-file deploy/.env config    # validate
+#
+# Same project name as deploy/compose.yaml on purpose: the master keeps the container name "mirbadllm" (existing
+# tooling, the agent's host-service deny rules) and replaces the old "controller" service.
+#
+# A host first deployed before the rename (SparkServe) keeps its data: ci-deploy-multinode.sh points the bind mounts at
+# the pre-rename folders and hostd socket when only those exist (MIRBADLLM_DATA, ..., MIRBADLLM_HOSTD_RUN) and copies
+# the pre-rename volumes into this file's on the first deploy (docs/setup.md, "Upgrading from a pre-rename install").
+name: mirbadllm
+
+services:
+  master:
+    image: ${MIRBADLLM_IMAGE:-mirbadllm/controller:dev}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      # Names the Linux agent bundles baked into the image (GET /agent/bundles); ci-deploy-multinode.sh sets the commit.
+      args:
+        SOURCE_REVISION: ${MIRBADLLM_REVISION:-unknown}
+    container_name: mirbadllm
+    restart: unless-stopped
+    # Kestrel drains in-flight /v1 streams on SIGTERM; Docker's default 10 s would cut them (W4 review MN-096).
+    stop_grace_period: 45s
+    # 8080: UI, /api, /v1, /metrics for the LAN. 8443: the enroll listener, published for the LAN PCs that join or rekey
+    # with a join token (P2, MN-124, D105). It serves only POST /enroll and POST /enroll/rekey over TLS (the agent pins the
+    # CA by the join command's hash), each needing a one-time join token, rate-limited per client; no UI, /api or /v1.
+    # Keep it off the internet (firewall: allow TCP 8443 from the LAN only). The join command names
+    # https://<host of the browser request>:8443 unless MirbadLLM__NodeApi__EnrollUrl says otherwise (set it if you
+    # change MIRBADLLM_ENROLL_PORT). The agent's 9443 stays unpublished: the master dials the agents.
+    ports:
+      - "${MIRBADLLM_PORT:-8080}:8080"
+      - "${MIRBADLLM_ENROLL_PORT:-8443}:8443"
+    expose:
+      - "8443"
+    # No Docker socket, no /models, no hostd socket, no NVIDIA devices (design §2.2): the agent owns all of them.
+    volumes:
+      - ${MIRBADLLM_DATA:-/srv/mirbadllm/data}:/data
+      # Scheduled backups. The NAS share is mounted on the host by hostd (through the agent's backup-mount route); rslave
+      # propagation makes a share mounted AFTER the master started appear inside the container too (and disappear when it
+      # is unmounted). Needs the host path's mount to be shared or slave (findmnt -o TARGET,PROPAGATION -T <path>).
+      - type: bind
+        source: ${MIRBADLLM_BACKUPS:-/srv/mirbadllm/backups}
+        target: /backups
+        bind:
+          propagation: rslave
+          create_host_path: true
+      # The bootstrap bundle the master writes and the agent consumes (0700, uid 1654, shared only by these two).
+      - bootstrap:/run/mirbadllm-bootstrap
+    environment:
+      # Kestrel's application address; the enroll listener is added next to it in code (D65).
+      ASPNETCORE_HTTP_PORTS: "8080"
+      MirbadLLM__DataPath: /data
+      MirbadLLM__ApiKey: ${MIRBADLLM_API_KEY:-}
+      # Empty = admin login disabled (a red banner says so).
+      MirbadLLM__AdminPassword: ${MIRBADLLM_ADMIN_PASSWORD:-}
+      MirbadLLM__RequireApiKey: ${MIRBADLLM_REQUIRE_API_KEY:-false}
+      # Seeds the bootstrap node record's memory reserve on first boot (today's global reserve).
+      MirbadLLM__MemoryReserveGiB: ${MIRBADLLM_MEMORY_RESERVE_GIB:-8}
+      # The vLLM image of models without their own image. The agent's download helper uses the same image (below).
+      MirbadLLM__VllmImage: ${MIRBADLLM_VLLM_IMAGE:-local/qwen38-vllm-dflash2:66e5414c6d75}
+      # Encrypts the API keys (and the CA, D9) in scheduled backups. Empty = scheduled backups carry no secrets.
+      MirbadLLM__Backup__Passphrase: ${MIRBADLLM_BACKUP_PASSPHRASE:-}
+      # Names the backup files; inside the container the machine name is a random container id.
+      MirbadLLM__Backup__HostName: ${MIRBADLLM_BACKUP_HOSTNAME:-dgx-spark}
+      MirbadLLM__Nodes__BootstrapNodeId: dgx
+      # Enrollment (design §3.2; plan §3.6 W4 notes). The CA stays in /data/pki: no MirbadLLM__Pki__* keys here (D63).
+      MirbadLLM__Enrollment__Port: "8443"
+      MirbadLLM__Enrollment__BootstrapEnabled: "true"
+      MirbadLLM__Enrollment__BootstrapDirectory: /run/mirbadllm-bootstrap
+      MirbadLLM__Enrollment__BootstrapEnrollEndpoint: https://mirbadllm:8443
+      # The agent container on this host's Docker network: benchmark provenance reads agent-mtls-loopback (D59).
+      MirbadLLM__Enrollment__BootstrapAgentAddress: https://mirbadllm-agent:9443
+    healthcheck:
+      # The image has bash but no curl.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /healthz HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    networks:
+      mirbadllm:
+
+  agent:
+    image: ${MIRBADLLM_AGENT_IMAGE:-mirbadllm/agent:dev}
+    build:
+      context: ..
+      dockerfile: deploy/agent.Dockerfile
+      # The commit the agent reports as its version (ci-deploy-multinode.sh sets it), compared with the master's.
+      args:
+        SOURCE_REVISION: ${MIRBADLLM_REVISION:-unknown}
+    container_name: mirbadllm-agent
+    restart: unless-stopped
+    # ShutdownTimeout is 30 s (drain of running operations); Docker must not kill the agent before it (W4 review MN-096).
+    stop_grace_period: 45s
+    # Waits for the master's bootstrap bundle on first start (BootstrapWait, 10 min) on its own; this only orders `up`.
+    depends_on:
+      - master
+    # No published port: the master reaches https://mirbadllm-agent:9443 over the mirbadllm network (mTLS).
+    expose:
+      - "9443"
+    group_add:
+      - "${DOCKER_GID:?set DOCKER_GID to the gid of /var/run/docker.sock}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Read-write: Hugging Face downloads land here; folder listing, inspection and deletion are confined to it.
+      - ${MIRBADLLM_MODELS:-/srv/mirbadllm/models}:/models
+      - ${MIRBADLLM_CACHE:-/srv/mirbadllm/cache}:/cache
+      # mirbadllm-hostd's socket (Services page, backup mount). Read-only is enough to connect.
+      - ${MIRBADLLM_HOSTD_RUN:-/run/mirbadllm-hostd}:/run/mirbadllm-hostd:ro
+      # Identity, fencing state and the operation log: a named volume, never a bind into the CI workspace (plan §3.6 S4).
+      - agent-state:/var/lib/mirbadllm-agent
+      - bootstrap:/run/mirbadllm-bootstrap
+    environment:
+      # agent.json is baked into the image (deploy/agent/agent.dgx.json); these override its host-specific values.
+      MIRBADLLM_AGENT_Agent__ModelsHostPath: ${MIRBADLLM_MODELS:-/srv/mirbadllm/models}
+      MIRBADLLM_AGENT_Agent__CacheHostPath: ${MIRBADLLM_CACHE:-/srv/mirbadllm/cache}
+      MIRBADLLM_AGENT_Agent__MemoryReserveGiB: ${MIRBADLLM_MEMORY_RESERVE_GIB:-8}
+      # Equal to the master's MirbadLLM__VllmImage (W4 review MN-096): the download helper runs huggingface_hub from it.
+      MIRBADLLM_AGENT_Agent__DownloadHelperImage: ${MIRBADLLM_VLLM_IMAGE:-local/qwen38-vllm-dflash2:66e5414c6d75}
+    healthcheck:
+      # The listener opens only after enrollment, the Docker wait and reconciliation (Program.CreateAsync).
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9443"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+    networks:
+      mirbadllm:
+        # A master deployed before the rename recorded this node's address as https://spark-serve-agent:9443.
+        aliases: [spark-serve-agent]
+    # "utility" only: mounts nvidia-smi for GPU telemetry (Monitoring page, /metrics); no compute access.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [utility]
+
+volumes:
+  agent-state:
+    name: mirbadllm-agent-state
+  bootstrap:
+    name: mirbadllm-bootstrap
+
+networks:
+  mirbadllm:
+    name: mirbadllm

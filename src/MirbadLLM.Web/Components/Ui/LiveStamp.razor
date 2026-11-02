@@ -1,0 +1,24 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* "Updated 3s ago" for a live page. The server stamps the instant its data was loaded (data-live-at, UTC);
+   js/shell.js turns that into the age text on the viewer's own clock every second, so the stamp keeps
+   counting — and flags itself as stale — even when the server has stopped sending updates (a dropped
+   circuit, a stuck refresh). Blazor renders the text span empty and never touches it again. *@
+<span class="live-stamp" data-live-at="@(At is { } at ? UiFormat.IsoUtc(at) : null)" data-live-interval="@IntervalSeconds"
+      data-testid="@TestId">
+    <span class="live-stamp-ok"><Icon Name="clock" /></span>
+    <span class="live-stamp-warn"><Icon Name="warning" /></span>
+    <span class="live-stamp-text" data-live-text></span>
+</span>
+
+@code {
+    /// <summary>When the shown data was loaded; null before the first load.</summary>
+    [Parameter]
+    public DateTimeOffset? At { get; set; }
+
+    /// <summary>The expected refresh period; the stamp turns stale after about two missed refreshes.</summary>
+    [Parameter]
+    public int IntervalSeconds { get; set; } = 5;
+
+    [Parameter]
+    public string TestId { get; set; } = "live-stamp";
+}

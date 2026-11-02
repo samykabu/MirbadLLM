@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "version": "0.32.2",
+  "python": "3.12.15",
+  "uv": {
+    "version": "0.13.1",
+    "name": "uv-aarch64-apple-darwin.tar.gz",
+    "url": "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-aarch64-apple-darwin.tar.gz",
+    "sha256": "cfe454573412ff7380d15fc7dae5997ab53ffce72fce0a78e91ddbc84001acd2",
+    "bytes": 14280170,
+    "prefix": "uv-aarch64-apple-darwin/"
+  },
+  "requirements": "mlx-lm.lock.txt",
+  "requirementsSha256": "1178f8388a309bea39ac434b9f2e12636d125d3146ca99913812d6184c0af268"
+}

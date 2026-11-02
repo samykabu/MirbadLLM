@@ -1,0 +1,5 @@
+{
+ "//": "Placeholder: the deploy job overwrites this with the merged PRs (deploy/release-notes.py) before building the master image, which carries it as /app/release-notes.json. A local build ships these empty notes; the portal then says the build has none.",
+ "error": "not collected (local build)",
+ "entries": []
+}

@@ -1,0 +1,74 @@
+.slo {
+    display: flex;
+    flex-direction: column;
+    gap: var(--ss-sp-3);
+    min-width: 0;
+    padding: var(--ss-sp-4);
+}
+
+.slo-title {
+    margin: 0;
+    font-family: var(--ss-font-display);
+    font-size: var(--ss-fs-300);
+    font-weight: 600;
+}
+
+.slo-line {
+    display: grid;
+    gap: 6px;
+}
+
+.slo-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 2px var(--ss-sp-2);
+    font-size: var(--ss-fs-100);
+}
+
+.slo-value { white-space: nowrap; }
+
+.slo-word { font-weight: 500; }
+.slo-word--ok { color: var(--ss-ready); }
+.slo-word--watch { color: var(--ss-busy); }
+.slo-word--low { color: var(--ss-failed); }
+.slo-word--none { color: var(--ss-text-muted); }
+
+.slo-segs {
+    display: grid;
+    grid-template-columns: repeat(10, minmax(0, 1fr));
+    gap: 3px;
+}
+
+.slo-segs span {
+    height: 8px;
+    background: var(--ss-sunken);
+    border-radius: 2px;
+    box-shadow: inset 0 0 0 1px var(--ss-border);
+}
+
+.slo-segs span.on { box-shadow: none; }
+.slo-segs span.on--ok { background: var(--ss-ready); }
+.slo-segs span.on--watch { background: var(--ss-busy); }
+.slo-segs span.on--low { background: var(--ss-failed); }
+
+.slo-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: auto;
+}
+
+.slo-chips .chip { font-family: var(--ss-font-sans); }
+
+/* The panel has its own row on the Overview: on a wide screen the three levels sit side by side. */
+@media (min-width: 1024px) {
+    .slo {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: var(--ss-sp-3) var(--ss-sp-5);
+    }
+
+    .slo-title,
+    .slo-chips { grid-column: 1 / -1; }
+}

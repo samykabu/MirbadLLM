@@ -1,0 +1,30 @@
+# mirbadllm master in the home cluster (topology b, design §11; packaged and verified in P5). NOT deployed: these are
+# K8s-compatible manifests that record the decisions so P5 starts from them (home-gitops generic-app chart values plus
+# these extra manifests where the chart falls short, D17).
+#
+#   kubectl kustomize deploy/k8s/master              # render
+#
+# Decisions carried here:
+# - one replica, strategy Recreate (design §11.3: in-process locks, in-memory jobs/circuits, one live master);
+# - /data on a LOCAL volume pinned to one node (owner decision): master.lock is an flock() lock, which NFS does not
+#   honour reliably; ReadWriteOncePod;
+# - /backups on the NAS over NFS (owner decision D16, external-volume backups);
+# - bootstrap enrollment off (no co-located agent), the CA from a secret (D63: MirbadLLM__Pki__*), the enroll listener
+#   behind a Traefik TCP passthrough on its own SNI name (design §11.5);
+# - the image from your registry, built multi-arch on the self-hosted runners (design §11.1), never on GitHub-hosted ones.
+# Before applying: set the node name in data-volume.yaml, the NAS in backups-volume.yaml, the image tag below, and
+# create the secret (secret.example.yaml shows its keys; in the cluster it comes from Infisical).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: mirbadllm
+resources:
+  - namespace.yaml
+  - data-volume.yaml
+  - backups-volume.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - networkpolicy.yaml
+images:
+  - name: registry.example.com/mirbadllm/master
+    newTag: "000000000000"

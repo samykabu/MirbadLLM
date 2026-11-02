@@ -1,0 +1,195 @@
+@page "/access/tokens"
+@rendermode InteractiveServer
+@inject ITokenStore TokenStore
+
+<PageTitle>Tokens · Access · MirbadLLM</PageTitle>
+
+<AccessHeader Current="AccessPage.Tokens" />
+
+<p class="tokens-intro" data-testid="tokens-intro">
+    Credentials for outside services, such as a Hugging Face access token for gated repos. Save one here once, then pick it
+    by name when you download, move or restore a model. Values are encrypted on the master and never shown again.
+</p>
+
+@if (_error is not null)
+{
+    <div class="callout callout--failed page-alert" role="alert" data-testid="tokens-error">
+        <Icon Name="state-failed" />
+        <div class="callout-body">@_error</div>
+    </div>
+}
+
+<div class="tokens-layout">
+<section class="panel panel-body tokens-form" aria-labelledby="token-form-title">
+    <h2 id="token-form-title" class="panel-label">@(_editing is null ? "Add a token" : $"Edit {_editing.Name}")</h2>
+    <EditForm Model="_form" OnValidSubmit="SaveAsync" data-testid="token-form" class="token-form">
+        <DataAnnotationsValidator />
+        <div class="field">
+            <label class="field-label" for="token-name">Name</label>
+            <InputText id="token-name" class="form-control" @bind-Value="_form.Name" data-testid="field-token-name"
+                       placeholder="e.g. hf-personal" autocomplete="off" aria-describedby="token-name-hint token-name-error" />
+            <span class="field-hint" id="token-name-hint">What you pick it by elsewhere, so name the account or the purpose.</span>
+            <div id="token-name-error"><ValidationMessage For="() => _form.Name" /></div>
+        </div>
+        <div class="field">
+            <label class="field-label" for="token-value">Token</label>
+            <input id="token-value" type="password" class="form-control" @bind="_form.Value" data-testid="field-token-value"
+                   placeholder="hf_…" autocomplete="off" spellcheck="false" aria-describedby="token-value-hint" />
+            <span class="field-hint" id="token-value-hint">
+                @(_editing is null ? "Pasted once; only its last four characters are shown after this." : "Leave empty to keep the current value.")
+            </span>
+        </div>
+        <div class="token-form-actions">
+            <button type="submit" class="btn btn-primary" data-testid="token-save"><Icon Name="lock" /> @(_editing is null ? "Save token" : "Save changes")</button>
+            @if (_editing is not null)
+            {
+                <button type="button" class="btn btn-outline-secondary" data-testid="token-cancel" @onclick="CancelEdit">Cancel</button>
+            }
+        </div>
+    </EditForm>
+</section>
+
+<section class="section" aria-labelledby="tokens-title">
+    <div class="section-head">
+        <h2 id="tokens-title">Tokens</h2>
+        @if (_tokens.Count > 0)
+        {
+            <span class="section-note num">@_tokens.Count saved</span>
+        }
+    </div>
+    @if (_tokens.Count == 0)
+    {
+        <EmptyState Title="No tokens yet" HeadingLevel="3" Inline="true" TestId="tokens-empty">
+            <ChildContent>
+                <p>Public repos download without one. Add a Hugging Face token here to download gated or private repos.</p>
+            </ChildContent>
+        </EmptyState>
+    }
+    else
+    {
+        <div class="panel panel--scroll-x">
+            <table class="data-table data-table--stack" data-testid="tokens-table">
+                <caption class="visually-hidden">Saved tokens</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Name</th>
+                        <th scope="col">Token</th>
+                        <th scope="col">Updated</th>
+                        <th scope="col"><span class="visually-hidden">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var token in _tokens)
+                    {
+                        <tr data-testid="token-row-@token.Id">
+                            <td class="col-primary">@token.Name</td>
+                            <td data-label="Token"><code class="num">@(token.Hint.Length > 0 ? $"…{token.Hint}" : "••••")</code></td>
+                            <td data-label="Updated" class="num">@token.UpdatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                            <td class="col-actions">
+                                <button class="btn btn-sm btn-outline-secondary" type="button" data-testid="edit-token-@token.Id"
+                                        aria-label="@($"Edit {token.Name}")" @onclick="() => StartEdit(token)">
+                                    <Icon Name="edit" /> Edit
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" type="button" data-testid="delete-token-@token.Id"
+                                        aria-label="@($"Delete {token.Name}")" @onclick="() => AskDelete(token)">
+                                    <Icon Name="trash" /> Delete
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+</div>
+
+<ConfirmDialog @bind-Open="_deleteOpen" Title="@($"Delete {_deleteTarget?.Name}?")" ConfirmLabel="Delete token" Destructive="true"
+               OnConfirm="ConfirmDeleteAsync" TestId="delete-token-dialog" ConfirmTestId="@($"confirm-delete-token-{_deleteTarget?.Id}")">
+    <p>The value is removed from this master. Downloads already running keep going; new ones have to pick another token.</p>
+</ConfirmDialog>
+
+@code {
+    private List<SavedToken> _tokens = [];
+    private readonly TokenForm _form = new();
+    private SavedToken? _editing;
+    private string? _error;
+    private bool _deleteOpen;
+    private SavedToken? _deleteTarget;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync() => _tokens = (await TokenStore.ListAsync()).ToList();
+
+    private async Task SaveAsync()
+    {
+        _error = null;
+        try
+        {
+            if (_editing is null)
+            {
+                await TokenStore.AddAsync(_form.Name, _form.Value);
+            }
+            else if (await TokenStore.UpdateAsync(_editing.Id, _form.Name, _form.Value) is null)
+            {
+                _error = $"{_editing.Name} was deleted meanwhile.";
+            }
+
+            CancelEdit();
+            await LoadAsync();
+        }
+        catch (ArgumentException ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _form.Value = ""; // never kept in the form or rendered back into it
+        }
+    }
+
+    private void StartEdit(SavedToken token)
+    {
+        _editing = token;
+        _form.Name = token.Name;
+        _form.Value = "";
+        _error = null;
+    }
+
+    private void CancelEdit()
+    {
+        _editing = null;
+        _form.Name = "";
+        _form.Value = "";
+    }
+
+    private void AskDelete(SavedToken token)
+    {
+        _deleteTarget = token;
+        _deleteOpen = true;
+    }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_deleteTarget is null)
+        {
+            return;
+        }
+
+        await TokenStore.DeleteAsync(_deleteTarget.Id);
+        if (_editing?.Id == _deleteTarget.Id)
+        {
+            CancelEdit();
+        }
+
+        await LoadAsync();
+    }
+
+    private sealed class TokenForm
+    {
+        [Required]
+        public string Name { get; set; } = "";
+
+        public string Value { get; set; } = "";
+    }
+}

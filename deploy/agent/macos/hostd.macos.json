@@ -1,0 +1,7 @@
+{
+  "//": "mirbadllm-hostd seed config on a Mac (Phase 4; plan docs/macos/implementation-plan.md M10). install-agent.sh install-hostd installs it as \"/Library/Application Support/mirbadllm-hostd/hostd.json\" (root:wheel 0644) only when the file does not exist yet, with discoverUsers set to the account that ran sudo (or each --discover-user). The agent cannot change it. Units are launchd labels: scope \"system\" is a LaunchDaemon in /Library/LaunchDaemons, scope \"user\" a LaunchAgent of one of discoverUsers (~/Library/LaunchAgents or /Library/LaunchAgents), loaded in that user's gui/<uid> session. On first start these entries seed the admin-managed whitelist in state/whitelist.json (root, 0600); entries added here later are merged into it once. After that the Services page adds and removes jobs (admin password required). The list starts empty: Discovered on the Services page shows every job with a plist, e.g. homebrew.mxcl.ollama for Ollama installed with Homebrew. Jobs matching the compiled-in deny list (com.apple.*, com.mirbadllm.*, actions.runner.* (the GitHub runners), com.docker.*, SSH, cron, time) or hostd-deny.json next to this file ({\"patterns\": [\"foo.*\"]}, root-owned) can never be managed. socketGroup: the group that may use the socket (the agent's). Restart hostd after editing: sudo launchctl kickstart -k system/com.mirbadllm.hostd",
+  "socket": "/var/run/mirbadllm-hostd/hostd.sock",
+  "socketGroup": "_mirbadllm",
+  "discoverUsers": [],
+  "services": []
+}

@@ -1,0 +1,39 @@
+# design §11.6: ingress only from Traefik; egress to the agents (TCP 9443 on the LAN), Hugging Face (443) and DNS.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: mirbadllm-master
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: mirbadllm-master
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: traefik
+      toPorts:
+        - ports:
+            - { port: "8080", protocol: TCP }
+            - { port: "8443", protocol: TCP }
+  egress:
+    - toCIDR: [192.0.2.0/24]
+      toPorts:
+        - ports:
+            - { port: "9443", protocol: TCP }
+    - toFQDNs:
+        - matchName: huggingface.co
+        - matchPattern: "*.huggingface.co"
+        - matchPattern: "*.hf.co"
+      toPorts:
+        - ports:
+            - { port: "443", protocol: TCP }
+    - toEndpoints:
+        - matchLabels:
+            io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - { port: "53", protocol: ANY }
+          rules:
+            dns:
+              - matchPattern: "*"

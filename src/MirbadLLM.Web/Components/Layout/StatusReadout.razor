@@ -1,0 +1,175 @@
+@implements IAsyncDisposable
+@inject IServiceProvider ServiceProvider
+@* Live headline numbers in the status bar. Fed by the circuit's shared LiveDataService (one 5 s refresh for
+   the status bar and the page body together); it needs only the model list and the in-memory metrics
+   history, so on its own it never asks Docker or vLLM for anything.
+   Several nodes (design §8.3): "Ready 5 / 6 · 2 nodes" (one node's free memory and GPU would mislead), plus a
+   failed chip when a node is not serving and a busy chip when one is Degraded, both linking to the Nodes page.
+   The node states come from the master's status cache, which never calls an agent. *@
+@if (_nodeCount > 1)
+{
+    <div class="status-fleet" data-testid="status-fleet">
+        <dl class="readouts num" aria-label="Machine status" data-testid="status-readouts">
+            <div class="readout">
+                <dt>Ready</dt>
+                <dd data-testid="status-ready">@(_total is null ? UiFormat.Missing : $"{_ready} / {_total}")</dd>
+            </div>
+            <div class="readout">
+                <dt>Nodes</dt>
+                <dd data-testid="status-nodes">@(_nodeCount - _notServing) / @_nodeCount <span class="readout-unit">online</span></dd>
+            </div>
+            <div class="readout">
+                <dt>Attention</dt>
+                <dd data-testid="status-attention">
+                    @if (_attention > 0)
+                    {
+                        <a class="readout-attention" href="models" title="Models and nodes that need attention: open Models">@_attention</a>
+                    }
+                    else
+                    {
+                        <span class="readout-calm">0</span>
+                    }
+                </dd>
+            </div>
+        </dl>
+        @if (_notServing > 0)
+        {
+            <a class="chip chip--failed status-node-chip" href="nodes" data-testid="status-nodes-down"
+               title="@($"{NodesText(_notServing)} not serving: open the Nodes page")">
+                <Icon Name="wifi-off" /> @NotServingText
+            </a>
+        }
+        @if (_degraded > 0)
+        {
+            <a class="chip chip--busy status-node-chip" href="nodes" data-testid="status-nodes-degraded"
+               title="@($"{NodesText(_degraded)} degraded: open the Nodes page for the reasons")">
+                <Icon Name="warning" /> @(_degraded == 1 ? "Node degraded" : $"{_degraded} nodes degraded")
+            </a>
+        }
+    </div>
+}
+else
+{
+    <dl class="readouts num" aria-label="Machine status" data-testid="status-readouts">
+        <div class="readout">
+            <dt>Free</dt>
+            <dd data-testid="status-free">@(_free is null ? UiFormat.Missing : UiFormat.GiB(_free))</dd>
+        </div>
+        <div class="readout readout--gpu">
+            <dt>GPU</dt>
+            <dd data-testid="status-gpu">@UiFormat.Percent(_gpu)</dd>
+        </div>
+        <div class="readout">
+            <dt>Ready</dt>
+            <dd data-testid="status-ready">@(_total is null ? UiFormat.Missing : $"{_ready} / {_total}")</dd>
+        </div>
+        <div class="readout">
+            <dt>Attention</dt>
+            <dd data-testid="status-attention">
+                @if (_attention > 0)
+                {
+                    <a class="readout-attention" href="models" title="Models and nodes that need attention: open Models">@_attention</a>
+                }
+                else
+                {
+                    <span class="readout-calm">0</span>
+                }
+            </dd>
+        </div>
+    </dl>
+}
+@if (_paused is { } paused)
+{
+    <a class="chip chip--busy status-maintenance" href="@($"models/{paused.ModelId}/{(paused.JobKind == "tuning" ? "tune" : "benchmark")}")" data-testid="status-maintenance"
+       title="@string.Join("; ", _windows.Select(w => w.Describe(DateTimeOffset.UtcNow)))">
+        <Icon Name="pause" /> @PausedLabel
+    </a>
+}
+
+@code {
+    private LiveDataService? _live;
+    private bool _ownsLive;
+    private IDisposable? _subscription;
+    private INodeStatusCache? _nodes;
+    private MaintenanceState? _paused;
+    private IReadOnlyList<MaintenanceState> _windows = [];
+
+    /// <summary>
+    /// "API paused" while a global window is open (P1, today's text); with node-scoped windows only (P2, MN-126) the paused
+    /// node, or how many nodes are paused.
+    /// </summary>
+    private string PausedLabel =>
+        _windows.Count == 0 || _windows.Any(w => w.IsGlobal) ? "API paused"
+        : _windows.Count == 1 ? $"Node {_windows[0].NodeId} paused"
+        : $"{_windows.Select(w => w.NodeId).Distinct(StringComparer.Ordinal).Count()} nodes paused";
+    private double? _free;
+    private double? _gpu;
+    private int _ready;
+    private int? _total;
+    private int _nodeCount;
+    private int _notServing;
+    private bool _allOffline;
+    private int _degraded;
+    private int _attention;
+
+    private string NotServingText => _allOffline
+        ? $"{NodesText(_notServing)} offline"
+        : $"{NodesText(_notServing)} not serving";
+
+    private static string NodesText(int count) => count == 1 ? "1 node" : $"{count} nodes";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _nodes = ServiceProvider.GetService<INodeStatusCache>();
+        _live = LiveDataService.Resolve(ServiceProvider, out _ownsLive);
+        await ApplyAsync(await _live.GetAsync(LiveNeeds.Models | LiveNeeds.Statuses));
+        _subscription = _live.Subscribe(LiveNeeds.Models | LiveNeeds.Statuses, snapshot => InvokeAsync(async () =>
+        {
+            await ApplyAsync(snapshot);
+            StateHasChanged();
+        }));
+    }
+
+    private async Task ApplyAsync(LiveSnapshot snapshot)
+    {
+        _paused = snapshot.Maintenance;
+        _windows = snapshot.Windows;
+        if (snapshot.LatestHost is { } host)
+        {
+            _free = host.Memory.AvailableGiB;
+            _gpu = host.Gpu?.UtilizationPercent;
+        }
+
+        _ready = snapshot.LatestKpis.Count;
+        _total = snapshot.Models?.Count;
+        var fleet = await ReadNodesAsync(snapshot);
+        _nodeCount = fleet.Count;
+        var down = fleet.Where(n => !n.IsServing).ToList();
+        _notServing = down.Count;
+        _allOffline = down.All(n => n.State == NodeState.Offline);
+        _degraded = fleet.Count(n => n.State == NodeState.Degraded);
+        _attention = AttentionItems.Build(snapshot, fleet, ServiceProvider.GetService<IMetricsHistory>()).Count;
+    }
+
+    /// <summary>Counts the nodes that hold models (pending and revoked ones do not) and those that are not serving.</summary>
+    private async Task<IReadOnlyList<MirbadLLM.Web.Components.Pages.Nodes.NodeRow>> ReadNodesAsync(LiveSnapshot snapshot)
+    {
+        try
+        {
+            return (await FleetNodes.ReadAsync(_nodes, ServiceProvider.GetService<INodeRegistry>(), snapshot.Models ?? [], CancellationToken.None)).Rows;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+        {
+            return []; // the status bar never fails over the node view; the Nodes page reports it
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _subscription?.Dispose();
+        if (_ownsLive && _live is not null)
+        {
+            await _live.DisposeAsync();
+        }
+    }
+}

@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Wire DTOs, protocol constants, error codes and the agent client interfaces of the master<->agent protocol
+       (design §2.5, §4). Referenced by the master and the agent; no logic beyond formatting helpers. -->
+  <ItemGroup>
+    <ProjectReference Include="..\MirbadLLM.Core\MirbadLLM.Core.csproj" />
+  </ItemGroup>
+</Project>

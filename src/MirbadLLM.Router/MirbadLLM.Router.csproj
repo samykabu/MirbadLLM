@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\MirbadLLM.Core\MirbadLLM.Core.csproj" />
+    <ProjectReference Include="..\MirbadLLM.Agent.Contracts\MirbadLLM.Agent.Contracts.csproj" />
+  </ItemGroup>
+</Project>

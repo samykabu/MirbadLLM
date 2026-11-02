@@ -1,0 +1,353 @@
+@page "/connect"
+@page "/access"
+@rendermode InteractiveServer
+@inject IModelEndpointResolver EndpointResolver
+@inject IOptions<MirbadLLMOptions> Options
+@inject IServiceProvider ServiceProvider
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+
+<PageTitle>Connect · Access · MirbadLLM</PageTitle>
+
+<AccessHeader Current="AccessPage.Connect" KeyCount="_activeKeyCount" />
+
+<div class="access-layout"><div>
+
+<section class="panel panel-body connect-endpoints" aria-labelledby="endpoint-title">
+    <h2 id="endpoint-title" class="panel-label">Endpoint</h2>
+    <dl class="kv kv--wide">
+        <dt>Base URL</dt>
+        <dd class="copy-row" data-tour="access-base-url">
+            <code data-testid="base-url">@foreach (var part in WordBreakParts(_baseUrl)) { @part.Text if (part.BreakAfter) { <wbr /> } }</code>
+            <button type="button" class="btn btn-sm btn-ghost" aria-label="Copy base URL" @onclick="() => CopyAsync(_baseUrl, CopyTarget.BaseUrl)">
+                <Icon Name="@(_copied == CopyTarget.BaseUrl ? "check" : "copy")" /> @(_copied == CopyTarget.BaseUrl ? "Copied" : "Copy")
+            </button>
+        </dd>
+        <dt>Prometheus metrics</dt>
+        <dd class="copy-row">
+            <code data-testid="metrics-url">@foreach (var part in WordBreakParts(_metricsUrl)) { @part.Text if (part.BreakAfter) { <wbr /> } }</code>
+            <button type="button" class="btn btn-sm btn-ghost" aria-label="Copy metrics URL" @onclick="() => CopyAsync(_metricsUrl, CopyTarget.MetricsUrl)">
+                <Icon Name="@(_copied == CopyTarget.MetricsUrl ? "check" : "copy")" /> @(_copied == CopyTarget.MetricsUrl ? "Copied" : "Copy")
+            </button>
+        </dd>
+        <dt>API key</dt>
+        <dd>
+            @if (_apiKeyConfigured)
+            {
+                <span data-testid="api-key-required">Required. Send <code>Authorization: Bearer &lt;key&gt;</code>. <a href="access/keys">Manage API keys</a></span>
+            }
+            else
+            {
+                <span>Not required yet: anyone who can reach this address can call it. <a href="access/keys">Create a key</a> to require one.</span>
+            }
+        </dd>
+    </dl>
+</section>
+
+<section class="section" aria-labelledby="served-title">
+    <div class="section-head">
+        <h2 id="served-title">Served models</h2>
+        <span class="section-note">Clients send the served name as <code>model</code></span>
+    </div>
+    @if (_ready.Count == 0)
+    {
+        <p class="muted connect-prose" data-testid="ready-models-empty">
+            No model is Ready yet, so clients have nothing to call. <a href="models">Start one on Models</a>; loading takes a few minutes.
+        </p>
+    }
+    else
+    {
+        <ul class="panel served-list" data-testid="ready-models">
+            @foreach (var model in _ready)
+            {
+                <li class="served-row" data-testid="@($"ready-model-{model.ModelId}")">
+                    <code class="served-name"><span class="served-swatch" style="@($"background:{_colors.GetValueOrDefault(model.ModelId)}")" aria-hidden="true"></span>@model.ServedName</code>
+                    <span class="served-where" data-testid="@($"ready-model-where-{model.ModelId}")">
+                        <Icon Name="server" /> <span>@model.NodeName</span>
+                        @if (model.RuntimeName is { } runtime)
+                        {
+                            <span class="served-runtime">@runtime</span>
+                        }
+                    </span>
+                    <span class="state state--ready served-state"><Icon Name="state-ready" /> Ready</span>
+                    <button type="button" class="btn btn-sm btn-ghost" aria-label="@($"Copy served name {model.ServedName}")" data-testid="@($"copy-served-{model.ModelId}")" @onclick="() => CopyAsync(model.ServedName, CopyTarget.ServedName)"><Icon Name="copy" /><span class="visually-hidden">Copy</span></button>
+                </li>
+            }
+        </ul>
+    }
+    @if (_notReady.Count > 0)
+    {
+        <div class="served-others">
+            <div class="section-head">
+                <h3>Not callable right now · @_notReady.Count</h3>
+                <a href="models">Manage on Models <Icon Name="chevron-right" /></a>
+            </div>
+            <ul class="panel served-list" data-testid="not-ready-models">
+            @foreach (var model in _notReady)
+            {
+                <li class="served-row served-row--unavailable" data-testid="@($"not-ready-model-{model.ModelId}")">
+                    <div class="served-identity">
+                        <a class="served-name" href="@($"models/{Uri.EscapeDataString(model.ModelId)}/overview")">@model.ServedName</a>
+                        <span class="served-where">@model.Where</span>
+                    </div>
+                    <StateBadge State="model.State" TestId="@($"not-ready-state-{model.ModelId}")" />
+                </li>
+            }
+            </ul>
+        </div>
+    }
+</section>
+
+</div><div class="access-client">
+<section class="section" aria-labelledby="snippets-title">
+    <div class="section-head">
+        <h2 id="snippets-title">Client settings</h2>
+    </div>
+    <div class="snippet-model" data-testid="snippet-model">
+        @if (_ready.Count > 0)
+        {
+            <label class="field-label" for="snippet-model-select">Model in the snippets</label>
+            <select id="snippet-model-select" class="form-select" data-testid="snippet-model-select" aria-describedby="snippet-model-hint"
+                    value="@_snippetModel" @onchange="OnSnippetModelChanged">
+                @foreach (var model in _ready)
+                {
+                    <option value="@model.ServedName" selected="@(model.ServedName == _snippetModel)">@model.ServedName — @model.Where</option>
+                }
+            </select>
+            <span class="field-hint" id="snippet-model-hint">
+                Cline, Continue and curl are filled in with <code>@ModelName</code>@(SnippetPlace is { } place ? $", served on {place.Where}" : "").
+                The VS Code entry lists every Ready model.
+            </span>
+        }
+        else
+        {
+            <p class="field-hint connect-prose" data-testid="snippet-model-placeholder">
+                No model is Ready, so the snippets use the placeholder <code>&lt;served-name&gt;</code>. Replace it with a served name once a model is Ready.
+            </p>
+        }
+    </div>
+    @* One tab per client (?client=vscode|cline|continue|curl), so the page stays one screen tall; a long snippet
+       scrolls inside its own code block instead of the page. *@
+    @if (_client != "vscode")
+    {
+        <ol class="snippet-steps"><li>@(_client == "curl" ? "Open a terminal on the client machine." : "Choose the OpenAI Compatible provider in your client.")</li><li>Copy the settings below and use the served name you selected.</li><li>@(_apiKeyConfigured ? "Use your API key from Access / API keys." : "No API key is required yet.")</li></ol>
+    }
+    <div class="connect-clients">
+    <Tabs Items="ClientTabs" SelectedId="@_client" SelectedIdChanged="id => _client = id" QueryKey="client"
+          AriaLabel="Client settings" TestId="client-tabs">
+        <ChildContent Context="client">
+            @switch (client)
+            {
+                case "cline":
+                    <div class="panel snippet">
+                        <div class="snippet-head">
+                            <h3>Cline / Roo Code <span class="muted">(OpenAI Compatible provider)</span></h3>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="Copy Cline and Roo Code settings" @onclick="CopyClineAsync">
+                                <Icon Name="@(_copied == CopyTarget.Cline ? "check" : "copy")" /> @(_copied == CopyTarget.Cline ? "Copied" : "Copy")
+                            </button>
+                        </div>
+                        <pre tabindex="0" aria-label="Cline and Roo Code settings" data-testid="cline-snippet">@foreach (var part in WordBreakParts(ClineText())) { @part.Text if (part.BreakAfter) { <wbr /> } }</pre>
+                    </div>
+                    break;
+                case "continue":
+                    <div class="panel snippet">
+                        <div class="snippet-head">
+                            <h3>Continue <span class="muted">(config.yaml)</span></h3>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="Copy Continue configuration" @onclick="CopyContinueAsync">
+                                <Icon Name="@(_copied == CopyTarget.Continue ? "check" : "copy")" /> @(_copied == CopyTarget.Continue ? "Copied" : "Copy")
+                            </button>
+                        </div>
+                        <pre tabindex="0" aria-label="Continue configuration" data-testid="continue-snippet">@foreach (var part in WordBreakParts(ContinueText())) { @part.Text if (part.BreakAfter) { <wbr /> } }</pre>
+                    </div>
+                    break;
+                case "curl":
+                    <div class="panel snippet">
+                        <div class="snippet-head">
+                            <h3>curl</h3>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="Copy curl command" @onclick="CopyCurlAsync">
+                                <Icon Name="@(_copied == CopyTarget.Curl ? "check" : "copy")" /> @(_copied == CopyTarget.Curl ? "Copied" : "Copy")
+                            </button>
+                        </div>
+                        <pre tabindex="0" aria-label="curl command" data-testid="curl-snippet">@foreach (var part in WordBreakParts(CurlText())) { @part.Text if (part.BreakAfter) { <wbr /> } }</pre>
+                    </div>
+                    break;
+                default:
+                    <div class="panel snippet">
+                        <div class="snippet-head">
+                            <h3>VS Code <span class="muted">(GitHub Copilot Chat, OpenAI Compatible models)</span></h3>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="Copy VS Code models configuration" @onclick="CopyVsCodeAsync">
+                                <Icon Name="@(_copied == CopyTarget.VsCode ? "check" : "copy")" /> @(_copied == CopyTarget.VsCode ? "Copied" : "Copy")
+                            </button>
+                        </div>
+                        <ol class="snippet-steps connect-prose">
+                            <li>In VS Code, open the Chat view, pick <strong>Manage Models…</strong> in the model picker and choose <strong>OpenAI Compatible</strong>.</li>
+                            <li>Open its JSON settings and paste the entry below. It lists every Ready model, each named with the node and runtime that serve it.</li>
+                            @if (_apiKeyConfigured)
+                            {
+                                <li>When VS Code asks for the API key, paste your <code>ssk_…</code> key from <a href="access/keys">API keys</a>. VS Code stores it and replaces <code>apiKey</code> with its own secret reference.</li>
+                            }
+                        </ol>
+                        <pre tabindex="0" aria-label="VS Code models configuration" data-testid="vscode-snippet">@foreach (var part in WordBreakParts(VsCodeText())) { @part.Text if (part.BreakAfter) { <wbr /> } }</pre>
+                        <p class="field-hint connect-prose">Token limits come from each model's context length: output is capped at 16,384 tokens (or a quarter of a short context) and input gets the rest, so the two always fit. <code>vision</code> is off because image input has not been verified.</p>
+                    </div>
+                    break;
+            }
+        </ChildContent>
+    </Tabs>
+    </div>
+    <p class="visually-hidden" role="status">@(_copied is null ? "" : "Copied to the clipboard")</p>
+</section>
+
+</div></div>
+
+@code {
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string _baseUrl = "/v1";
+    private string _metricsUrl = "/metrics";
+    private bool _apiKeyConfigured;
+    private int? _activeKeyCount;
+    private IReadOnlyDictionary<string, string> _colors = new Dictionary<string, string>();
+    private List<ModelPlace> _ready = [];
+    private List<ModelPlace> _notReady = [];
+    private string? _snippetModel;
+    private IJSObjectReference? _module;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Prerender has the HttpContext; the interactive render (no HttpContext) uses the page's own origin.
+        string origin = HttpContext is not null
+            ? $"{HttpContext.Request.Scheme}://{HttpContext.Request.Host}"
+            : new Uri(Nav.BaseUri).GetLeftPart(UriPartial.Authority);
+        _baseUrl = $"{origin}/v1";
+        _metricsUrl = $"{origin}/metrics";
+
+        // Resolved via the service provider (not @inject) so this page keeps working in tests/hosts that
+        // don't register IApiKeyStore/IOptions<AuthOptions> — it then falls back to the legacy ApiKey option.
+        bool legacyConfigured = !string.IsNullOrEmpty(Options.Value.ApiKey);
+        bool requireApiKey = ServiceProvider.GetService<IOptions<AuthOptions>>()?.Value.RequireApiKey ?? false;
+        bool everHadInferenceKey = false;
+        if (ServiceProvider.GetService<IApiKeyStore>() is { } apiKeyStore)
+        {
+            everHadInferenceKey = await apiKeyStore.HasAnyKeyAsync(ApiKeyScope.Inference);
+            _activeKeyCount = (await apiKeyStore.ListAsync()).Count(k => k.IsActive);
+        }
+
+        _apiKeyConfigured = legacyConfigured || requireApiKey || everHadInferenceKey;
+
+        var places = await ModelPlaces.LoadAsync(ServiceProvider, EndpointResolver);
+        _ready = places.Where(p => p.IsReady).ToList();
+        _notReady = places.Where(p => !p.IsReady).ToList();
+        _colors = ModelColors.Assign(places.Select(p => p.ModelId));
+
+        // ?model= keeps the snippet model across a reload or a shared link; otherwise the first Ready model.
+        string? requested = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query)
+            .GetValueOrDefault("model").FirstOrDefault();
+        _snippetModel = _ready.FirstOrDefault(p => string.Equals(p.ServedName, requested, StringComparison.OrdinalIgnoreCase))?.ServedName
+            ?? _ready.FirstOrDefault()?.ServedName;
+    }
+
+    private static readonly IReadOnlyList<TabItem> ClientTabs =
+    [
+        new("vscode", "VS Code"),
+        new("cline", "Cline / Roo Code"),
+        new("continue", "Continue"),
+        new("curl", "curl"),
+    ];
+
+    private string _client = "vscode";
+
+    private enum CopyTarget { BaseUrl, MetricsUrl, VsCode, Cline, Continue, Curl, ServedName }
+
+    private CopyTarget? _copied;
+
+    private string ModelName => _snippetModel ?? "<served-name>";
+
+    private ModelPlace? SnippetPlace => _ready.FirstOrDefault(p => p.ServedName == _snippetModel);
+
+    private void OnSnippetModelChanged(ChangeEventArgs e)
+    {
+        string? value = e.Value?.ToString();
+        if (value is null || _ready.All(p => p.ServedName != value))
+        {
+            return;
+        }
+
+        _snippetModel = value;
+        UrlQuery.For(Nav).Replace("model", value);
+    }
+
+    private string ClineText() =>
+        $"Base URL: {_baseUrl}\nAPI Key: {(_apiKeyConfigured ? "Bearer <your key>" : "(not required)")}\nModel: {ModelName}";
+
+    private string ContinueText()
+    {
+        var apiKeyLine = _apiKeyConfigured ? "\n    apiKey: <your key>" : "";
+        return $"models:\n  - name: {ModelName}\n    provider: openai\n    apiBase: {_baseUrl}\n    model: {ModelName}{apiKeyLine}";
+    }
+
+    private string VsCodeText() => VsCodeSnippet.Build(_baseUrl, _ready, _apiKeyConfigured);
+
+    private Task CopyVsCodeAsync() => CopyAsync(VsCodeText(), CopyTarget.VsCode);
+
+    private string CurlText()
+    {
+        var authLine = _apiKeyConfigured ? " \\\n  -H \"Authorization: Bearer <your key>\"" : "";
+        return $"curl {_baseUrl}/chat/completions \\\n  -H \"Content-Type: application/json\"{authLine} \\\n  -d '{{\"model\":\"{ModelName}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hello\"}}]}}'";
+    }
+
+    /// <summary>One piece of a snippet's text for rendering, in order; <see cref="BreakAfter"/> says whether
+    /// a <c>&lt;wbr&gt;</c> word-break opportunity follows it. Concatenating every <see cref="Text"/> in order
+    /// reproduces the original string exactly — the split is presentation only, never fed back into Copy.</summary>
+    public readonly record struct WordBreakPart(string Text, bool BreakAfter);
+
+    /// <summary>Splits <paramref name="text"/> after every <c>/</c>, <c>.</c>, <c>-</c> and <c>,</c> so the
+    /// snippet <c>&lt;pre&gt;</c> can offer a <c>&lt;wbr&gt;</c> at those natural token boundaries on a phone,
+    /// instead of breaking mid-token wherever <c>overflow-wrap: anywhere</c> happens to land. This only
+    /// changes the rendered markup: every Copy button still sends the plain, untouched <paramref name="text"/>.</summary>
+    public static List<WordBreakPart> WordBreakParts(string text)
+    {
+        var parts = new List<WordBreakPart>();
+        int start = 0;
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] is '/' or '.' or '-' or ',')
+            {
+                parts.Add(new WordBreakPart(text[start..(i + 1)], BreakAfter: true));
+                start = i + 1;
+            }
+        }
+
+        if (start < text.Length)
+        {
+            parts.Add(new WordBreakPart(text[start..], BreakAfter: false));
+        }
+
+        return parts;
+    }
+
+    private async Task<IJSObjectReference> ModuleAsync()
+        => _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./interop.js");
+
+    private async Task CopyAsync(string text, CopyTarget target)
+    {
+        var ok = await (await ModuleAsync()).InvokeAsync<bool>("copyText", text);
+        _copied = ok ? target : null;
+        if (ok)
+        {
+            StateHasChanged();
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            if (_copied == target)
+            {
+                _copied = null;
+            }
+        }
+    }
+
+    private Task CopyClineAsync() => CopyAsync(ClineText(), CopyTarget.Cline);
+
+    private Task CopyContinueAsync() => CopyAsync(ContinueText(), CopyTarget.Continue);
+
+    private Task CopyCurlAsync() => CopyAsync(CurlText(), CopyTarget.Curl);
+}

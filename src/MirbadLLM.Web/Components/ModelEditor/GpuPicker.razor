@@ -1,0 +1,228 @@
+@namespace MirbadLLM.Web.Components.ModelEditor
+@using System.Globalization
+@* GPU checkboxes of a discrete node (design §5.1, §12.2; MN-118): each GPU by its current index, name and VRAM, with
+   its free memory after its reserve from the fit preview. The selection is kept as UUIDs (the card's identity); a GPU
+   that would break the equal-capacity rule for tensor parallel is disabled and says why; a selected GPU that is no
+   longer on the node is listed so it can be unticked. A llama.cpp model (AllowUnequal, MN-226) may tick GPUs of any size:
+   llama.cpp splits the layers by the per-GPU budgets typed here (design-p3p4 §A.1.5), and the tensor split is shown. *@
+<fieldset class="gpu-picker" aria-describedby="@HintId" data-testid="@($"{TestId}")">
+    <legend class="field-label">GPUs</legend>
+    @if (Gpus.Count == 0 && Missing.Count == 0)
+    {
+        <p class="field-hint" data-testid="@($"{TestId}-none")">@Node reports no GPUs yet; a model needs at least one GPU there.</p>
+    }
+    else
+    {
+        <ul class="gpu-list">
+            @foreach (var gpu in Gpus)
+            {
+                bool on = Selected.Contains(gpu.Uuid, StringComparer.Ordinal);
+                bool allowed = on || AllowUnequal || PlacementEditing.Compatible(gpu, SelectedCapabilities);
+                var fit = Candidates?.Gpus.FirstOrDefault(g => string.Equals(g.Uuid, gpu.Uuid, StringComparison.Ordinal));
+                string id = $"{TestId}-{gpu.Index.ToString(CultureInfo.InvariantCulture)}";
+                <li class="gpu-option @(on ? "gpu-option--on" : null)" data-testid="@($"{TestId}-option-{gpu.Uuid}")">
+                    <input type="checkbox" class="form-check-input" id="@id" checked="@on" disabled="@(Disabled || !allowed)"
+                           aria-describedby="@(allowed ? $"{id}-meta" : $"{id}-meta {id}-note")"
+                           data-testid="@($"{TestId}-check-{gpu.Uuid}")" @onchange="e => ToggleAsync(gpu.Uuid, e.Value is true)" />
+                    <label class="gpu-text" for="@id">
+                        <span class="gpu-name">@PlacementEditing.GpuLabel(gpu)</span>
+                        <span class="gpu-meta" id="@($"{id}-meta")">
+                            @if (fit?.FreeGiB is { } free)
+                            {
+                                <span><span class="num">@UiFormat.GiB(free)</span> free after the <span class="num">@UiFormat.GiB(fit.ReserveGiB)</span> reserve</span>
+                            }
+                            else
+                            {
+                                <span>Free memory <span class="num">@UiFormat.Missing</span> (no fresh reading)</span>
+                            }
+                            <span class="gpu-uuid num">@gpu.Uuid</span>
+                        </span>
+                        @if (!allowed)
+                        {
+                            <span class="gpu-note" id="@($"{id}-note")">Not with the GPUs ticked: tensor parallel needs GPUs of the same model and memory.</span>
+                        }
+                    </label>
+                </li>
+            }
+            @foreach (string uuid in Missing)
+            {
+                <li class="gpu-option gpu-option--missing" data-testid="@($"{TestId}-missing-{uuid}")">
+                    <input type="checkbox" class="form-check-input" id="@($"{TestId}-missing-{uuid}-check")" checked disabled="@Disabled"
+                           data-testid="@($"{TestId}-check-{uuid}")" @onchange="e => ToggleAsync(uuid, e.Value is true)" />
+                    <label class="gpu-text" for="@($"{TestId}-missing-{uuid}-check")">
+                        <span class="gpu-name"><Icon Name="warning" /> GPU <span class="num">@UiFormat.Missing</span> · no longer on @Node</span>
+                        <span class="gpu-meta"><span class="gpu-uuid num">@uuid</span> was removed or replaced. Untick it and pick another GPU.</span>
+                    </label>
+                </li>
+            }
+        </ul>
+    }
+    @if (ShowBudgets)
+    {
+        <div class="gpu-budgets" role="group" aria-labelledby="@($"{TestId}-budgets-label")" data-testid="@($"{TestId}-budgets")">
+            <span class="field-label" id="@($"{TestId}-budgets-label")">Per-GPU budgets (GiB)</span>
+            <div class="gpu-budget-row">
+                @for (int i = 0; i < Selected.Count; i++)
+                {
+                    int slot = i;
+                    string uuid = Selected[slot];
+                    var gpu = Gpus.FirstOrDefault(g => string.Equals(g.Uuid, uuid, StringComparison.Ordinal));
+                    string inputId = $"{TestId}-budget-{slot.ToString(CultureInfo.InvariantCulture)}";
+                    <div class="field gpu-budget">
+                        <label class="field-label" for="@inputId">@(gpu is null ? uuid : $"GPU {gpu.Index.ToString(CultureInfo.InvariantCulture)}")</label>
+                        <input type="number" class="form-control num" id="@inputId" data-testid="@inputId" min="0.1" step="0.1"
+                               aria-describedby="@($"{TestId}-budgets-hint")" aria-invalid="@(BudgetProblem is null ? null : "true")"
+                               value="@BudgetText(slot)" @onchange="e => SetBudgetAsync(slot, e.Value as string)" />
+                    </div>
+                }
+            </div>
+            <div class="field-hint" id="@($"{TestId}-budgets-hint")" data-testid="@($"{TestId}-budgets-hint")">
+                @if (BudgetProblem is { } problem)
+                {
+                    <span class="validation-message" data-testid="@($"{TestId}-budgets-error")">@problem</span>
+                }
+                else if (BudgetsTyped)
+                {
+                    <span>They add up to the <span class="num">@UiFormat.GiB(TotalBudgetGiB)</span> memory budget; admission checks each GPU against its own.</span>
+                }
+                else
+                {
+                    <span>Empty: the layers are split by each card's memory minus its reserve. Type one per GPU to set the split yourself; they must add up to the <span class="num">@UiFormat.GiB(TotalBudgetGiB)</span> memory budget.</span>
+                }
+            </div>
+        </div>
+    }
+    <div class="field-hint" id="@HintId" data-testid="@($"{TestId}-hint")">
+        @if (AllowUnequal)
+        {
+            @if (Selected.Count > 1)
+            {
+                <span>llama.cpp splits the layers across <span class="num">@Selected.Count</span> GPUs (<code>--split-mode layer@(TensorSplit is null ? "" : " --tensor-split " + TensorSplit)</code>); the cards may differ in size.</span>
+            }
+            else
+            {
+                <span>One GPU (<code>--split-mode none</code>), or several of any size: llama.cpp splits the layers by their budgets. GPUs are saved by their UUID, so the model keeps its card if the indices change.</span>
+            }
+        }
+        else if (Selected.Count > 1)
+        {
+            <span>vLLM runs on <span class="num">@Selected.Count</span> GPUs in tensor parallel (<code>--tensor-parallel-size @Selected.Count</code>), the memory budget split evenly across them.</span>
+        }
+        else
+        {
+            <span>One GPU, or several of the same model and memory for tensor parallel. GPUs are saved by their UUID, so the model keeps its card if the indices change.</span>
+        }
+    </div>
+</fieldset>
+
+@code {
+    /// <summary>The node's GPUs in index order.</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<GpuCapability> Gpus { get; set; } = [];
+
+    /// <summary>The selected GPU UUIDs, in order.</summary>
+    [Parameter]
+    public IReadOnlyList<string> Selected { get; set; } = [];
+
+    /// <summary>Raised with the new selection.</summary>
+    [Parameter]
+    public EventCallback<IReadOnlyList<string>> SelectedChanged { get; set; }
+
+    /// <summary>The stored selection (its order is kept when the same GPUs end up selected).</summary>
+    [Parameter]
+    public IReadOnlyList<string>? Stored { get; set; }
+
+    /// <summary>The fit preview without a GPU selection: every GPU as a single-GPU option, with its free memory.</summary>
+    [Parameter]
+    public NodeFitResult? Candidates { get; set; }
+
+    /// <summary>The node id, for the texts.</summary>
+    [Parameter]
+    public string Node { get; set; } = "";
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    [Parameter]
+    public string TestId { get; set; } = "gpu-picker";
+
+    /// <summary>
+    /// A llama.cpp model (MN-226): GPUs of different sizes may be ticked together (layer split instead of tensor parallel),
+    /// and with two or more ticked the per-GPU budgets are edited here.
+    /// </summary>
+    [Parameter]
+    public bool AllowUnequal { get; set; }
+
+    /// <summary>The per-GPU budgets in <see cref="Selected"/> order (null = not typed); used with <see cref="AllowUnequal"/>.</summary>
+    [Parameter]
+    public IReadOnlyList<double?> Budgets { get; set; } = [];
+
+    /// <summary>Raised with the budgets after one was typed.</summary>
+    [Parameter]
+    public EventCallback<IReadOnlyList<double?>> BudgetsChanged { get; set; }
+
+    /// <summary>The model's memory budget, which the per-GPU budgets must add up to.</summary>
+    [Parameter]
+    public double TotalBudgetGiB { get; set; }
+
+    /// <summary>The <c>--tensor-split</c> the builder would emit (e.g. <c>0.4,0.6</c>); null when it cannot be told.</summary>
+    [Parameter]
+    public string? TensorSplit { get; set; }
+
+    private string HintId => $"{TestId}-hint";
+
+    private bool ShowBudgets => AllowUnequal && Selected.Count > 1;
+
+    private bool BudgetsTyped => Budgets.Count == Selected.Count && Budgets.All(b => b is not null);
+
+    /// <summary>Why the typed budgets would be refused (some typed, not all; or not adding up); null when fine or none typed.</summary>
+    private string? BudgetProblem => LlamaCppEditing.GpuBudgetProblem(Budgets, Selected.Count, TotalBudgetGiB);
+
+    private string BudgetText(int slot) =>
+        slot < Budgets.Count && Budgets[slot] is { } value ? value.ToString("0.##", CultureInfo.InvariantCulture) : "";
+
+    private async Task SetBudgetAsync(int slot, string? text)
+    {
+        var next = Enumerable.Range(0, Selected.Count).Select(i => i < Budgets.Count ? Budgets[i] : null).ToList();
+        next[slot] = double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double parsed) && double.IsFinite(parsed) ? parsed : null;
+        Budgets = next;
+        await BudgetsChanged.InvokeAsync(next);
+    }
+
+    /// <summary>
+    /// <see cref="PlacementEditing.Toggle"/> without the equal-capacity rule (llama.cpp): index order, or the stored order when
+    /// the stored set is ticked again.
+    /// </summary>
+    private IReadOnlyList<string> ToggleAny(string uuid, bool on)
+    {
+        var set = new HashSet<string>(Selected, StringComparer.Ordinal);
+        if (on)
+        {
+            set.Add(uuid);
+        }
+        else
+        {
+            set.Remove(uuid);
+        }
+
+        if (Stored is { Count: > 0 } stored && set.SetEquals(stored))
+        {
+            return [.. stored];
+        }
+
+        var index = Gpus.ToDictionary(g => g.Uuid, g => g.Index, StringComparer.Ordinal);
+        return [.. set.OrderBy(u => index.TryGetValue(u, out int i) ? i : int.MaxValue).ThenBy(u => u, StringComparer.Ordinal)];
+    }
+
+    private IReadOnlyList<GpuCapability> SelectedCapabilities =>
+        [.. Gpus.Where(g => Selected.Contains(g.Uuid, StringComparer.Ordinal))];
+
+    private IReadOnlyList<string> Missing => PlacementEditing.Missing(Selected, Gpus);
+
+    private async Task ToggleAsync(string uuid, bool on)
+    {
+        var next = AllowUnequal ? ToggleAny(uuid, on) : PlacementEditing.Toggle(Selected, uuid, on, Gpus, Stored);
+        Selected = next;
+        await SelectedChanged.InvokeAsync(next);
+    }
+}

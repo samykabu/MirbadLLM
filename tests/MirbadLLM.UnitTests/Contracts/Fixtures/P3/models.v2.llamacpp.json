@@ -1,0 +1,176 @@
+{
+  "schemaVersion": 2,
+  "models": [
+    {
+      "Id": "qwen3-embedding-4b-win",
+      "ServedName": "qwen3-embedding-4b-win",
+      "ModelPath": "Qwen3-Embedding-4B-GGUF",
+      "Quantization": null,
+      "KvCacheDtype": "fp8",
+      "MaxModelLen": 262144,
+      "MaxNumSeqs": 16,
+      "MaxNumBatchedTokens": null,
+      "MemoryBudgetGiB": 8.9,
+      "ToolCallParser": null,
+      "ReasoningParser": null,
+      "EnablePrefixCaching": true,
+      "Speculative": null,
+      "CudaGraphMode": null,
+      "CompilationConfig": null,
+      "AsyncScheduling": null,
+      "MambaCacheMode": null,
+      "Image": null,
+      "ExtraArgs": [],
+      "AutoStart": true,
+      "Tags": [ "embedding" ],
+      "Sources": [
+        {
+          "RepoId": "Qwen/Qwen3-Embedding-4B-GGUF",
+          "Folder": "Qwen3-Embedding-4B-GGUF",
+          "Revision": "f4602530db1d980e16da9d7d3a70294cf5c190be",
+          "AllowPatterns": [ "Qwen3-Embedding-4B-Q8_0.gguf" ]
+        }
+      ],
+      "Placement": {
+        "NodeId": "win-1",
+        "GpuUuids": [ "GPU-7c1e9a52-3f60-4d2b-9a8e-5b0f2c6d1e44" ],
+        "GpuIndices": [ 1 ]
+      },
+      "Runtime": "llamacpp",
+      "LlamaCpp": {
+        "ModelFile": "Qwen3-Embedding-4B-GGUF/Qwen3-Embedding-4B-Q8_0.gguf",
+        "ProjectorFile": null,
+        "ContextSize": 8192,
+        "Parallel": 2,
+        "GpuLayers": 999,
+        "FlashAttention": null,
+        "CacheTypeK": "f16",
+        "CacheTypeV": "f16",
+        "BatchSize": null,
+        "MicroBatchSize": null,
+        "Delivery": "process",
+        "Image": null,
+        "ExtraArgs": [],
+        "Embedding": true,
+        "Pooling": "last",
+        "EmulateDimensions": true
+      },
+      "HostMemoryBudgetGiB": 2,
+      "KeepServingDuringJobs": true
+    },
+    {
+      "Id": "coder-14b-split",
+      "ServedName": "coder-14b",
+      "ModelPath": "Coder-14B-GGUF",
+      "Quantization": null,
+      "KvCacheDtype": "fp8",
+      "MaxModelLen": 262144,
+      "MaxNumSeqs": 16,
+      "MaxNumBatchedTokens": null,
+      "MemoryBudgetGiB": 18,
+      "ToolCallParser": null,
+      "ReasoningParser": null,
+      "EnablePrefixCaching": true,
+      "Speculative": null,
+      "CudaGraphMode": null,
+      "CompilationConfig": null,
+      "AsyncScheduling": null,
+      "MambaCacheMode": null,
+      "Image": null,
+      "ExtraArgs": [],
+      "AutoStart": false,
+      "Tags": [ "chat", "coding" ],
+      "Sources": [
+        {
+          "RepoId": "example/Coder-14B-GGUF",
+          "Folder": "Coder-14B-GGUF",
+          "Revision": null,
+          "AllowPatterns": [ "coder-14b-Q5_K_M-*.gguf" ]
+        }
+      ],
+      "Placement": {
+        "NodeId": "win-1",
+        "GpuUuids": [ "GPU-0a4f2d61-8b3c-4e7a-b1d9-2c5e8f0a3b17", "GPU-7c1e9a52-3f60-4d2b-9a8e-5b0f2c6d1e44" ],
+        "GpuIndices": [ 0, 1 ]
+      },
+      "Runtime": "llamacpp",
+      "LlamaCpp": {
+        "ModelFile": "Coder-14B-GGUF/coder-14b-Q5_K_M-00001-of-00002.gguf",
+        "ProjectorFile": null,
+        "ContextSize": 32768,
+        "Parallel": 2,
+        "GpuLayers": 999,
+        "FlashAttention": true,
+        "CacheTypeK": "q8_0",
+        "CacheTypeV": "q8_0",
+        "BatchSize": 2048,
+        "MicroBatchSize": 512,
+        "Delivery": "process",
+        "Image": null,
+        "ExtraArgs": [ "--temp", "0.2" ],
+        "ChatTemplate": "builtin:chatml",
+        "Reasoning": false,
+        "Threads": 8,
+        "GpuBudgetsGiB": [ 7.5, 10.5 ],
+        "SplitMode": "layer",
+        "ExecutableVersion": "b11476"
+      }
+    },
+    {
+      "Id": "ov-intent-analysis-win",
+      "ServedName": "ov-planner-win",
+      "ModelPath": "ov-intent-analysis-v7-q8",
+      "Quantization": null,
+      "KvCacheDtype": "fp8",
+      "MaxModelLen": 262144,
+      "MaxNumSeqs": 16,
+      "MaxNumBatchedTokens": null,
+      "MemoryBudgetGiB": 1.8,
+      "ToolCallParser": null,
+      "ReasoningParser": null,
+      "EnablePrefixCaching": true,
+      "Speculative": null,
+      "CudaGraphMode": null,
+      "CompilationConfig": null,
+      "AsyncScheduling": null,
+      "MambaCacheMode": null,
+      "Image": null,
+      "ExtraArgs": [],
+      "AutoStart": false,
+      "Tags": [ "chat" ],
+      "Sources": [
+        {
+          "RepoId": "guoxuter/ov_intent_analysis_sft:v7_q8",
+          "Folder": "ov-intent-analysis-v7-q8",
+          "Revision": null,
+          "AllowPatterns": null,
+          "Kind": "ollama",
+          "Ollama": {
+            "Registry": "registry.ollama.ai",
+            "Name": "guoxuter/ov_intent_analysis_sft",
+            "Tag": "v7_q8",
+            "ModelDigest": "sha256:aa98adccdec6a3be82d462563586abe1db520f93281ecc3f9bc3ff978b12d795"
+          }
+        }
+      ],
+      "Runtime": "llamacpp",
+      "LlamaCpp": {
+        "ModelFile": "ov-intent-analysis-v7-q8/model.gguf",
+        "ProjectorFile": null,
+        "ContextSize": 4096,
+        "Parallel": 4,
+        "GpuLayers": 999,
+        "FlashAttention": null,
+        "CacheTypeK": null,
+        "CacheTypeV": null,
+        "BatchSize": null,
+        "MicroBatchSize": null,
+        "Delivery": "process",
+        "Image": null,
+        "ExtraArgs": [],
+        "ChatTemplate": "builtin:chatml",
+        "Reasoning": false
+      }
+    }
+  ]
+}

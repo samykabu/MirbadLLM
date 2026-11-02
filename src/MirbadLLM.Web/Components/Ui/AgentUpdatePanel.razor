@@ -1,0 +1,291 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using MirbadLLM.Web.Api
+@using MirbadLLM.Web.Components.Pages
+@using MirbadLLM.Agent.Contracts
+@using MirbadLLM.Orchestration.Agents
+@inject IServiceProvider Services
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@* A node whose agent is from another build than MirbadLLM (docs/multinode/agent-updates.md §3): what updating it brings,
+   from the merged PRs between the two builds, and how to update it by hand on its OS. *@
+
+@if (NeedsUpdate || _latest is not null)
+{
+    string? agentRev = ProductVersion.RevisionOf(Row.AgentVersion);
+    string? controllerRev = ProductVersion.RevisionOf(ProductVersion.Controller);
+    var range = Notes.Between(agentRev, controllerRev);
+    var plan = Plan();
+    var running = Row.OpenOperations.FirstOrDefault(o => o.Kind == OperationKinds.AgentUpdate);
+    bool confirmed = ProductVersion.SameBuild(Row.AgentVersion) == true;
+    bool updating = !confirmed && (running is not null || _latest?.Status == AgentOperationReferenceStatus.Open ||
+        (_latest?.Outcome == AgentOperationOutcome.Succeeded && ProductVersion.SameBuild("+" + _latest.Target) == true));
+    bool ended = !confirmed && _latest is { Status: AgentOperationReferenceStatus.Closed, Outcome: not AgentOperationOutcome.Succeeded };
+    int stage = confirmed ? 4 : !Row.IsServing || _latest?.Outcome == AgentOperationOutcome.Succeeded ? 3
+        : running?.Stage == OperationStages.Dispatched ? 2 : 1;
+    string? blocker = Admin?.AgentUpdateBlocker(Live());
+    <section class="section agent-update-section" aria-labelledby="agent-update-title" data-testid="agent-update">
+        <div class="section-head">
+            <h2 id="agent-update-title">Agent update</h2>
+            <span class="section-note num" data-testid="agent-update-versions">@ProductVersion.Display(Row.AgentVersion) → @ProductVersion.Display(ProductVersion.Controller)</span>
+        </div>
+        <div class="panel panel-body agent-update">
+            @if (confirmed)
+            {
+                <div class="callout callout--ready" role="status" data-testid="agent-update-complete">
+                    <Icon Name="state-ready" /><div class="callout-body"><strong>Agent build verified.</strong> The agent reports this MirbadLLM build.</div>
+                </div>
+                @if (Row.State == NodeState.Degraded)
+                {
+                    <p data-testid="agent-update-health-remaining">Node health is still Degraded.
+                        <a href="@($"nodes/{Uri.EscapeDataString(Row.Id)}#node-attention-title")" @onclick="ShowHealthAsync" @onclick:preventDefault>View health warnings and recovery steps</a> to resolve the remaining issues.</p>
+                }
+            }
+            else if (updating)
+            {
+                <div class="callout callout--busy" role="status" data-testid="agent-update-running">
+                    <Icon Name="refresh" Class="icon--spin" />
+                    <div class="callout-body">
+                        <strong>@(stage == 3 ? "Waiting for the agent to reconnect" : StageText(running?.Stage))</strong>
+                        <p>The node briefly disconnects while its agent restarts. Progress resumes here after reconnecting.</p>
+                    </div>
+                </div>
+            }
+            else if (ended)
+            {
+                <div class="callout callout--failed" role="alert" data-testid="agent-update-result">
+                    <Icon Name="state-failed" />
+                    <div class="callout-body">
+                        <strong>Update ended: @(_latest!.Outcome)</strong>
+                        <p>@(_latest.Error ?? "The agent has not reported the target build. Check the node's operations before retrying.")</p>
+                    </div>
+                </div>
+            }
+            @if (updating || confirmed)
+            {
+                <ol class="agent-update-stages" aria-label="Agent update progress" data-testid="agent-update-progress">
+                    @for (int i = 0; i < Stages.Length; i++)
+                    {
+                        <li class="@(i + 1 < stage || confirmed ? "is-done" : "")" aria-current="@(i + 1 == stage ? "step" : null)">
+                            <span class="agent-update-step" aria-hidden="true">@if (i + 1 < stage || confirmed) { <Icon Name="check" /> } else { <span class="num">@(i + 1)</span> }</span>
+                            @Stages[i]
+                        </li>
+                    }
+                </ol>
+            }
+            @if (_latest is not null || running is not null)
+            {
+                <div class="agent-update-operation">
+                    <span class="muted">Operation <span class="num">@(running?.OperationId ?? _latest!.OperationId)</span></span>
+                    <a href="@($"nodes/{Uri.EscapeDataString(Row.Id)}?tab=operations")" data-testid="agent-update-operations"
+                       @onclick="OnViewOperations" @onclick:preventDefault="OnViewOperations.HasDelegate">View operations</a>
+                </div>
+            }
+            @if (NeedsUpdate && !updating && Admin is not null && Caller is not null && blocker is null)
+            {
+                <div class="agent-update-push" data-testid="agent-update-push">
+                    <h3 class="release-group-title">Update from MirbadLLM</h3>
+                    <p class="muted">Install this MirbadLLM build on the node. Your signed-in session authorizes the update; the agent briefly disconnects while it restarts.</p>
+                    @if (Row.State == NodeState.Degraded)
+                    {
+                        <p class="muted" data-testid="agent-update-health-note">This node is reachable and can be updated. Updating the agent does not clear unrelated health warnings, such as low disk space.</p>
+                    }
+                    <div class="agent-update-controls">
+                    <button type="button" class="btn btn-primary btn-sm" data-testid="agent-update-start" disabled="@(_busy)" @onclick="StartAsync">
+                        <Icon Name="download" /> @(_busy ? "Sending update…" : ended ? "Retry update" : "Update now")
+                    </button>
+                    </div>
+                </div>
+            }
+            else if (NeedsUpdate && !updating && blocker is not null)
+            {
+                <p class="muted" data-testid="agent-update-blocker">@blocker</p>
+            }
+            @if (_message is not null)
+            {
+                <p class="@(_failed ? "svc-error" : "muted")" role="status" data-testid="agent-update-message">@_message</p>
+            }
+            @if (_progressError is not null)
+            {
+                <p class="svc-error" role="alert" data-testid="agent-update-progress-error">@_progressError</p>
+            }
+
+            @if (NeedsUpdate)
+            {
+                <details class="agent-update-details" data-testid="agent-update-changes">
+                    <summary>What changes in this update</summary>
+                    @if (!range.Available)
+                    {
+                        <p class="muted" data-testid="agent-update-notes-unavailable">This build carries no release notes, so what the update brings can't be listed.</p>
+                    }
+                    else
+                    {
+                        <p class="muted">@(range.Truncated ? "Latest recorded changes; the agent's build predates these notes." : $"{range.Entries.Count} merged {(range.Entries.Count == 1 ? "change" : "changes")}.")</p>
+                        <ReleaseSummary Entries="range.Entries" Limit="8" EmptyText="No recorded change between the two builds." TestId="agent-update-notes" />
+                    }
+                </details>
+                @if (plan is null)
+                {
+                    <p class="muted" data-testid="agent-update-no-bundle">This master has no agent bundle for this node's OS, so there are no update steps to show.</p>
+                }
+                else
+                {
+                <details class="agent-update-details" data-testid="agent-update-manual">
+                    <summary>Update by hand</summary>
+                    <p class="muted">
+                        In @plan.Shell, from any folder. The bundle's own installer upgrades the agent, keeps its identity and settings,
+                        and rolls back if the new agent does not come up. SHA-256 <span class="num node-break">@plan.Sha256</span>.
+                    </p>
+                    <pre class="code-block agent-update-commands" data-testid="agent-update-commands"><code>@plan.Commands</code></pre>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="agent-update-copy" @onclick="() => CopyAsync(plan.Commands)">
+                        <Icon Name="@(_copied ? "check" : "copy")" /> @(_copied ? "Copied" : "Copy")
+                    </button>
+                    @if (_copyFailed)
+                    {
+                        <p class="muted" role="status">The browser did not allow copying; select the text and copy it by hand.</p>
+                    }
+                </details>
+                }
+            }
+        </div>
+    </section>
+}
+
+@code {
+    // Optional, so a host (or a test) without it renders nothing instead of failing.
+    private ReleaseNotes Notes => Services.GetService<ReleaseNotes>() ?? Empty;
+
+    private static readonly ReleaseNotes Empty = new([], available: false);
+
+    [Parameter, EditorRequired]
+    public Nodes.NodeRow Row { get; set; } = default!;
+
+    /// <summary>The node actions service and the signed-in caller (the page's): without them only the manual steps show.</summary>
+    [Parameter]
+    public NodeAdminService? Admin { get; set; }
+
+    [Parameter]
+    public NodeApiCaller? Caller { get; set; }
+
+    [Parameter]
+    public EventCallback OnViewOperations { get; set; }
+
+    private bool _busy;
+    private string? _message;
+    private bool _failed;
+    private AgentOperationReference? _latest;
+    private string? _progressError;
+    private string? _nodeId;
+    private static readonly string[] Stages = ["Download", "Install", "Reconnect", "Build verified"];
+    private bool NeedsUpdate => Nodes.AgentBuildDiffers(Row);
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_nodeId != Row.Id)
+        {
+            _nodeId = Row.Id;
+            _latest = null;
+            _message = null;
+
+        }
+
+        await ReadProgressAsync();
+    }
+
+    private async Task ReadProgressAsync()
+    {
+        if (Services.GetService<IAgentOperationReferenceStore>() is not { } store) return;
+        string nodeId = Row.Id;
+        string? uid = Row.Record?.Uid ?? Live()?.NodeUid;
+        try
+        {
+            var references = await store.ListAsync();
+            if (nodeId != Row.Id) return;
+            _latest = references.Where(r => r.NodeId == nodeId && r.Action == OperationKinds.AgentUpdate && (uid is null || r.NodeUid == uid))
+                .OrderByDescending(r => r.IssuedAt).FirstOrDefault();
+            _progressError = null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException or InvalidDataException)
+        {
+            _progressError = "Could not read the saved update progress. Check the node's operations before sending another update.";
+        }
+    }
+
+    private NodeLiveStatus? Live() => Services.GetService<INodeStatusCache>()?.GetNode(Row.Id);
+
+    private static string StageText(string? stage) => stage switch
+    {
+        OperationStages.Downloading => "Downloading the bundle",
+        OperationStages.Dispatched => "Installing the update",
+        _ => "Waiting for agent progress",
+    };
+
+    private async Task StartAsync()
+    {
+        if (Admin is null || Caller is null || Services.GetService<MirbadLLM.Orchestration.Agents.AgentOperationRunner>() is not { } runner)
+        {
+            return;
+        }
+
+        _busy = true;
+        _message = null;
+        try
+        {
+            var started = await Admin.StartAgentUpdateAsync(Row.Id, new AgentUpdateStartRequest(), Caller, runner);
+            _failed = false;
+            _message = $"Update to {ProductVersion.Display("+" + started.ToVersion)} sent. Progress shows here; the build warning clears when the agent reports the target build. Other health warnings remain.";
+        }
+        catch (NodeApiException ex)
+        {
+            _failed = true;
+            _message = ex.Message;
+        }
+        catch (Exception ex) when (ex is AgentUnreachableException or IOException or InvalidOperationException or TimeoutException or OperationCanceledException)
+        {
+            _failed = true;
+            _message = "Could not confirm the update request. Check progress and the node's operations before retrying.";
+        }
+        finally
+        {
+
+            _busy = false;
+            await ReadProgressAsync();
+        }
+    }
+
+    private bool _copied;
+    private bool _copyFailed;
+    private IJSObjectReference? _module;
+
+    private AgentUpdatePlan? Plan() =>
+        Services.GetService<AgentBundleCatalog>() is { } catalog ? AgentUpdatePlan.For(Row.Capabilities, catalog, new Uri(Nav.BaseUri)) : null;
+
+    private async Task ShowHealthAsync()
+    {
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./interop.js");
+            await _module.InvokeVoidAsync("showNodeHealth");
+        }
+        catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException)
+        {
+            Nav.NavigateTo($"nodes/{Uri.EscapeDataString(Row.Id)}#node-attention-title", forceLoad: true);
+        }
+    }
+
+    private async Task CopyAsync(string text)
+    {
+        bool ok;
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./interop.js");
+            ok = await _module.InvokeAsync<bool>("copyText", text);
+        }
+        catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException)
+        {
+            ok = false;
+        }
+
+        _copied = ok;
+        _copyFailed = !ok;
+    }
+}

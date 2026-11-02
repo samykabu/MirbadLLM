@@ -1,0 +1,32 @@
+{
+  "//": "mirbadllm-agent on a Linux PC with NVIDIA GPUs (P2, systemd; deploy/agent/linux, README.md there). install-agent.sh installs it as /etc/mirbadllm-agent/agent.json with NodeId and the two roots filled in (--node-id, --models-root, --cache-root), only when the file does not exist yet, and writes the unit drop-in that lets the agent write those roots (rerun 'install-agent.sh upgrade' after moving them here). The agent runs on the host, so *Root and *HostPath are the same directories and models are reached on their loopback ports (UseContainerNetwork false). Enroll once with 'mirbadllm-agent join ...' (install-agent.sh does it with the parameters \"Add node\" shows); no BootstrapDirectory here. NodeId must match the join command. The master dials Port (9443) on this host: allow it in the firewall from the master only. Images (design §10.3, MN-107): AllowTagPulls stays false on a PC, so this node refuses tag-only launches and pulls and reports images.digest-pinned; only the DGX keeps true, because its locally built images have no repository digest. Before the first launch: (1) list the image in ApprovedImages as repository@sha256:<64 hex>; (2) on the master set this node's default vLLM image and its digest (Nodes page, or PATCH /api/nodes/{id} with defaultVllmImage and defaultVllmImageDigest), which the master sends as spec.imageDigest for models without an image of its own (a model with its own image field needs its imageDigest set too); (3) set DownloadHelperImage to the same repository@sha256:<64 hex>: the default helper image is the DGX's local tag, and the helper is created without a pull, so the image must already be on this host (a launch pulls it by digest, or pull it from the master with the digest first). AllowTagPulls true would instead accept tag-only launches and pulls here (a digest is then checked only when a spec or pull names one).",
+  "Agent": {
+    "NodeId": "pc-1",
+    "StateDirectory": "/var/lib/mirbadllm-agent",
+    "Port": 9443,
+    "ModelsRoot": "/srv/mirbadllm/models",
+    "ModelsHostPath": "/srv/mirbadllm/models",
+    "CacheRoot": "/srv/mirbadllm/cache",
+    "CacheHostPath": "/srv/mirbadllm/cache",
+    "DockerEndpoint": "unix:///var/run/docker.sock",
+    "DockerNetwork": "mirbadllm",
+    "UseContainerNetwork": false,
+    "UpstreamHost": "127.0.0.1",
+    "PortRangeStart": 8101,
+    "MemoryReserveGiB": 4,
+    "AllowTagPulls": false,
+    "ApprovedImages": [],
+    "HostdExpected": false,
+    "ManageSystemdUnits": false,
+    "ManageContainers": true,
+    "ManageBackupMount": false,
+    "ShutdownTimeout": "00:00:30"
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "System.Net.Http.HttpClient": "Warning"
+    }
+  }
+}

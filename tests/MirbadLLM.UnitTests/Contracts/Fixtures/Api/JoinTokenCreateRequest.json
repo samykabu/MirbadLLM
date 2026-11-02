@@ -1,0 +1,7 @@
+{
+  "nodeId": "pc-office",
+  "displayName": "Office PC",
+  "ttlMinutes": 60,
+  "password": "fixture-password",
+  "rekey": false
+}

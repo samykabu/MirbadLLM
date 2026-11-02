@@ -1,0 +1,79 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* What a range of builds brings, grouped: Added, Fixed, Changed, each line with the PR it came from. *@
+
+@{
+    var groups = Groups();
+}
+@if (groups.Count == 0)
+{
+    <p class="muted" data-testid="@($"{TestId}-empty")">@EmptyText</p>
+}
+else
+{
+    <div class="release-summary" data-testid="@TestId">
+        @foreach (var (key, title, lines) in groups)
+        {
+            <section class="release-group release-group--@key" aria-label="@title" data-testid="@($"{TestId}-{key}")">
+                <h3 class="release-group-title"><span class="release-dot" aria-hidden="true"></span>@title <span class="num muted">@lines.Count</span></h3>
+                <ul class="release-lines">
+                    @foreach (var (text, entry) in lines.Take(Limit ?? int.MaxValue))
+                    {
+                        <li>
+                            <span>@text</span>
+                            @if (entry.Url is { } url)
+                            {
+                                <a class="release-pr num" href="@url" target="_blank" rel="noopener">#@entry.Number</a>
+                            }
+                            else
+                            {
+                                <span class="release-pr num">#@entry.Number</span>
+                            }
+                        </li>
+                    }
+                    @if (Limit is { } limit && lines.Count > limit)
+                    {
+                        <li class="muted">and <span class="num">@(lines.Count - limit)</span> more</li>
+                    }
+                </ul>
+            </section>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>Newest first.</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<ReleaseEntry> Entries { get; set; } = [];
+
+    /// <summary>At most this many lines per group (the rest are counted); null shows all.</summary>
+    [Parameter]
+    public int? Limit { get; set; }
+
+    [Parameter]
+    public string EmptyText { get; set; } = "No changes recorded.";
+
+    [Parameter]
+    public string TestId { get; set; } = "release-summary";
+
+    [Parameter]
+    public string? Kind { get; set; }
+
+    private List<(string Key, string Title, List<(string Text, ReleaseEntry Entry)> Lines)> Groups()
+    {
+        var result = new List<(string, string, List<(string, ReleaseEntry)>)>();
+        void Add(string key, string title, Func<ReleaseEntry, IReadOnlyList<string>> pick)
+        {
+            if (Kind is not null && Kind != "all" && !string.Equals(Kind, key, StringComparison.OrdinalIgnoreCase)) return;
+            var lines = Entries.SelectMany(e => pick(e).Select(text => (text, e))).ToList();
+            if (lines.Count > 0)
+            {
+                result.Add((key, title, lines));
+            }
+        }
+
+        Add("added", "Added", e => e.Added);
+        Add("fixed", "Fixed", e => e.Fixed);
+        Add("changed", "Changed", e => e.Changed);
+        return result;
+    }
+}

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- mirbadllm-hostd: the root host agent that starts/stops an allowlist of systemd units for the
+       controller. Framework-dependent here (so the test project can reference it); install-hostd.sh
+       publishes it self-contained, single-file, linux-arm64. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>mirbadllm-hostd</AssemblyName>
+    <RootNamespace>MirbadLLM.HostAgent</RootNamespace>
+    <!-- LibraryImport (setfsuid/setfsgid for the backup-share write test) generates unsafe marshalling stubs. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MirbadLLM.UnitTests" />
+  </ItemGroup>
+</Project>

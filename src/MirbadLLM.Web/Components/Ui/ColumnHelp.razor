@@ -1,0 +1,40 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* A table column header with the same info button and floating help as a form field's FieldHelp: a native
+   popover (top layer, Esc and outside click close it), anchored under the button where the browser supports
+   anchor positioning. Use inside a <th>. *@
+<span class="th-help">
+    <span>@Label</span>
+    <button type="button" class="info-btn info-btn--th" aria-label="@($"About: {Label}")" popovertarget="@PanelId"
+            style="@($"anchor-name: --{PanelId}")" data-testid="@($"colhelp-{Safe(Scope)}-{Safe(Key)}")">
+        <Icon Name="info" />
+    </button>
+</span>
+<div class="help-popover" id="@PanelId" popover role="note" aria-label="@($"About {Label}")"
+     style="@($"position-anchor: --{PanelId}")" data-testid="@($"colhelp-panel-{Safe(Scope)}-{Safe(Key)}")">
+    <p class="help-popover-title">@Label</p>
+    <p class="help-popover-text">@Text</p>
+</div>
+
+@code {
+    /// <summary>The visible header text.</summary>
+    [Parameter, EditorRequired]
+    public string Label { get; set; } = "";
+
+    /// <summary>The explanation (see <see cref="BenchGlossary"/>).</summary>
+    [Parameter, EditorRequired]
+    public string Text { get; set; } = "";
+
+    /// <summary>Stable short key for the column, e.g. "n1".</summary>
+    [Parameter, EditorRequired]
+    public string Key { get; set; } = "";
+
+    /// <summary>Unique per table on the page, so two tables' popovers never share an id.</summary>
+    [Parameter, EditorRequired]
+    public string Scope { get; set; } = "";
+
+    private string PanelId => $"colhelp-{Safe(Scope)}-{Safe(Key)}";
+
+    // Also used as a CSS anchor name, so only letters, digits and hyphens.
+    private static string Safe(string value) =>
+        string.Concat(value.Select(c => char.IsAsciiLetterOrDigit(c) ? char.ToLowerInvariant(c) : '-'));
+}

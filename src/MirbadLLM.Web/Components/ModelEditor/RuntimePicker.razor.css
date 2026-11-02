@@ -1,0 +1,5 @@
+/* A runtime that can't be picked here (an existing model keeps its runtime; Add model before a node is chosen). */
+.segmented-option--disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}

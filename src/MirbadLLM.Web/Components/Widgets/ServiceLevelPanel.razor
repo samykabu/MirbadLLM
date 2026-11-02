@@ -1,0 +1,57 @@
+@namespace MirbadLLM.Web.Components.Widgets
+@* The Overview's service levels: availability (Ready of the models that should run), the error budget and the latency
+   budget, each as ten segments with its value and a word for where it stands (never colour alone), then the streaks. *@
+<section class="panel slo" aria-labelledby="slo-title" data-testid="service-level" data-tour="overview-service-level">
+    <h2 class="slo-title" id="slo-title">Service level</h2>
+    @foreach (var bar in Bars)
+    {
+        <div class="slo-line" data-testid="@($"slo-{bar.Key}")">
+            <div class="slo-head">
+                <span>@bar.Label <span class="muted">· @bar.Note</span></span>
+                <span class="slo-value"><span class="num" data-testid="@($"slo-{bar.Key}-value")">@bar.Value</span> <span class="slo-word slo-word--@Tone(bar.Score)">@Word(bar.Score)</span></span>
+            </div>
+            <div class="slo-segs" role="img" aria-label="@($"{bar.Label}: {bar.Value}, {Word(bar.Score)}")">
+                @for (int i = 0; i < Segments; i++)
+                {
+                    <span class="@(bar.Score is double s && i < Math.Round(s * Segments) ? $"on on--{Tone(bar.Score)}" : null)"></span>
+                }
+            </div>
+        </div>
+    }
+    <div class="slo-chips">
+        @foreach (var chip in Chips)
+        {
+            <span class="chip chip--inline">@chip</span>
+        }
+    </div>
+</section>
+
+@code {
+    private const int Segments = 10;
+
+    /// <summary>One service level: its 0–1 score (null when not measured) and how it reads.</summary>
+    public sealed record Bar(string Key, string Label, string Note, string Value, double? Score);
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<Bar> Bars { get; set; } = [];
+
+    /// <summary>"Zero-error streak · 47 min", "Crash-free · 11 days".</summary>
+    [Parameter]
+    public IReadOnlyList<string> Chips { get; set; } = [];
+
+    private static string Tone(double? score) => score switch
+    {
+        null => "none",
+        >= 0.8 => "ok",
+        >= 0.5 => "watch",
+        _ => "low",
+    };
+
+    private static string Word(double? score) => score switch
+    {
+        null => "not measured",
+        >= 0.8 => "on target",
+        >= 0.5 => "watch",
+        _ => "below target",
+    };
+}

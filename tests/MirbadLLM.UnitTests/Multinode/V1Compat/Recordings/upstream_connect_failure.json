@@ -1,0 +1,9 @@
+{
+  "scenario": "upstream_connect_failure",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "status": 502,
+  "contentType": "application/json; charset=utf-8",
+  "retryAfter": null,
+  "body": "{\u0022error\u0022:{\u0022message\u0022:\u0022Upstream request failed: Connection refused\u0022,\u0022type\u0022:\u0022api_error\u0022,\u0022code\u0022:\u0022upstream_unavailable\u0022}}"
+}

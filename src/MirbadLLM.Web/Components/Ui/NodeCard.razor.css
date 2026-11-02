@@ -1,0 +1,90 @@
+.nd {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 4px 12px;
+    align-items: center;
+    width: 100%;
+    padding: 10px 12px;
+    text-align: left;
+    color: var(--ss-text);
+    background: var(--ss-panel);
+    border: 1px solid var(--ss-panel-edge);
+    border-radius: var(--ss-radius-lg);
+    box-shadow: var(--ss-panel-shadow);
+    cursor: pointer;
+}
+
+.nd:hover { box-shadow: var(--ss-shadow-2); }
+.nd:focus-visible { outline: 2px solid var(--ss-focus); outline-offset: 2px; }
+
+.nd[aria-pressed=true] {
+    border-color: var(--ss-accent-text);
+    box-shadow: 0 0 0 1px var(--ss-accent-text), var(--ss-shadow-2);
+}
+
+.nd ::deep .ring { grid-row: span 3; }
+
+.nd-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.nd-name {
+    overflow: hidden;
+    font-family: var(--ss-font-mono);
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.nd-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.nd-state ::deep .icon { width: 13px; height: 13px; }
+.nd-state--ready { color: var(--ss-ready); }
+.nd-state--starting { color: var(--ss-busy); }
+.nd-state--failed { color: var(--ss-failed); }
+.nd-state--stopped { color: var(--ss-text-muted); }
+
+.nd-meta {
+    overflow: hidden;
+    color: var(--ss-text-muted);
+    font-size: 11px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.beads {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
+}
+
+.bead {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+}
+
+.bead--off { box-shadow: inset 0 0 0 1.5px var(--ss-border-control); }
+
+.nd-count {
+    margin-left: 2px;
+    color: var(--ss-text-muted);
+    font-size: 11px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .nd { transition: transform var(--ss-dur) var(--ss-ease), box-shadow var(--ss-dur) var(--ss-ease), border-color var(--ss-dur) var(--ss-ease); }
+    .nd:hover { transform: translateY(-2px); }
+}

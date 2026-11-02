@@ -1,0 +1,17 @@
+{
+  "nodeId": "dgx",
+  "nodeUid": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "agentVersion": "1.0.0",
+  "protocol": {
+    "min": 1,
+    "current": 1
+  },
+  "bootId": "b11ac10b-58cc-4372-a567-0e02b2c3d479",
+  "startedAt": "2026-10-03T10:00:00+00:00",
+  "time": "2026-10-03T10:05:00+00:00",
+  "acceptedMaster": {
+    "instanceId": "master-a1b2c3d4",
+    "epoch": 1,
+    "bootId": "boot-x1y2z3w4"
+  }
+}

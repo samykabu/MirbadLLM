@@ -1,0 +1,47 @@
+{
+  "//": "mirbadllm-agent on an Apple Silicon Mac (Phase 1; deploy/agent/macos, README.md there; plan docs/macos/implementation-plan.md). install-agent.sh installs it as /Library/Application Support/mirbadllm-agent/agent.json (root:_mirbadllm 0640) with NodeId and the two roots filled in (--node-id, --models-root, --cache-root), only when the file does not exist yet; the LaunchDaemon com.mirbadllm.agent runs the agent as the hidden user _mirbadllm, which owns the state directory and both roots. No Docker on a Mac (Docker:Enabled false, ManageContainers false): models run as native processes from the Executables catalogue on loopback ports (Executables stays [] here: install-agent.sh fills it when it installs the llama.cpp release pinned in llama-cpp.lock.json into /usr/local/lib/mirbadllm-agent/runtimes/llama.cpp/<tag>/ with Metal, unless --no-llama; update-llama re-provisions it; MLX later), so *Root and *HostPath are the same directories and UseContainerNetwork is false. MemoryModel Unified: CPU and GPU share one pool; Metal lets the GPU keep about two thirds of RAM resident (5.3 GiB on an 8 GiB Mac), hence the small MemoryReserveGiB. No systemd units and no backup mount; launchd jobs (Ollama, LM Studio, ComfyUI) go through the macOS hostd (Phase 4, M10): 'install-agent.sh install-hostd' installs the root LaunchDaemon com.mirbadllm.hostd and sets ManageLaunchdJobs and HostdExpected to true (HostdSocket is its socket). Enroll once with 'install-agent.sh install --node-id ... --enroll-url ... --ca-hash ...' and MIRBADLLM_JOIN_TOKEN or the prompt (the macOS command \"Add node\" shows); no BootstrapDirectory here. NodeId must match the join command: lower-case letters, digits and '-', at most 40. The master dials Port (9443) on this Mac: if the macOS application firewall is on, allow the agent binary (install-agent.sh --allow-firewall). DockerEndpoint and the image settings are unused while Docker is off.",
+  "Agent": {
+    "NodeId": "mac-1",
+    "StateDirectory": "/Library/Application Support/mirbadllm-agent/state",
+    "Port": 9443,
+    "ModelsRoot": "/Users/Shared/mirbadllm/models",
+    "ModelsHostPath": "/Users/Shared/mirbadllm/models",
+    "CacheRoot": "/Users/Shared/mirbadllm/cache",
+    "CacheHostPath": "/Users/Shared/mirbadllm/cache",
+    "DockerEndpoint": "unix:///var/run/docker.sock",
+    "DockerNetwork": "mirbadllm",
+    "UseContainerNetwork": false,
+    "UpstreamHost": "127.0.0.1",
+    "PortRangeStart": 8101,
+    "MemoryReserveGiB": 1,
+    "MemoryModel": "Unified",
+    "AllowTagPulls": false,
+    "ApprovedImages": [],
+    "HostdSocket": "/var/run/mirbadllm-hostd/hostd.sock",
+    "HostdExpected": false,
+    "ManageSystemdUnits": false,
+    "ManageLaunchdJobs": false,
+    "ManageContainers": false,
+    "ManageBackupMount": false,
+    "ShutdownTimeout": "00:00:30",
+    "Docker": {
+      "Enabled": false
+    },
+    "Executables": [],
+    "Process": {
+      "StartTimeout": "00:10:00",
+      "RestartBudget": 2,
+      "RestartWindow": "00:10:00",
+      "LogMaxBytes": 52428800,
+      "LogFilesKept": 2,
+      "HealthPollInterval": "00:00:02"
+    }
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "System.Net.Http.HttpClient": "Warning"
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "type": "runtime",
+  "modelId": "qwen36-35b",
+  "runtime": {
+    "modelId": "qwen36-35b",
+    "state": "ready",
+    "instanceId": "abc123def456",
+    "hostPort": 8101,
+    "since": "2026-10-03T10:00:00+00:00",
+    "error": null,
+    "restartCount": 0,
+    "labels": {
+      "mirbadllm.model": "qwen36-35b",
+      "mirbadllm.served-name": "qwen36-35b",
+      "mirbadllm.config-hash": "9f2c1a3b",
+      "mirbadllm.exec-fingerprint": "41ab5c8d",
+      "mirbadllm.budget-gib": "36"
+    },
+    "servedName": "qwen36-35b",
+    "configHash": "9f2c1a3b",
+    "executionFingerprint": "41ab5c8d",
+    "tuning": false,
+    "gpus": [],
+    "operationId": "op-001",
+    "measuredGpuGiB": 24.5,
+    "runtime": "vllm",
+    "delivery": "container"
+  },
+  "bootId": "b11ac10b-58cc-4372-a567-0e02b2c3d479",
+  "seq": 2,
+  "at": "2026-10-03T10:00:05+00:00"
+}

@@ -1,0 +1,16 @@
+{
+  "id": "4f1d2c3b5a69",
+  "name": "openviking",
+  "state": "running",
+  "status": "Up 3 days",
+  "image": "ghcr.io/volcengine/openviking:0.4.2",
+  "labels": {
+    "com.docker.compose.project": "openviking"
+  },
+  "restartPolicy": "unless-stopped",
+  "health": "healthy",
+  "exitCode": null,
+  "oomKilled": false,
+  "startedAt": "2026-09-30T07:12:00+00:00",
+  "memoryBytes": 734003200
+}

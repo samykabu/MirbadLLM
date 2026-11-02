@@ -1,0 +1,23 @@
+{
+  "target": "/mnt/mirbadllm-backups",
+  "unit": "mnt-mirbadllm\\x2dbackups.mount",
+  "configured": true,
+  "foreignUnit": false,
+  "type": "smb",
+  "server": "nas.lan",
+  "share": "backups",
+  "subfolder": "mirbadllm",
+  "username": "spark",
+  "domain": "WORKGROUP",
+  "version": "3.1.1",
+  "source": "//nas.lan/backups/mirbadllm",
+  "options": "vers=3.1.1,uid=1654,gid=1654",
+  "mounted": true,
+  "mountedSource": "//nas.lan/backups/mirbadllm",
+  "mountedType": "cifs",
+  "totalBytes": 4000787030016,
+  "freeBytes": 1200000000000,
+  "configuredAt": "2026-09-20T08:00:00+00:00",
+  "lastError": null,
+  "warning": null
+}

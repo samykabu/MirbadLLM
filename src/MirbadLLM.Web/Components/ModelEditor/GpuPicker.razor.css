@@ -1,0 +1,97 @@
+/* GPU checkboxes: one bordered row per GPU (operable edge), the ticked one in the selection colours; phones keep
+   the 16px gutter because the UUID wraps anywhere instead of widening the row. */
+.gpu-picker {
+    display: grid;
+    gap: var(--ss-sp-2);
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+}
+
+.gpu-picker legend {
+    float: none;
+    width: auto;
+    margin: 0 0 2px;
+    padding: 0;
+    font-size: inherit;
+}
+
+.gpu-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+    gap: var(--ss-sp-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.gpu-option {
+    display: flex;
+    gap: var(--ss-sp-3);
+    align-items: flex-start;
+    min-width: 0;
+    padding: var(--ss-sp-3);
+    border: 1px solid var(--ss-border-control);
+    border-radius: var(--ss-radius);
+    background: var(--ss-panel);
+}
+
+.gpu-option--on {
+    border-color: var(--ss-accent);
+    background: var(--ss-accent-subtle);
+}
+
+.gpu-option--missing {
+    border-color: var(--ss-failed);
+    background: var(--ss-failed-subtle);
+}
+
+.gpu-option .form-check-input {
+    flex: 0 0 auto;
+    margin: 2px 0 0;
+}
+
+.gpu-option:has(input:disabled:not(:checked)) { opacity: 0.7; }
+
+.gpu-text {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    cursor: pointer;
+}
+
+.gpu-name { font-weight: 600; }
+
+.gpu-meta,
+.gpu-note {
+    display: grid;
+    gap: 2px;
+    font-size: var(--ss-fs-100);
+    color: var(--ss-text-muted);
+}
+
+.gpu-uuid { overflow-wrap: anywhere; }
+
+@media (pointer: coarse) {
+    .gpu-option { min-height: 44px; }
+}
+
+/* Per-GPU budgets of a llama.cpp model on two or more GPUs (MN-226): one small number field per ticked GPU, in the
+   order the GPUs are placed, wrapping on phones. */
+.gpu-budgets {
+    display: grid;
+    gap: var(--ss-sp-2);
+    min-width: 0;
+}
+
+.gpu-budget-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-3);
+}
+
+.gpu-budget {
+    flex: 0 1 160px;
+    min-width: 0;
+}

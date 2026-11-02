@@ -1,0 +1,43 @@
+<script type="module" src="@Assets["Components/Layout/ReconnectModal.razor.js"]"></script>
+
+@* Losing the live connection, in two steps (ReconnectModal.razor.js):
+   1. A non-blocking banner the moment the browser goes offline or Blazor starts its first reconnect attempt
+      (the client notices a dead circuit within ~4 s, see App.razor): the page stays readable, and the banner
+      says how old the numbers on it are, on the viewer's own clock.
+   2. If that first attempt fails, the blocking dialog with the retry countdown. While disconnected it cannot
+      be dismissed with Esc: a page that looks usable but silently drops every click is worse than a modal. *@
+<div id="connection-banner" class="conn-banner" role="status" aria-live="polite" hidden data-testid="connection-banner">
+    <Icon Name="wifi-off" />
+    <span>
+        <span class="conn-banner-title">Connection lost — reconnecting…</span>
+        <span class="conn-banner-age">(last update <span class="conn-banner-num" data-conn-age>just now</span>)</span>
+    </span>
+</div>
+
+<dialog id="components-reconnect-modal" data-nosnippet aria-labelledby="reconnect-title" data-testid="reconnect-dialog">
+    <div class="components-reconnect-container">
+        <span class="components-rejoining-animation" aria-hidden="true"></span>
+        <h2 id="reconnect-title" class="reconnect-title">Connection to the server lost</h2>
+        <p class="components-reconnect-first-attempt-visible" role="status">
+            Reconnecting…
+        </p>
+        <p class="components-reconnect-repeated-attempt-visible" role="status">
+            Couldn't reconnect. Trying again in <span id="components-seconds-to-next-attempt" class="num"></span> s.
+        </p>
+        <p class="components-reconnect-failed-visible" role="status">
+            Couldn't reconnect. Retry, or reload the page.
+        </p>
+        <button id="components-reconnect-button" class="btn btn-primary components-reconnect-failed-visible">
+            Retry
+        </button>
+        <p class="components-pause-visible" role="status">
+            The server paused this session.
+        </p>
+        <p class="components-resume-failed-visible" role="status">
+            Couldn't resume the session. Retry, or reload the page.
+        </p>
+        <button id="components-resume-button" class="btn btn-primary components-pause-visible components-resume-failed-visible">
+            Resume
+        </button>
+    </div>
+</dialog>

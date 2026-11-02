@@ -1,0 +1,66 @@
+# mirbadllm host agent: lets the mirbadllm controller (a container) discover systemd services and start,
+# stop, restart and enable/disable the whitelisted ones. The whitelist lives in
+# /var/lib/mirbadllm-hostd/whitelist.json (StateDirectory, root 0700/0600), seeded from
+# /etc/mirbadllm/hostd.json; a compiled-in deny list (plus /etc/mirbadllm/hostd-deny.json) can never be
+# whitelisted. Listens only on the Unix socket /run/mirbadllm-hostd/hostd.sock (dir root:docker 0750,
+# socket 0660) — no TCP port. It also mounts the NAS share chosen on the Backup & restore page at the fixed
+# path /srv/mirbadllm/backups (unit srv-mirbadllm-backups.mount, credentials in /etc/mirbadllm-hostd).
+[Unit]
+Description=mirbadllm host agent (whitelisted systemd service control)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/lib/mirbadllm-hostd/mirbadllm-hostd
+# Root is needed to drive systemctl (system units and, via -M user@, user units). The socket and its
+# directory belong to the docker group, the group that already controls the Docker daemon.
+User=root
+Group=docker
+UMask=0117
+RuntimeDirectory=mirbadllm-hostd
+RuntimeDirectoryMode=0750
+# Keep the directory across agent restarts: the controller bind-mounts it, and a re-created directory
+# would be a different inode than the one inside the running container.
+RuntimeDirectoryPreserve=yes
+# The whitelist and the backup-mount state: writable under ProtectSystem=strict. systemd exports it as $STATE_DIRECTORY.
+StateDirectory=mirbadllm-hostd
+StateDirectoryMode=0700
+# Backup destination (Backup & restore page): the agent writes exactly two files outside its state directory —
+# /etc/systemd/system/srv-mirbadllm-backups.mount and /etc/mirbadllm-hostd/backup-share.cred (root 0600).
+# ProtectSystem=strict keeps everything else read-only. The connection test mounts the share inside this
+# service's own namespace, in its private /tmp, so nobody else ever sees the test mount.
+ReadWritePaths=/etc/systemd/system -/etc/mirbadllm-hostd
+Environment=MIRBADLLM_HOSTD_CONFIG=/etc/mirbadllm/hostd.json
+Environment=MIRBADLLM_HOSTD_DENY=/etc/mirbadllm/hostd-deny.json
+Environment=DOTNET_NOLOGO=1
+Environment=DOTNET_gcServer=0
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=mirbadllm-hostd
+
+# Hardening. systemctl talks to PID 1 / the user manager over D-Bus, so the unit-file changes made by
+# enable/disable happen in the managers, not in this sandbox.
+# No NoNewPrivileges: with it, the syscall filters the other protections install make every uid change fail
+# (setfsuid/setresuid return EPERM), which breaks the backup-destination write test that must write as the
+# controller's uid 1654. The agent already runs as root, so the flag guarded little.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# AF_INET/AF_INET6: mount.cifs / mount.nfs resolve the NAS and pick the local address for the connection test.
+# The agent still listens on nothing but its Unix socket.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

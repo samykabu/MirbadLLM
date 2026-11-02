@@ -1,0 +1,345 @@
+@namespace MirbadLLM.Web.Components.Widgets
+@using System.Globalization
+@using MirbadLLM.Web.Components.Ui
+@* Inline-SVG time series. Lines alternate solid and dashed (or carry an explicit style), and a legend with each
+   series' latest value is always visible, so colour is never the only way to tell lines apart. Stacked mode draws
+   part-to-whole areas (first series at the bottom). All series share one time axis; hovering a column shows every
+   series' value at that time (native SVG title), and a visually hidden table gives screen readers the same numbers. *@
+<figure class="chart" data-testid="@TestId">
+    <figcaption class="chart-head">
+        <span class="chart-help">
+            <span class="chart-title">@Title@(string.IsNullOrEmpty(Unit) ? "" : $" ({Unit})")</span>
+            @if (!string.IsNullOrEmpty(Help))
+            {
+                <button type="button" class="info-btn info-btn--th" aria-label="@($"About: {Title}")" popovertarget="@HelpId"
+                        style="@($"anchor-name: --{HelpId}")" data-testid="@($"{TestId}-help")">
+                    <Icon Name="info" />
+                </button>
+                <span class="help-popover" id="@HelpId" popover role="note" aria-label="@($"About {Title}")"
+                      style="@($"position-anchor: --{HelpId}")" data-testid="@($"{TestId}-help-panel")">
+                    <span class="help-popover-title">@Title</span>
+                    <span class="help-popover-text">@Help</span>
+                </span>
+            }
+        </span>
+    </figcaption>
+    <div class="chart-plot">
+        @if (HasAnyPoints)
+        {
+            var domain = TimeDomain();
+            var (min, max) = Bounds();
+            <svg viewBox="0 0 100 40" preserveAspectRatio="none" style="height:@(Height)px" role="img" aria-label="@AriaLabel">
+                @if (Stacked)
+                {
+                    var stack = StackLevels();
+                    for (int i = 0; i < Series.Count; i++)
+                    {
+                        var series = Series[i];
+                        foreach (var (area, edge) in BuildStackedPaths(i, stack, domain, max))
+                        {
+                            <path class="chart-area" d="@area" style="fill:@series.Color" data-testid="@($"{TestId}-area-{Slug(series.Name)}")" />
+                            <path class="chart-area-edge" d="@edge" style="stroke:@series.Color" />
+                        }
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < Series.Count; i++)
+                    {
+                        var series = Series[i];
+                        var path = BuildPath(series, domain, min, max);
+                        if (path is not null)
+                        {
+                            <path class="chart-line @LineClass(series, i)" d="@path" style="stroke:@series.Color"
+                                  data-testid="@($"{TestId}-path-{series.Name}")" />
+                        }
+                    }
+                }
+                @foreach (var column in HoverColumns(domain))
+                {
+                    <rect class="chart-hover" x="@F(column.X)" y="0" width="@F(column.Width)" height="40">
+                        <title>@column.Text</title>
+                    </rect>
+                }
+            </svg>
+        }
+        else
+        {
+            <div class="chart-empty" style="height:@(Height)px" data-testid="@($"{TestId}-empty")">@(EmptyText ?? "No samples in this window")</div>
+        }
+    </div>
+    @if (!string.IsNullOrEmpty(Note))
+    {
+        <p class="chart-note" data-testid="@($"{TestId}-note")">@Note</p>
+    }
+    <div class="chart-bounds num">
+        <span data-testid="@($"{TestId}-min")">@MinLabel()</span>
+        <span data-testid="@($"{TestId}-max")">@MaxLabel()</span>
+    </div>
+    @if (Series.Count > 0)
+    {
+        <Legend Items="LegendItems" AriaLabel="@($"{Title ?? "Chart"} legend")" TestId="@($"{TestId}-legend")" />
+        @* The wrapper is what is visually hidden: a table box ignores width/overflow, so a hidden table itself would
+           still lay out at its full width and push the page sideways on a phone. *@
+        <div class="visually-hidden">
+        <table data-testid="@($"{TestId}-table")">
+            <caption>@Title@(string.IsNullOrEmpty(Unit) ? "" : $" ({Unit})"), @(Stacked ? "stacked, " : "")last value and range in the window</caption>
+            <thead><tr><th scope="col">Series</th><th scope="col">Latest</th><th scope="col">Min</th><th scope="col">Max</th></tr></thead>
+            <tbody>
+                @foreach (var series in Series)
+                {
+                    var values = series.Points.Where(p => p.Value is not null).Select(p => p.Value!.Value).ToList();
+                    <tr>
+                        <th scope="row">@series.Name</th>
+                        <td>@WithUnit(Latest(series))</td>
+                        <td>@WithUnit(values.Count == 0 ? null : values.Min())</td>
+                        <td>@WithUnit(values.Count == 0 ? null : values.Max())</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        </div>
+    }
+</figure>
+
+@code {
+    /// <summary>Most hover columns drawn, however many samples the window holds.</summary>
+    private const int MaxHoverColumns = 120;
+
+    private static int _nextId;
+
+    private readonly int _id = Interlocked.Increment(ref _nextId);
+
+    /// <summary>The lines (or stacked areas) to draw. All series share one time axis.</summary>
+    [Parameter]
+    public IReadOnlyList<LineChartSeries> Series { get; set; } = [];
+
+    [Parameter]
+    public string? Title { get; set; }
+
+    [Parameter]
+    public string Unit { get; set; } = "";
+
+    [Parameter]
+    public int Height { get; set; } = 120;
+
+    /// <summary>Draws the series as stacked areas from a zero baseline (part-to-whole), first series at the bottom.
+    /// A null value is a gap in that series' area and counts as nothing in the stack.</summary>
+    [Parameter]
+    public bool Stacked { get; set; }
+
+    /// <summary>Optional always-visible one-line note under the plot (e.g. where the figures come from).</summary>
+    [Parameter]
+    public string? Note { get; set; }
+
+    /// <summary>What the empty plot says when no series has a value in the window: name what is missing (e.g. "dgx
+    /// reports no GPU utilization"), so an empty chart is never mistaken for a broken one.</summary>
+    [Parameter]
+    public string? EmptyText { get; set; }
+
+    /// <summary>Optional explanation behind an info button in the chart head (what is measured, and its limits).</summary>
+    [Parameter]
+    public string? Help { get; set; }
+
+    private string TestId => $"line-chart-{(Title ?? "chart").Replace(' ', '-').ToLowerInvariant()}";
+
+    private string HelpId => $"chart-help-{_id}";
+
+    private bool HasAnyPoints => Series.Any(s => s.Points.Any(p => p.Value is not null));
+
+    private static string F(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    private static string Slug(string name) => string.Concat(name.Select(c => char.IsAsciiLetterOrDigit(c) ? char.ToLowerInvariant(c) : '-'));
+
+    private string WithUnit(double? value) =>
+        value is double v ? $"{UiFormat.Number(v)}{(string.IsNullOrEmpty(Unit) ? "" : " " + Unit)}" : UiFormat.Missing;
+
+    private static double? Latest(LineChartSeries series) =>
+        series.Points.LastOrDefault(p => p.Value is not null)?.Value;
+
+    private LineStyle EffectiveStyle(LineChartSeries series, int index) =>
+        series.Style != LineStyle.Auto ? series.Style : index % 2 == 0 ? LineStyle.Solid : LineStyle.Dashed;
+
+    private string LineClass(LineChartSeries series, int index) => EffectiveStyle(series, index) switch
+    {
+        LineStyle.Dashed => "chart-line--2",
+        LineStyle.Dotted => "chart-line--dotted",
+        _ => "chart-line--1",
+    };
+
+    private IReadOnlyList<LegendItem> LegendItems => Series
+        .Select((s, i) => new LegendItem(
+            s.Name,
+            s.Color,
+            Stacked ? LegendSwatch.Block : EffectiveStyle(s, i) switch
+            {
+                LineStyle.Dashed => LegendSwatch.Dashed,
+                LineStyle.Dotted => LegendSwatch.Dotted,
+                _ => LegendSwatch.Line,
+            },
+            WithUnit(Latest(s))))
+        .ToList();
+
+    private string AriaLabel
+    {
+        get
+        {
+            var (min, max) = Bounds();
+            string latest = string.Join(", ", Series.Select(s => $"{s.Name} latest {UiFormat.Number(Latest(s))}"));
+            return string.Create(CultureInfo.InvariantCulture,
+                $"{Title ?? "Chart"}{(string.IsNullOrEmpty(Unit) ? "" : $" in {Unit}")}{(Stacked ? ", stacked" : "")}: range {UiFormat.Number(min)} to {UiFormat.Number(max)}; {latest}");
+        }
+    }
+
+    /// <summary>The shared time axis: earliest to latest point of any series.</summary>
+    private (long Min, long Span) TimeDomain()
+    {
+        var times = Series.SelectMany(s => s.Points).Select(p => p.Time.ToUnixTimeMilliseconds()).ToList();
+        if (times.Count == 0)
+        {
+            return (0, 1);
+        }
+
+        long min = times.Min();
+        return (min, Math.Max(1, times.Max() - min));
+    }
+
+    private static double X((long Min, long Span) domain, DateTimeOffset time) =>
+        (time.ToUnixTimeMilliseconds() - domain.Min) / (double)domain.Span * 100;
+
+    /// <summary>Cumulative stack tops per series per time: level[i][t] = sum of series 0..i at t (null counts as 0).</summary>
+    private List<Dictionary<DateTimeOffset, double>> StackLevels()
+    {
+        var levels = new List<Dictionary<DateTimeOffset, double>>(Series.Count);
+        Dictionary<DateTimeOffset, double>? below = null;
+        foreach (var series in Series)
+        {
+            var level = below is null ? new Dictionary<DateTimeOffset, double>() : new Dictionary<DateTimeOffset, double>(below);
+            foreach (var point in series.Points)
+            {
+                level[point.Time] = level.GetValueOrDefault(point.Time) + (point.Value ?? 0);
+            }
+
+            levels.Add(level);
+            below = level;
+        }
+
+        return levels;
+    }
+
+    private (double Min, double Max) Bounds()
+    {
+        List<double> values = Stacked
+            ? StackLevels().LastOrDefault()?.Values.ToList() ?? []
+            : Series.SelectMany(s => s.Points).Where(p => p.Value is not null).Select(p => p.Value!.Value).ToList();
+        if (values.Count == 0)
+        {
+            return (0, 1);
+        }
+
+        double min = Stacked ? 0 : values.Min();
+        double max = values.Max();
+        if (max - min < 1e-9)
+        {
+            max = min + 1;
+        }
+
+        return (min, max);
+    }
+
+    private static double Y(double value, double min, double max) => 39 - ((value - min) / (max - min) * 38);
+
+    private static string? BuildPath(LineChartSeries series, (long Min, long Span) domain, double min, double max)
+    {
+        var segments = new List<string>();
+        var drawing = false;
+        foreach (var point in series.Points)
+        {
+            if (point.Value is null)
+            {
+                drawing = false;
+                continue;
+            }
+
+            segments.Add(FormattableString.Invariant($"{(drawing ? "L" : "M")}{X(domain, point.Time):0.###},{Y(point.Value.Value, min, max):0.###}"));
+            drawing = true;
+        }
+
+        return segments.Count == 0 ? null : string.Join(" ", segments);
+    }
+
+    /// <summary>One closed area (and its top edge) per contiguous run of non-null points of series <paramref name="index"/>.</summary>
+    private IEnumerable<(string Area, string Edge)> BuildStackedPaths(int index, List<Dictionary<DateTimeOffset, double>> levels, (long Min, long Span) domain, double max)
+    {
+        var run = new List<LineChartPoint>();
+        foreach (var point in Series[index].Points.Append(new LineChartPoint(DateTimeOffset.MaxValue, null)))
+        {
+            if (point.Value is not null)
+            {
+                run.Add(point);
+                continue;
+            }
+
+            if (run.Count > 0)
+            {
+                var top = run.Select(p => (X: X(domain, p.Time), Y: Y(levels[index][p.Time], 0, max))).ToList();
+                var bottom = run.Select(p => (X: X(domain, p.Time), Y: Y(index == 0 ? 0 : levels[index - 1].GetValueOrDefault(p.Time), 0, max))).Reverse().ToList();
+                string edge = string.Join(" ", top.Select((p, i) => FormattableString.Invariant($"{(i == 0 ? "M" : "L")}{p.X:0.###},{p.Y:0.###}")));
+                string area = edge + " " + string.Join(" ", bottom.Select(p => FormattableString.Invariant($"L{p.X:0.###},{p.Y:0.###}"))) + " Z";
+                yield return (area, edge);
+                run.Clear();
+            }
+        }
+    }
+
+    private sealed record HoverColumn(double X, double Width, string Text);
+
+    /// <summary>
+    /// Invisible columns across the plot, at most <see cref="MaxHoverColumns"/>, each titled with the time and every
+    /// series' value at the sample nearest its centre, so hovering anywhere reads the numbers without a script.
+    /// </summary>
+    private List<HoverColumn> HoverColumns((long Min, long Span) domain)
+    {
+        var times = Series.SelectMany(s => s.Points).Select(p => p.Time).Distinct().Order().ToList();
+        if (times.Count == 0)
+        {
+            return [];
+        }
+
+        int count = Math.Min(MaxHoverColumns, times.Count);
+        double width = 100.0 / count;
+        var lookups = Series.Select(s => s.Points.GroupBy(p => p.Time).ToDictionary(g => g.Key, g => g.Last().Value)).ToList();
+        var columns = new List<HoverColumn>(count);
+        for (int c = 0; c < count; c++)
+        {
+            double centre = (c + 0.5) * width;
+            var time = times.MinBy(t => Math.Abs(X(domain, t) - centre));
+            var parts = Series.Select((s, i) => $"{s.Name} {WithUnit(lookups[i].GetValueOrDefault(time))}");
+            columns.Add(new HoverColumn(c * width, width, $"{time.UtcDateTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture)} UTC · {string.Join(" · ", parts)}"));
+        }
+
+        return columns;
+    }
+
+    private string MinLabel()
+    {
+        if (!HasAnyPoints)
+        {
+            return UiFormat.Missing;
+        }
+
+        var (min, _) = Bounds();
+        return $"min {UiFormat.Number(min)}";
+    }
+
+    private string MaxLabel()
+    {
+        if (!HasAnyPoints)
+        {
+            return UiFormat.Missing;
+        }
+
+        var (_, max) = Bounds();
+        return $"max {UiFormat.Number(max)}";
+    }
+}

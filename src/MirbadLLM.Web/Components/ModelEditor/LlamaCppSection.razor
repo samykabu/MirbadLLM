@@ -1,0 +1,446 @@
+@namespace MirbadLLM.Web.Components.ModelEditor
+@using System.Globalization
+@using MirbadLLM.Agent.Contracts
+@* The llama.cpp settings of the model editor (design-p3p4 §A.1.6, §A.7; MN-226), shown instead of the vLLM sections when
+   the model's runtime is llama.cpp: context per request, slots, offload, flash attention, KV types, batches, embedding
+   mode and pooling (pre-filled from the GGUF header), the dimensions emulation, chat template, reasoning, threads; the
+   memory budget with the live GGUF estimate (weights / KV / compute, LlamaCppMemoryEstimate, recomputed on every change);
+   the llama-server version (node default or a pinned one, RuntimeCapability.Versions) and the extra args with the flags
+   a save refuses (LlamaCppFlags: owned, path-valued and typed, D126). *@
+
+<section class="panel form-section" aria-labelledby="sec-llamacpp" data-testid="llamacpp-section">
+    <div class="form-section-intro">
+        <h2 id="sec-llamacpp">llama.cpp settings</h2>
+        <p>Each setting is a llama-server argument: a running model picks changes up when it restarts. Fields fill in from the GGUF header.</p>
+    </div>
+    <div class="field-grid">
+        <div class="field">
+            <FieldHelp Label="Context per request" For="field-llama-context" Help="@LlamaCppFieldHelp.ContextSize" />
+            <input type="number" class="form-control num" id="field-llama-context" data-testid="field-llama-context" min="1"
+                   aria-describedby="field-llama-context-hint" value="@Form.ContextSize.ToString(CultureInfo.InvariantCulture)"
+                   @onchange="e => SetIntAsync(e, v => Form.SetContextSize(v))" />
+            <div class="field-hint" id="field-llama-context-hint">
+                Tokens, per slot: <code class="num">-c @((Form.ContextSize * (long)Form.Parallel).ToString(CultureInfo.InvariantCulture))</code>@(Summary?.ContextLength is { } trained ? $"; trained on {trained.ToString("N0", CultureInfo.InvariantCulture)}" : "").
+            </div>
+        </div>
+        <div class="field">
+            <FieldHelp Label="Parallel slots" For="field-llama-parallel" Help="@LlamaCppFieldHelp.Parallel" />
+            <input type="number" class="form-control num" id="field-llama-parallel" data-testid="field-llama-parallel" min="1"
+                   value="@Form.Parallel.ToString(CultureInfo.InvariantCulture)" @onchange="e => SetIntAsync(e, v => Form.Parallel = v)" />
+        </div>
+        <div class="field">
+            <FieldHelp Label="GPU layers" For="field-llama-gpu-layers" Help="@LlamaCppFieldHelp.GpuLayers" />
+            <input type="number" class="form-control num" id="field-llama-gpu-layers" data-testid="field-llama-gpu-layers" min="0"
+                   aria-describedby="field-llama-gpu-layers-hint"
+                   value="@Form.GpuLayers.ToString(CultureInfo.InvariantCulture)" @onchange="e => SetIntAsync(e, v => Form.GpuLayers = v)" />
+            <div class="field-hint" id="field-llama-gpu-layers-hint">
+                @if (Summary is { } layers && Form.GpuLayers < layers.BlockCount)
+                {
+                    <span><span class="num">@Form.GpuLayers</span> of <span class="num">@layers.BlockCount</span> layers on the GPU, the rest in host RAM.</span>
+                }
+                else
+                {
+                    <span>All layers on the GPU (999 = all).</span>
+                }
+            </div>
+        </div>
+        <div class="field">
+            <FieldHelp Label="Flash attention" For="field-llama-flash" Help="@LlamaCppFieldHelp.FlashAttention" />
+            <select class="form-select" id="field-llama-flash" data-testid="field-llama-flash" @bind="Form.FlashAttention" @bind:after="ChangedAsync">
+                <option value="">Auto</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+            </select>
+        </div>
+        <div class="field">
+            <FieldHelp Label="K cache type" For="field-llama-ctk" Help="@LlamaCppFieldHelp.CacheType" />
+            <select class="form-select num" id="field-llama-ctk" data-testid="field-llama-ctk" @bind="Form.CacheTypeK" @bind:after="ChangedAsync">
+                <option value="">Default (f16)</option>
+                @foreach (string type in CacheTypeOptions(Form.CacheTypeK))
+                {
+                    <option value="@type">@type</option>
+                }
+            </select>
+        </div>
+        <div class="field">
+            <FieldHelp Label="V cache type" For="field-llama-ctv" Help="@LlamaCppFieldHelp.CacheType" />
+            <select class="form-select num" id="field-llama-ctv" data-testid="field-llama-ctv" @bind="Form.CacheTypeV" @bind:after="ChangedAsync">
+                <option value="">Default (f16)</option>
+                @foreach (string type in CacheTypeOptions(Form.CacheTypeV))
+                {
+                    <option value="@type">@type</option>
+                }
+            </select>
+        </div>
+        <div class="field">
+            <FieldHelp Label="Batch" For="field-llama-batch" Help="@LlamaCppFieldHelp.Batch" />
+            <input type="number" class="form-control num" id="field-llama-batch" data-testid="field-llama-batch" min="1"
+                   placeholder="@(Form.Embedding ? "= micro-batch" : "Default (2048)")" disabled="@Form.Embedding"
+                   aria-describedby="field-llama-batch-hint"
+                   value="@(Form.BatchSize?.ToString(CultureInfo.InvariantCulture) ?? "")" @onchange="e => SetOptionalIntAsync(e, v => Form.BatchSize = v)" />
+            <div class="field-hint" id="field-llama-batch-hint">
+                @(Form.Embedding ? "An embedding model uses the micro-batch for both." : "Empty: llama.cpp's default.")
+            </div>
+        </div>
+        <div class="field">
+            <FieldHelp Label="Micro-batch" For="field-llama-ubatch" Help="@LlamaCppFieldHelp.Batch" />
+            <input type="number" class="form-control num" id="field-llama-ubatch" data-testid="field-llama-ubatch" min="1"
+                   placeholder="@MicroBatchPlaceholder" aria-describedby="field-llama-ubatch-hint"
+                   value="@(Form.MicroBatchSize?.ToString(CultureInfo.InvariantCulture) ?? "")" @onchange="SetMicroBatchAsync" />
+            <div class="field-hint" id="field-llama-ubatch-hint" data-testid="field-llama-ubatch-hint">
+                @if (Form.MicroBatchFollowsContext)
+                {
+                    <span>The GGUF is non-causal: its whole input must fit one micro-batch, so it follows the context.</span>
+                }
+                else if (Form.Embedding && Form.MicroBatchSize is null)
+                {
+                    <span>Emitted as <code class="num">-b -ub @EffectiveMicroBatch.ToString(CultureInfo.InvariantCulture)</code> (causal model: min(context, 2048)).</span>
+                }
+                else
+                {
+                    <span>Empty: llama.cpp's default.</span>
+                }
+            </div>
+        </div>
+        <div class="field">
+            <FieldHelp Label="Threads" For="field-llama-threads" Help="@LlamaCppFieldHelp.Threads" />
+            <input type="number" class="form-control num" id="field-llama-threads" data-testid="field-llama-threads" min="1" placeholder="llama.cpp's choice"
+                   value="@(Form.Threads?.ToString(CultureInfo.InvariantCulture) ?? "")" @onchange="e => SetOptionalIntAsync(e, v => Form.Threads = v)" />
+        </div>
+
+        <div class="field field--wide">
+            <FieldHelp Label="Embedding mode" For="field-llama-embedding" ShowLabel="false" Help="@LlamaCppFieldHelp.Embedding">
+                <Leading>
+                    <div class="form-check form-switch switch-row">
+                        <input type="checkbox" class="form-check-input" role="switch" id="field-llama-embedding" data-testid="field-llama-embedding"
+                               checked="@Form.Embedding" @onchange="e => SetEmbeddingAsync(e.Value is true)" />
+                        <label class="form-check-label" for="field-llama-embedding">Embedding model (<code>--embedding</code>)</label>
+                    </div>
+                </Leading>
+            </FieldHelp>
+        </div>
+        @if (Form.Embedding)
+        {
+            <div class="field">
+                <FieldHelp Label="Pooling" For="field-llama-pooling" Help="@LlamaCppFieldHelp.Pooling" />
+                <select class="form-select num" id="field-llama-pooling" data-testid="field-llama-pooling" @bind="Form.Pooling" @bind:after="ChangedAsync">
+                    <option value="">From the GGUF@(Summary?.PoolingType is { } own ? $" ({own})" : "")</option>
+                    @foreach (string pooling in LlamaCppPooling.All)
+                    {
+                        <option value="@pooling">@pooling</option>
+                    }
+                </select>
+            </div>
+            <div class="field">
+                <FieldHelp Label="Emulate dimensions" For="field-llama-dimensions" ShowLabel="false" Help="@LlamaCppFieldHelp.EmulateDimensions">
+                    <Leading>
+                        <div class="form-check form-switch switch-row">
+                            <input type="checkbox" class="form-check-input" role="switch" id="field-llama-dimensions" data-testid="field-llama-dimensions"
+                                   checked="@Form.EmulatesDimensions" @onchange="e => SetEmulateAsync(e.Value is true)" />
+                            <label class="form-check-label" for="field-llama-dimensions">Answer OpenAI's <code>dimensions</code> in the router</label>
+                        </div>
+                    </Leading>
+                </FieldHelp>
+            </div>
+        }
+        else
+        {
+            <div class="field">
+                <FieldHelp Label="Chat template" For="field-llama-template" Help="@LlamaCppFieldHelp.ChatTemplate" />
+                <select class="form-select" id="field-llama-template" data-testid="field-llama-template" @bind="Form.ChatTemplateMode" @bind:after="ChangedAsync"
+                        aria-describedby="@(TemplateHint is null ? null : "field-llama-template-hint")">
+                    <option value="">The GGUF's own</option>
+                    <option value="builtin">Built-in</option>
+                    <option value="file">File in the model folder</option>
+                </select>
+                @if (Form.ChatTemplateMode == "builtin")
+                {
+                    <input class="form-control num" data-testid="field-llama-template-name" aria-label="Built-in template name" placeholder="chatml"
+                           autocomplete="off" spellcheck="false" @bind="Form.ChatTemplateName" @bind:after="ChangedAsync" />
+                }
+                else if (Form.ChatTemplateMode == "file")
+                {
+                    <input class="form-control num" data-testid="field-llama-template-file" aria-label="Template file name in the model folder" placeholder="template.jinja"
+                           autocomplete="off" spellcheck="false" @bind="Form.ChatTemplateFile" @bind:after="ChangedAsync" />
+                }
+                @if (TemplateHint is not null)
+                {
+                    <div class="@(TemplateInvalid ? "validation-message" : "field-hint")" id="field-llama-template-hint" data-testid="field-llama-template-hint">@TemplateHint</div>
+                }
+            </div>
+            <div class="field">
+                <FieldHelp Label="Reasoning" For="field-llama-reasoning" Help="@LlamaCppFieldHelp.Reasoning" />
+                <select class="form-select" id="field-llama-reasoning" data-testid="field-llama-reasoning" @bind="Form.Reasoning" @bind:after="ChangedAsync">
+                    <option value="">Auto</option>
+                    <option value="on">On</option>
+                    <option value="off">Off</option>
+                </select>
+            </div>
+        }
+    </div>
+</section>
+
+<section class="panel form-section" aria-labelledby="sec-llamacpp-memory" data-testid="llamacpp-memory">
+    <div class="form-section-intro">
+        <h2 id="sec-llamacpp-memory">Memory</h2>
+        <p>The budget is checked against the GPU's free memory before the model starts. The estimate from the GGUF header updates with every field.</p>
+    </div>
+    <div class="field-grid">
+        <div class="field">
+            <FieldHelp Label="Memory budget (GiB)" For="field-memory-budget" Help="@ModelFieldHelp.MemoryBudgetGiB" />
+            <input type="number" class="form-control num" id="field-memory-budget" data-testid="field-memory-budget" min="0.1" step="0.1"
+                   aria-describedby="memory-budget-hint" value="@MemoryBudgetGiB.ToString("0.##", CultureInfo.InvariantCulture)"
+                   @onchange="SetBudgetAsync" />
+            <div class="field-hint" id="memory-budget-hint" data-testid="memory-budget-hint">
+                @if (Estimate is { } est && Math.Abs(est.BudgetGiB - MemoryBudgetGiB) > 0.005)
+                {
+                    <div class="budget-check @(MemoryBudgetGiB < est.BudgetGiB ? "budget-check--over" : null)" data-testid="memory-budget-vs-estimate">
+                        <Icon Name="@(MemoryBudgetGiB < est.BudgetGiB ? "warning" : "info")" />
+                        <span>@(MemoryBudgetGiB < est.BudgetGiB ? "Below" : "Above") the estimate of <span class="num">@UiFormat.GiB(est.BudgetGiB)</span>.</span>
+                        <button type="button" class="btn btn-sm btn-ghost" data-testid="use-estimate" @onclick="UseEstimateAsync">Use the estimate</button>
+                    </div>
+                }
+                @if (Fit is { } fit)
+                {
+                    <div class="budget-check @(fit.Fits == false ? "budget-check--over" : fit.Fits == true ? "budget-check--ok" : null)" data-testid="memory-budget-fit">
+                        <Icon Name="@(fit.Fits == true ? "check" : "warning")" />
+                        <span>@fit.Message</span>
+                    </div>
+                }
+            </div>
+        </div>
+        <div class="field field--wide" aria-live="polite">
+            <span class="field-label" id="llama-estimate-label">Estimate</span>
+            @if (Estimate is { } e)
+            {
+                <dl class="kv llama-estimate" aria-labelledby="llama-estimate-label" data-testid="llama-estimate">
+                    <dt>Weights</dt><dd data-testid="llama-estimate-weights">@UiFormat.GiB(e.WeightsGiB)</dd>
+                    <dt>KV cache</dt><dd data-testid="llama-estimate-kv">@UiFormat.GiB(e.KvGiB)</dd>
+                    @if (e.SsmStateGiB > 0)
+                    {
+                        <dt>Recurrent state</dt><dd>@UiFormat.GiB(e.SsmStateGiB)</dd>
+                    }
+                    <dt>Compute (micro-batch <span class="num">@EffectiveMicroBatch.ToString(CultureInfo.InvariantCulture)</span>)</dt><dd data-testid="llama-estimate-compute">@UiFormat.GiB(e.ComputeGiB)</dd>
+                    <dt>CUDA context</dt><dd>@UiFormat.GiB(e.CudaContextGiB)</dd>
+                    <dt><strong>Budget</strong> (1.10 × the buffers + context)</dt><dd data-testid="llama-estimate-budget"><strong>@UiFormat.GiB(e.BudgetGiB)</strong></dd>
+                    @if (e.HostGiB > 0)
+                    {
+                        <dt>Host RAM (layers on the CPU)</dt><dd>@UiFormat.GiB(e.HostGiB)</dd>
+                    }
+                    @if (e.PerGpuGiB.Count > 1)
+                    {
+                        <dt>Per GPU</dt><dd data-testid="llama-estimate-per-gpu">@string.Join(" + ", e.PerGpuGiB.Select(g => UiFormat.GiB(g)))</dd>
+                    }
+                </dl>
+                <div class="field-hint">An estimate: spike S1 measured 17–18 % below it on the RTX 5060 Ti. The memory used is measured at start and shown next to the budget.</div>
+            }
+            else
+            {
+                <div class="field-hint" data-testid="llama-estimate-none">
+                    @(EstimateError ?? "Read the GGUF header (pick its folder or download it) to see the estimate.")
+                </div>
+            }
+        </div>
+    </div>
+</section>
+
+<section class="panel form-section" aria-labelledby="sec-llamacpp-server" data-testid="llamacpp-server">
+    <div class="form-section-intro">
+        <h2 id="sec-llamacpp-server">llama-server</h2>
+        <p>The build the model runs with, raw extra arguments, and whether it starts with the controller.</p>
+    </div>
+    <div class="field-grid">
+        <div class="field field--wide">
+            <FieldHelp Label="llama.cpp version" For="field-llama-version" Help="@LlamaCppFieldHelp.Version" />
+            <select class="form-select num" id="field-llama-version" data-testid="field-llama-version" @bind="Form.ExecutableVersion" @bind:after="ChangedAsync"
+                    aria-describedby="@(VersionHint is null ? null : "field-llama-version-hint")">
+                <option value="">@LlamaCppEditing.DefaultVersionLabel(Versions)</option>
+                @foreach (var version in Versions ?? [])
+                {
+                    <option value="@version.Version" disabled="@(!version.Verified && version.Version != Form.ExecutableVersion)">@LlamaCppEditing.VersionLabel(version)</option>
+                }
+                @if (Form.ExecutableVersion.Length > 0 && !(Versions ?? []).Any(v => v.Version == Form.ExecutableVersion))
+                {
+                    <option value="@Form.ExecutableVersion">@Form.ExecutableVersion · not on the node</option>
+                }
+            </select>
+            @if (VersionHint is not null)
+            {
+                <div class="field-hint" id="field-llama-version-hint" data-testid="field-llama-version-hint">@VersionHint</div>
+            }
+        </div>
+        <div class="field field--wide">
+            <FieldHelp Label="Extra args (one flag per line)" For="field-llama-extra-args" Help="@LlamaCppFieldHelp.ExtraArgs" />
+            <textarea class="form-control num" id="field-llama-extra-args" data-testid="field-llama-extra-args" rows="3" spellcheck="false"
+                      aria-describedby="@(Refused.Count > 0 ? "field-llama-extra-args-hint field-llama-extra-args-error" : "field-llama-extra-args-hint")"
+                      aria-invalid="@(Refused.Count > 0 ? "true" : null)" @bind="Form.ExtraArgsText" @bind:event="oninput" @bind:after="ChangedAsync"></textarea>
+            @if (Refused.Count > 0)
+            {
+                <div class="callout callout--failed" role="alert" id="field-llama-extra-args-error" data-testid="llama-extra-args-refused">
+                    <Icon Name="state-failed" />
+                    <div class="callout-body">
+                        <span>A save refuses <span class="num">@string.Join(" ", Refused)</span>: use its field above, or leave it to MirbadLLM.</span>
+                    </div>
+                </div>
+            }
+            <div class="field-hint" id="field-llama-extra-args-hint" data-testid="llama-extra-args-hint">
+                <span>Appended last, each line split at spaces. A save refuses:</span>
+                <ul class="plain-list llama-refused-list">
+                    @foreach (var (flags, reason) in LlamaCppEditing.RefusedHint)
+                    {
+                        <li><code>@flags</code> · @reason</li>
+                    }
+                </ul>
+                <span><code>-sm row</code> stays allowed (split mode row has no field).</span>
+            </div>
+        </div>
+        <div class="field">
+            <FieldHelp Label="Auto-start on boot" For="autoStartLlama" ShowLabel="false" Help="@ModelFieldHelp.AutoStart">
+                <Leading>
+                    <div class="form-check form-switch switch-row">
+                        <input type="checkbox" class="form-check-input" role="switch" id="autoStartLlama" data-testid="field-llama-autostart"
+                               checked="@AutoStart" @onchange="e => AutoStartChanged.InvokeAsync(e.Value is true)" />
+                        <label class="form-check-label" for="autoStartLlama">Start when the controller boots</label>
+                    </div>
+                </Leading>
+            </FieldHelp>
+        </div>
+    </div>
+</section>
+
+@code {
+    /// <summary>The settings being edited (changed in place; <see cref="OnChanged"/> follows every change).</summary>
+    [Parameter, EditorRequired]
+    public LlamaCppForm Form { get; set; } = new();
+
+    /// <summary>Raised after any field changed, so the page recomputes the estimate and the fit.</summary>
+    [Parameter]
+    public EventCallback OnChanged { get; set; }
+
+    /// <summary>The GGUF header, when read.</summary>
+    [Parameter]
+    public GgufSummary? Summary { get; set; }
+
+    /// <summary>The live estimate of the current settings.</summary>
+    [Parameter]
+    public GgufMemoryEstimate? Estimate { get; set; }
+
+    /// <summary>Why there is no estimate (a missing header value, a setting out of range).</summary>
+    [Parameter]
+    public string? EstimateError { get; set; }
+
+    [Parameter]
+    public double MemoryBudgetGiB { get; set; }
+
+    [Parameter]
+    public EventCallback<double> MemoryBudgetGiBChanged { get; set; }
+
+    /// <summary>The fit preview of the placement (several nodes).</summary>
+    [Parameter]
+    public NodeFitResult? Fit { get; set; }
+
+    /// <summary>The node's installed llama-server versions; null when unknown.</summary>
+    [Parameter]
+    public IReadOnlyList<RuntimeVersion>? Versions { get; set; }
+
+    [Parameter]
+    public bool AutoStart { get; set; }
+
+    [Parameter]
+    public EventCallback<bool> AutoStartChanged { get; set; }
+
+    private IReadOnlyList<string> Refused => LlamaCppEditing.RefusedExtraArgs(Form.ExtraArgsText);
+
+    private int EffectiveMicroBatch => Form.Embedding
+        ? Form.MicroBatchSize ?? (Summary?.CausalAttention == false ? Form.ContextSize : Math.Min(Form.ContextSize, LlamaCppSettings.CausalEmbeddingMicroBatch))
+        : Form.MicroBatchSize ?? MirbadLLM.Orchestration.Multinode.LlamaCppMemoryEstimate.DefaultChatMicroBatch;
+
+    private string MicroBatchPlaceholder => Form.Embedding
+        ? $"Default ({EffectiveMicroBatch.ToString(CultureInfo.InvariantCulture)})"
+        : "Default (512)";
+
+    private string? VersionHint =>
+        Versions is null ? "The node has not reported its llama.cpp versions; the node's default is used."
+        : Versions.Count == 0 ? "The node reports no installed llama.cpp version."
+        : Versions.FirstOrDefault(v => v.Version == Form.ExecutableVersion) is { Verified: false }
+            ? "This version no longer matches its install manifest: the model will not start until it is repaired or another version is chosen."
+            : null;
+
+    private bool TemplateInvalid =>
+        Form.ChatTemplateMode is "builtin" or "file" &&
+        !LlamaCppChatTemplate.TryParse(Form.ChatTemplateMode == "builtin" ? LlamaCppChatTemplate.BuiltinPrefix + Form.ChatTemplateName.Trim() : Form.ChatTemplateFile.Trim(), out _);
+
+    private string? TemplateHint =>
+        TemplateInvalid
+            ? Form.ChatTemplateMode == "builtin"
+                ? "A built-in name is lowercase letters, digits, dots, dashes or underscores, e.g. chatml."
+                : "One file name in the model folder, no folders, e.g. template.jinja."
+            : Form.ChatTemplateMode == "" && Summary is { HasChatTemplate: false }
+                ? "This GGUF carries no chat template: choose a built-in one (e.g. chatml) for chat requests."
+                : null;
+
+    private IEnumerable<string> CacheTypeOptions(string current) =>
+        string.IsNullOrEmpty(current) || LlamaCppEditing.CacheTypes.Contains(current, StringComparer.Ordinal)
+            ? LlamaCppEditing.CacheTypes
+            : LlamaCppEditing.CacheTypes.Append(current);
+
+    private Task ChangedAsync() => OnChanged.InvokeAsync();
+
+    private async Task SetIntAsync(ChangeEventArgs e, Action<int> set)
+    {
+        if (int.TryParse(e.Value as string, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
+        {
+            set(value);
+        }
+
+        await ChangedAsync();
+    }
+
+    private async Task SetOptionalIntAsync(ChangeEventArgs e, Action<int?> set)
+    {
+        set(int.TryParse(e.Value as string, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value) ? value : null);
+        await ChangedAsync();
+    }
+
+    private async Task SetMicroBatchAsync(ChangeEventArgs e)
+    {
+        Form.MicroBatchFollowsContext = false;
+        await SetOptionalIntAsync(e, v => Form.MicroBatchSize = v);
+    }
+
+    private async Task SetEmbeddingAsync(bool on)
+    {
+        Form.Embedding = on;
+        if (on && Summary is { CausalAttention: false } && Form.MicroBatchSize is null)
+        {
+            Form.MicroBatchSize = Form.ContextSize;
+            Form.MicroBatchFollowsContext = true;
+        }
+
+        await ChangedAsync();
+    }
+
+    private async Task SetEmulateAsync(bool on)
+    {
+        Form.EmulateDimensions = on;
+        await ChangedAsync();
+    }
+
+    private async Task SetBudgetAsync(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value as string, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) && double.IsFinite(value))
+        {
+            MemoryBudgetGiB = value;
+            await MemoryBudgetGiBChanged.InvokeAsync(value);
+        }
+    }
+
+    private async Task UseEstimateAsync()
+    {
+        if (Estimate is { } estimate)
+        {
+            MemoryBudgetGiB = estimate.BudgetGiB;
+            await MemoryBudgetGiBChanged.InvokeAsync(estimate.BudgetGiB);
+        }
+    }
+}

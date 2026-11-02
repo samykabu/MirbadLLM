@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "createdAt": "2026-11-02T19:51:50.0413467+00:00",
+  "appVersion": "1.0.0\u002Bd79f144a1d0f060b3b04fb5227fb00a522eddad7",
+  "hostName": "dgx",
+  "models": [
+    {
+      "id": "alpha",
+      "servedName": "Alpha-9B",
+      "modelPath": "Alpha-9B",
+      "kvCacheDtype": "fp8",
+      "maxModelLen": 262144,
+      "maxNumSeqs": 16,
+      "memoryBudgetGiB": 24,
+      "toolCallParser": "qwen3_coder",
+      "reasoningParser": "qwen3",
+      "enablePrefixCaching": true,
+      "extraArgs": [],
+      "autoStart": false,
+      "tags": [],
+      "sources": []
+    }
+  ],
+  "hostServices": {
+    "nodes": {
+      "dgx": {}
+    }
+  },
+  "secrets": {
+    "algorithm": "AES-256-GCM",
+    "kdf": "PBKDF2-SHA256",
+    "iterations": 600000,
+    "salt": "efHp3JD7nILs0aTUwUUysA==",
+    "nonce": "Z3vDJimXfp/S8Fev",
+    "tag": "UQ5oy/hcAixUiTCmODUrPA==",
+    "ciphertext": "Dik4XhrqC2i7hXk6D5h8O/0v7H659Nhx/AUtSK2iHsc8nAobgnoGxVK\u002BE6gkw3XxFUVmw9HLEoonH03pK5NhJ0A9yla9HjvMcPDKi0p6X3wMNMHOwVS2sHeCBfskgGbHOt3aaOZg7iVQIND8ZqRA3q6ZqRi\u002BXiY7obTV5ylEq7Dyzu9dzcOlV/ZgAu9\u002BXTKcM0YfezL\u002BDLTLq00m6BvYEe77XIcmsZHOvI1JzQj97zdlivRTh9Dr1O\u002Bd0UCimzdJRxKURLQG\u002BGhnJzk8QiIi7cvNxejLkhhJ49W0gLeQKLdcfqrnohZj0zCciiy\u002BlnVM\u002BnmAFD2KG\u002Btke27Paupzpo\u002BB4eJqmhcvZLw6yzBPoZP2TMwUuv6eXr3meSJLty5dYCc1QUZuNJvLtGofrCt0zf2ijBN4pHQfSQ8qRau\u002BQt\u002B9YX0YoXY0EBg\u002B9XPO5vic4Zo0m\u002Bc/TZA="
+  }
+}

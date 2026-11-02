@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Node-side code (design §2.5): Docker client, container driver, probes, downloader, folder inspector.
+       Filled by MN-002 (moves from Orchestration) and MN-015 (container driver). -->
+  <PropertyGroup>
+    <!-- P3/P4 (MN-202): LibraryImport stubs of the Windows process host, memory probe and DPAPI key protector
+         (MN-212, MN-214, MN-222; kernel32/crypt32, no package) generate unsafe marshalling code. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\MirbadLLM.Core\MirbadLLM.Core.csproj" />
+    <ProjectReference Include="..\MirbadLLM.Agent.Contracts\MirbadLLM.Agent.Contracts.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="MirbadLLM.UnitTests" />
+  </ItemGroup>
+</Project>

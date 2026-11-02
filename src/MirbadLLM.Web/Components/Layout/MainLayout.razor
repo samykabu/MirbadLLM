@@ -1,0 +1,204 @@
+@inherits LayoutComponentBase
+@inject IApiKeyStore ApiKeyStore
+@inject IOptions<AuthOptions> AuthOptionsAccessor
+@inject IOptions<MirbadLLMOptions> MirbadLLMOptionsAccessor
+@* The app shell. Rendered statically: everything interactive here is either its own interactive island
+   (StatusReadout) or plain buttons driven by wwwroot/js/shell.js (theme, drawer). *@
+
+@* js/shell.js moves focus to #main on activation (a plain hash link only scrolls, and Blazor's enhanced
+   navigation would swallow it). *@
+<a class="skip-link" href="#main" data-skip-link>Skip to content</a>
+
+<div class="shell">
+    <header class="statusbar" data-testid="statusbar">
+        <button type="button" class="icon-btn nav-toggle" data-nav-toggle aria-controls="sidenav" aria-expanded="false" aria-label="Open navigation">
+            <Icon Name="menu" Class="icon--lg" />
+        </button>
+        <a class="brand" href="/" aria-label="MirbadLLM, Overview">
+            <BrandLogo />
+        </a>
+
+        <div class="statusbar-readouts">
+            <StatusReadout @rendermode="InteractiveServer" />
+        </div>
+
+        @if (_authDisabled || _v1Open)
+        {
+            <div class="statusbar-alerts">
+                @if (_authDisabled)
+                {
+                    <span class="chip chip--failed" data-testid="auth-disabled-banner"
+                          title="Set MirbadLLM__AdminPassword to require a login for the UI and /api/*.">
+                        <Icon Name="warning" /> Admin login disabled
+                    </span>
+                }
+                @if (_v1Open)
+                {
+                    <a class="chip chip--busy" href="access/keys" data-testid="v1-open-banner"
+                       title="No inference API key exists yet, so anyone who can reach this host can call /v1. Create a key to require one.">
+                        <Icon Name="warning" /> /v1 open: no API keys
+                    </a>
+                }
+            </div>
+        }
+
+        <div class="statusbar-end">
+            <button type="button" class="icon-btn tour-toggle" data-tour-start aria-label="Take the tour" title="Take the tour"
+                    data-testid="tour-toggle">
+                <Icon Name="compass" />
+            </button>
+            <button type="button" class="icon-btn shortcuts-toggle" data-shortcuts-open aria-haspopup="dialog" aria-controls="shortcuts-dialog"
+                    aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)" data-testid="shortcuts-toggle">
+                <Icon Name="keyboard" />
+            </button>
+            <button type="button" class="icon-btn" data-theme-toggle aria-pressed="false" aria-label="Dark theme" title="Dark theme"
+                    data-testid="theme-toggle">
+                <span class="theme-icon-dark"><Icon Name="moon" /></span>
+                <span class="theme-icon-light"><Icon Name="sun" /></span>
+            </button>
+            <form method="post" action="logout">
+                <button type="submit" class="icon-btn" aria-label="Log out" title="Log out" data-testid="logout">
+                    <Icon Name="logout" />
+                </button>
+            </form>
+        </div>
+    </header>
+
+    <nav class="sidenav" id="sidenav" aria-label="Main">
+        <div class="sidenav-head">
+            <span class="brand"><BrandLogo /></span>
+            <button type="button" class="icon-btn" data-nav-close aria-label="Close navigation">
+                <Icon Name="close" Class="icon--lg" />
+            </button>
+        </div>
+
+        <div class="nav-group">
+            <ul class="nav-list" aria-label="Watch" data-tour="nav">
+                <li><NavLink class="nav-link-ss" href="" Match="NavLinkMatch.All"><span class="nav-tile"><Icon Name="dashboard" /></span> Overview <RailCounts Kind="overview" @rendermode="InteractiveServer" /></NavLink></li>
+            </ul>
+        </div>
+        <div class="nav-group">
+            <div class="nav-group-title" id="nav-run">Run</div>
+            <ul class="nav-list" aria-labelledby="nav-run">
+                <li><NavLink class="nav-link-ss" href="models"><span class="nav-tile"><Icon Name="layers" /></span> Models <RailCounts Kind="models" @rendermode="InteractiveServer" /></NavLink></li>
+                <li><NavLink class="nav-link-ss" href="chat"><span class="nav-tile"><Icon Name="terminal" /></span> Playground</NavLink></li>
+                <li><NavLink class="nav-link-ss" href="access"><span class="nav-tile"><Icon Name="shield" /></span> Access</NavLink></li>
+            </ul>
+        </div>
+        <div class="nav-group">
+            <div class="nav-group-title" id="nav-fleet">Fleet</div>
+            <ul class="nav-list" aria-labelledby="nav-fleet">
+                <li><NavLink class="nav-link-ss" href="nodes"><span class="nav-tile"><Icon Name="nodes" /></span> Nodes <RailCounts Kind="nodes" @rendermode="InteractiveServer" /></NavLink></li>
+            </ul>
+            <RailNodes @rendermode="InteractiveServer" />
+        </div>
+        <div class="nav-group">
+            <div class="nav-group-title" id="nav-admin">Admin</div>
+            <ul class="nav-list" aria-labelledby="nav-admin">
+                <li><NavLink class="nav-link-ss" href="backup"><span class="nav-tile"><Icon Name="archive" /></span> Backup &amp; restore</NavLink></li>
+                <li><NavLink class="nav-link-ss" href="releases"><span class="nav-tile"><Icon Name="tag" /></span> Releases</NavLink></li>
+            </ul>
+        </div>
+
+        <div class="sidenav-foot">
+            <button type="button" class="nav-link-ss sidenav-tour" data-tour-start data-testid="rail-tour">
+                <span class="nav-tile"><Icon Name="compass" /></span> Take the tour
+            </button>
+            <div class="sidenav-foot-card">
+                <a class="sidenav-version" href="releases" title="@($"MirbadLLM {ProductVersion.Controller}: release notes")" data-testid="controller-version-link">
+                    MirbadLLM <span class="num" data-testid="controller-version">@ProductVersion.Display(ProductVersion.Controller)</span>
+                </a>
+                <button type="button" class="rail-keys" data-shortcuts-open aria-haspopup="dialog" aria-controls="shortcuts-dialog" aria-label="Keyboard shortcuts"><kbd>?</kbd> Keys</button>
+            </div>
+        </div>
+    </nav>
+    <div class="drawer-backdrop" data-nav-backdrop aria-hidden="true"></div>
+
+    <main class="main" id="main" tabindex="-1">
+        <RecoveryBanner />
+        <TakeoverBanner @rendermode="InteractiveServer" />
+        <MaintenanceBanner @rendermode="InteractiveServer" />
+        <WhatsNew @rendermode="InteractiveServer" />
+        @* One-time tips (js/tour.js) land here, above the page, pushing it down rather than covering it. *@
+        <div id="tip-slot" data-permanent></div>
+        <div class="page">
+            @Body
+        </div>
+    </main>
+</div>
+
+<nav class="bottomnav" aria-label="Quick">
+    <NavLink href="" Match="NavLinkMatch.All"><Icon Name="dashboard" Class="icon--lg" /> Overview</NavLink>
+    <NavLink href="models"><Icon Name="layers" Class="icon--lg" /> Models</NavLink>
+    <NavLink href="chat"><Icon Name="terminal" Class="icon--lg" /> Playground</NavLink>
+    <button type="button" data-nav-toggle aria-controls="sidenav" aria-expanded="false"><Icon Name="menu" Class="icon--lg" /> Menu</button>
+</nav>
+
+@* Keyboard shortcuts, handled in js/shell.js (ignored while typing in a field or with a dialog open). *@
+<dialog id="shortcuts-dialog" class="ss-dialog shortcuts-dialog" aria-labelledby="shortcuts-title" data-testid="shortcuts-dialog">
+    <div class="ss-dialog-inner">
+        <div class="shortcuts-head">
+            <h2 id="shortcuts-title">Keyboard shortcuts</h2>
+            <button type="button" class="icon-btn" data-shortcuts-close aria-label="Close keyboard shortcuts">
+                <Icon Name="close" />
+            </button>
+        </div>
+        <p class="muted shortcuts-note">They work anywhere except while you type in a field. Press <kbd>?</kbd> to open or close this list.</p>
+        <div class="shortcuts-groups">
+            <section aria-labelledby="shortcuts-go">
+                <h3 id="shortcuts-go">Go to</h3>
+                <dl class="shortcuts-list" data-testid="shortcuts-go-list">
+                    <div><dt><kbd>g</kbd> <span class="muted">then</span> <kbd>d</kbd></dt><dd>Overview</dd></div>
+                    <div><dt><kbd>g</kbd> <span class="muted">then</span> <kbd>m</kbd></dt><dd>Models</dd></div>
+                    <div><dt><kbd>g</kbd> <span class="muted">then</span> <kbd>n</kbd></dt><dd>Nodes</dd></div>
+                    <div><dt><kbd>g</kbd> <span class="muted">then</span> <kbd>c</kbd></dt><dd>Playground</dd></div>
+                    <div><dt><kbd>g</kbd> <span class="muted">then</span> <kbd>k</kbd></dt><dd>Access (Connect and API keys)</dd></div>
+                    <div><dt><kbd>g</kbd> <span class="muted">then</span> <kbd>s</kbd></dt><dd>Services</dd></div>
+                    <div><dt><kbd>g</kbd> <span class="muted">then</span> <kbd>b</kbd></dt><dd>Backup &amp; restore</dd></div>
+                </dl>
+            </section>
+            <section aria-labelledby="shortcuts-page">
+                <h3 id="shortcuts-page">On this page</h3>
+                <dl class="shortcuts-list">
+                    <div><dt><kbd>a</kbd></dt><dd>Add a model</dd></div>
+                    <div><dt><kbd>n</kbd></dt><dd>New chat (opens Chat from other pages)</dd></div>
+                    <div><dt><kbd>/</kbd></dt><dd>Focus the filter, where the page has one</dd></div>
+                    <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Move between tabs or options once one has focus</dd></div>
+                    <div><dt><kbd>Esc</kbd></dt><dd>Close a dialog, the tour or this list</dd></div>
+                </dl>
+            </section>
+            <section aria-labelledby="shortcuts-model">
+                <h3 id="shortcuts-model">On a model's pages</h3>
+                <dl class="shortcuts-list">
+                    <div><dt><kbd>b</kbd></dt><dd>Run a benchmark (opens its confirmation first)</dd></div>
+                    <div><dt><kbd>t</kbd></dt><dd>Tune it (opens its confirmation first)</dd></div>
+                </dl>
+            </section>
+        </div>
+    </div>
+</dialog>
+
+@* Host for the guided tour and one-time tips (js/tour.js). data-permanent: Blazor's enhanced navigation keeps its
+   content, so a tour survives moving between pages. *@
+<div id="tour-root" data-permanent></div>
+
+<div id="blazor-error-ui" data-nosnippet role="alert">
+    <Icon Name="state-failed" />
+    <span>Something went wrong on this page. Reload to continue.</span>
+    <a href="." class="reload btn btn-sm btn-outline-secondary">Reload</a>
+    <button type="button" class="dismiss icon-btn" aria-label="Dismiss"><Icon Name="close" /></button>
+</div>
+
+@code {
+    private bool _authDisabled;
+    private bool _v1Open;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _authDisabled = string.IsNullOrEmpty(AuthOptionsAccessor.Value.AdminPassword);
+
+        bool legacyConfigured = !string.IsNullOrEmpty(MirbadLLMOptionsAccessor.Value.ApiKey);
+        bool everHadInferenceKey = await ApiKeyStore.HasAnyKeyAsync(ApiKeyScope.Inference);
+        _v1Open = !AuthOptionsAccessor.Value.RequireApiKey && !legacyConfigured && !everHadInferenceKey;
+    }
+}

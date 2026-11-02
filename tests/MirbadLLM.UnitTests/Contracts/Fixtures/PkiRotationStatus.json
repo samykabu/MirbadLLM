@@ -1,0 +1,8 @@
+{
+  "rotationId": "rot-001",
+  "stage": "pending",
+  "currentSpkiSha256": null,
+  "pendingSpkiSha256": null,
+  "certNotAfter": null,
+  "updatedAt": "0001-01-01T00:00:00+00:00"
+}

@@ -1,0 +1,36 @@
+/* The shared .row-menu-item is styled for links; these items are buttons (they open a dialog), so drop the button chrome. */
+button.row-menu-item {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    font-size: var(--ss-fs-200);
+    text-align: left;
+    cursor: pointer;
+}
+
+button.row-menu-item:hover,
+button.row-menu-item:focus {
+    background: var(--ss-hover);
+}
+
+/* Inline (Node detail header): the routine actions together, the destructive one set apart. */
+.node-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ss-sp-2) var(--ss-sp-5);
+}
+
+.node-actions-main,
+.node-actions-danger {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-2);
+}
+
+@media (pointer: coarse) {
+    .node-actions .btn {
+        min-height: 44px;
+    }
+}

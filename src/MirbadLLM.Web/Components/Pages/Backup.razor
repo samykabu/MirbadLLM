@@ -1,0 +1,2124 @@
+@page "/backup"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using System.Globalization
+@using MirbadLLM.Orchestration.Recovery
+@using MirbadLLM.Web.Components.ModelEditor
+@inject BackupService Backups
+@inject BackupDownloadTokens DownloadTokens
+@inject BackupScheduler Scheduler
+@inject RestorePlanner Planner
+@inject RestoreJobService Restores
+@inject IJSRuntime JS
+@inject IServiceProvider ServiceProvider
+
+<PageTitle>Backup &amp; restore · MirbadLLM</PageTitle>
+
+<PageHeader Title="Backup & restore">
+    <Subtitle>
+        One file holds the model definitions (tags and download sources included), which models were running, node settings,
+        the Services lists, benchmark history and, with a passphrase, the API keys, saved tokens, the backup share's password
+        and the CA. After reinstalling @HostNode, restore it here: checkpoints are downloaded again from each model's source.
+    </Subtitle>
+</PageHeader>
+
+<Tabs Items="TabItems" SelectedId="@_tab" SelectedIdChanged="OnTabSelected" QueryKey="tab" AriaLabel="Backup and restore" TestId="backup-tabs">
+    <ChildContent Context="tab">
+        <div class="@(tab == "restore" ? "restore-layout" : null)">
+            @if (tab == "restore") { @RestoreSteps(Fleet?.Status.Stage == FleetRecoveryStage.Installed || Job is not null ? 2 : _preview is not null || _fleetPreview is not null ? 1 : 0) }
+            <div class="@(tab == "restore" ? "restore-step-content" : null)">
+        @if (tab == "backup")
+        {
+            @* One block per job. Automatic backups first: what runs, whether it can, and where the files land (the
+               destination is part of the schedule, not a page of its own). Then the files it wrote, then the manual copy. *@
+            <section class="panel backup-hub" aria-labelledby="scheduled-title">
+                <header class="hub-head">
+                    <span class="backup-shield" aria-hidden="true"><Icon Name="shield" /></span><div class="hub-title">
+                        <h2 id="scheduled-title">@(_schedule.Enabled ? _schedule.DirectoryCheck.Ready ? "Backups run every day" : "Backups need setup" : "Scheduled backups are off")</h2>
+                        <p class="muted">@(_schedule.Enabled ? _schedule.DirectoryCheck.Ready ? $"A backup file is written every day and the newest {_schedule.Keep} are kept." : "The daily schedule is configured, but backups cannot run until the setup items below are resolved." : "Scheduled backups are off: no backup directory is configured.")</p>
+                    </div>
+                    <button type="button" class="btn btn-primary" data-testid="backup-now" disabled="@(!_schedule.DirectoryCheck.Ready || _runningNow)"
+                            @onclick="RunNowAsync">
+                        <Icon Name="archive" /> @(_runningNow ? "Backing up…" : "Back up now")
+                    </button>
+                </header>
+
+                @if (_runningNow) { <progress class="backup-now-progress" aria-label="Backing up now"></progress> }
+                <div class="hub-block" data-testid="scheduled-panel"><dl class="backup-facts" data-testid="schedule-facts">
+                    <div><dt>Last run</dt>
+                        <dd data-testid="last-run">
+                            @if (_schedule.LastRun is { } last)
+                            {
+                                <span class="num">@UiFormat.RunTime(last.At)</span>
+                                @if (last.Succeeded)
+                                {
+                                    <span class="state state--ready"><Icon Name="state-ready" /> Succeeded</span>
+                                    <span class="muted">@last.FileName@(last.HasSecrets ? "" : ", no API keys")</span>
+                                }
+                                else
+                                {
+                                    <span class="state state--failed"><Icon Name="state-failed" /> Failed</span>
+                                    <span class="muted">@last.Error</span>
+                                }
+                            }
+                            else
+                            {
+                                <span class="muted">None since MirbadLLM started@(_schedule.Files.Count > 0 ? $"; newest file {UiFormat.RunTime(_schedule.Files[0].CreatedAt)}" : "")</span>
+                            }
+                        </dd>                    </div>
+                    <div><dt>Result</dt><dd>@if (_schedule.LastRun is { } result) { <span class="state @(result.Succeeded ? "state--ready" : "state--failed")"><Icon Name="@(result.Succeeded ? "state-ready" : "state-failed")" />@(result.Succeeded ? "Succeeded" : "Failed")</span> } else { <span class="num">@UiFormat.Missing</span> }</dd></div>
+                    <div><dt>Next run</dt><dd class="num">@(_schedule.NextRunAt is { } next ? UiFormat.RunTime(next) : UiFormat.Missing)</dd></div>
+                    <div><dt>Keeps</dt><dd>The newest <span class="num">@_schedule.Keep</span></dd></div>
+                </dl></div>
+            </section>
+            @SetupChecklist()
+            <div class="backup-columns"><div class="backup-storage panel">
+                <div class="hub-block destination-panel" role="group" aria-labelledby="destination-title" data-testid="destination-panel">
+                    <h3 id="destination-title" class="hub-subtitle">Where backups are stored</h3>
+                    <dl class="kv kv--wide"><dt>Writes to</dt><dd><code>@(_schedule.Enabled ? _schedule.Directory : "off")</code></dd><dt>Schedule</dt><dd>Daily at <span class="num">@(_schedule.DailyAtValid ? _schedule.DailyAt : "03:00")</span>, controller time @if (!_schedule.DailyAtValid) { <span>(<code>@_schedule.DailyAt</code> is not HH:mm)</span> }</dd></dl>
+                    @if (_schedule.Enabled && _destination is not null) { <p data-testid="effective-destination">@DescribeDestination(_destination)</p> }
+                    @if (_destination is null)
+                    {
+                        <p class="muted" role="status">Checking where backups go…</p>
+                    }
+                    else
+                    {
+                        var (destClass, destIcon, destLabel) = DestinationLook(_destination);
+                        <p class="destination-status" role="status" data-testid="destination-status">
+                            <span class="state @destClass"><Icon Name="@destIcon" /> @destLabel</span>
+                            <span class="destination-where">@DescribeDestination(_destination)</span>
+                        </p>
+                        @if (_destination.AgentAvailable && !_destination.ForeignUnit)
+                        {
+                            <div class="field">
+                                <FieldHelp Label="Where backups go" For="destination-kind" ShowLabel="false" Help="@BackupFieldHelp.Kind">
+                                    <Leading><span class="field-label" id="destination-kind-label">Where backups go</span></Leading>
+                                </FieldHelp>
+                                <div class="segmented destination-kind" role="radiogroup" aria-labelledby="destination-kind-label" data-testid="destination-kind">
+                                    <label class="segmented-option">
+                                        <input type="radio" name="destination-kind" data-testid="destination-kind-local" checked="@(_destKind == BackupDestinationKind.Local)"
+                                               @onchange="() => SetDestinationKind(BackupDestinationKind.Local)" />
+                                        <span>Local disk</span>
+                                    </label>
+                                    <label class="segmented-option">
+                                        <input type="radio" name="destination-kind" data-testid="destination-kind-smb" checked="@(_destKind == BackupDestinationKind.Smb)"
+                                               @onchange="() => SetDestinationKind(BackupDestinationKind.Smb)" />
+                                        <span>SMB share</span>
+                                    </label>
+                                    <label class="segmented-option">
+                                        <input type="radio" name="destination-kind" data-testid="destination-kind-nfs" checked="@(_destKind == BackupDestinationKind.Nfs)"
+                                               @onchange="() => SetDestinationKind(BackupDestinationKind.Nfs)" />
+                                        <span>NFS export</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            @if (_destKind == BackupDestinationKind.Local)
+                            {
+                                <p class="muted" data-testid="destination-local-note">
+                                    Backups are written to <code>@BackupDestinationManager.HostPath</code> on @(HostNode)'s disk. Reinstalling @HostNode loses them; keep a copy elsewhere or use a NAS share.
+                                </p>
+                                @if (_destination.Kind != BackupDestinationKind.Local)
+                                {
+                                    <div class="backup-actions">
+                                        <button type="button" class="btn btn-outline-secondary" data-testid="destination-disconnect" disabled="@(!_destLoginEnabled)"
+                                                aria-describedby="@(_destLoginEnabled ? null : "destination-login-hint")" @onclick="OpenDisconnect">
+                                            <Icon Name="power" /> Disconnect the share
+                                        </button>
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                bool smb = _destKind == BackupDestinationKind.Smb;
+                                <div class="field-grid" data-testid="destination-fields">
+                                    <div class="field">
+                                        <FieldHelp Label="Server" For="destination-server" Help="@BackupFieldHelp.Server" />
+                                        <input class="form-control" id="destination-server" data-testid="destination-server" placeholder="192.0.2.200" autocomplete="off" spellcheck="false"
+                                               aria-describedby="destination-server-hint" @bind="_dest.Server" @bind:event="oninput" />
+                                        <span class="field-hint" id="destination-server-hint">IP address or host name of the NAS.</span>
+                                    </div>
+                                    <div class="field">
+                                        <FieldHelp Label="@(smb ? "Share" : "Export path")" For="destination-share" Help="@(smb ? BackupFieldHelp.SmbShare : BackupFieldHelp.NfsExport)" />
+                                        <input class="form-control" id="destination-share" data-testid="destination-share" placeholder="@(smb ? "backups" : "/volume1/backups")" autocomplete="off" spellcheck="false"
+                                               aria-describedby="destination-share-hint" @bind="_dest.Share" @bind:event="oninput" />
+                                        <span class="field-hint" id="destination-share-hint">@(smb ? "The shared folder's name, no slashes." : $"An absolute path exported to {HostNode}.")</span>
+                                    </div>
+                                    <div class="field">
+                                        <FieldHelp Label="Subfolder (optional)" For="destination-subfolder" Help="@BackupFieldHelp.Subfolder" />
+                                        <input class="form-control" id="destination-subfolder" data-testid="destination-subfolder" placeholder="mirbadllm" autocomplete="off" spellcheck="false"
+                                               aria-describedby="destination-subfolder-hint" @bind="_dest.Subfolder" @bind:event="oninput" />
+                                        <span class="field-hint" id="destination-subfolder-hint">Must already exist on the NAS.</span>
+                                    </div>
+                                    @if (smb)
+                                    {
+                                        <div class="field">
+                                            <FieldHelp Label="Username" For="destination-username" Help="@BackupFieldHelp.Username" />
+                                            <input class="form-control" id="destination-username" data-testid="destination-username" autocomplete="off" spellcheck="false"
+                                                   aria-describedby="destination-username-hint" @bind="_dest.Username" @bind:event="oninput" />
+                                            <span class="field-hint" id="destination-username-hint">A NAS account with write access to this share.</span>
+                                        </div>
+                                        <div class="field">
+                                            <FieldHelp Label="Password" For="destination-password" Help="@BackupFieldHelp.Password" />
+                                            <input type="password" class="form-control" id="destination-password" data-testid="destination-password" autocomplete="new-password"
+                                                   aria-describedby="destination-password-hint" @bind="_dest.Password" @bind:event="oninput" />
+                                            <span class="field-hint" id="destination-password-hint">Stored root-only on @HostNode and encrypted for backups; never shown again. Needed every time you save.</span>
+                                        </div>
+                                        <div class="field">
+                                            <FieldHelp Label="Domain (optional)" For="destination-domain" Help="@BackupFieldHelp.Domain" />
+                                            <input class="form-control" id="destination-domain" data-testid="destination-domain" autocomplete="off" spellcheck="false"
+                                                   aria-describedby="destination-domain-hint" @bind="_dest.Domain" @bind:event="oninput" />
+                                            <span class="field-hint" id="destination-domain-hint">Empty for a local NAS user.</span>
+                                        </div>
+                                        <div class="field">
+                                            <FieldHelp Label="SMB version" For="destination-smb-version" Help="@BackupFieldHelp.SmbVersion" />
+                                            <select class="form-select" id="destination-smb-version" data-testid="destination-smb-version" aria-describedby="destination-smb-version-hint" @bind="_dest.SmbVersion">
+                                                <option value="3.1.1">3.1.1</option>
+                                                <option value="3.0">3.0 (default)</option>
+                                                <option value="2.1">2.1</option>
+                                            </select>
+                                            <span class="field-hint" id="destination-smb-version-hint">3.0 suits most NAS.</span>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <div class="field">
+                                            <FieldHelp Label="NFS version" For="destination-nfs-version" Help="@BackupFieldHelp.NfsVersion" />
+                                            <select class="form-select" id="destination-nfs-version" data-testid="destination-nfs-version" aria-describedby="destination-nfs-version-hint" @bind="_dest.NfsVersion">
+                                                <option value="4.1">4.1 (default)</option>
+                                                <option value="3">3</option>
+                                            </select>
+                                            <span class="field-hint" id="destination-nfs-version-hint">The NAS must allow @(HostNode)'s address.</span>
+                                        </div>
+                                    }
+                                </div>
+                                <div class="backup-actions">
+                                    <button type="button" class="btn btn-outline-secondary" data-testid="destination-test" disabled="@(!DestinationComplete || _destTesting)" @onclick="TestDestinationAsync">
+                                        <Icon Name="plug" /> @(_destTesting ? "Testing…" : "Test connection")
+                                    </button>
+                                    <button type="button" class="btn btn-primary" data-testid="destination-save" disabled="@(!DestinationComplete || !_destLoginEnabled)"
+                                            aria-describedby="@(_destLoginEnabled ? null : "destination-login-hint")" @onclick="OpenSave">
+                                        <Icon Name="check" /> Save destination
+                                    </button>
+                                </div>
+                                @if (_destTest is { } test)
+                                {
+                                    <div class="callout @(test.Ok ? "callout--ready" : "callout--failed")" role="status" data-testid="destination-test-result">
+                                        <Icon Name="@(test.Ok ? "state-ready" : "state-failed")" /><div class="callout-body">@test.Message</div>
+                                    </div>
+                                }
+                            }
+                            @if (!_destLoginEnabled)
+                            {
+                                <p class="field-hint" id="destination-login-hint" data-testid="destination-login-hint">
+                                    Changing the destination needs admin login. Set <code>MirbadLLM__AdminPassword</code> and restart MirbadLLM first.
+                                </p>
+                            }
+                            @if (_destError is not null && !_destSaveOpen && !_destDisconnectOpen)
+                            {
+                                <div class="callout callout--failed" role="alert" data-testid="destination-error">
+                                    <Icon Name="state-failed" /><div class="callout-body">@_destError</div>
+                                </div>
+                            }
+                        }
+                    }
+
+                    <ConfirmDialog @bind-Open="_destSaveOpen" Title="Save the backup destination?" ConfirmLabel="Save destination" OnConfirm="SaveDestinationAsync"
+                                   OnCancel="ClearDestinationError" CloseOnConfirm="false"
+                                   TestId="destination-save-dialog" ConfirmTestId="destination-save-confirm">
+                        <ul class="restore-notes" data-testid="destination-save-plan">
+                            <li>Tests the share again, then mounts <code>@SourcePreview</code> at <code>@BackupDestinationManager.HostPath</code> on @HostNode (started at every boot).</li>
+                            <li>Future backups go there. Existing local backups stay on the local disk underneath, hidden while the share is mounted.</li>
+                            @if (_destKind == BackupDestinationKind.Smb)
+                            {
+                                <li>The NAS password goes to the host agent, which keeps it root-only on @HostNode. MirbadLLM keeps an encrypted copy only so backups with a passphrase can carry it; it never shows it.</li>
+                            }
+                            @if (_destination?.Kind is BackupDestinationKind.Smb or BackupDestinationKind.Nfs && _destination.Configured is { } current)
+                            {
+                                <li>Replaces the current destination <code>@current.Source</code>. If the new share can't be mounted, the current one stays.</li>
+                            }
+                        </ul>
+                        @if (_destError is not null)
+                        {
+                            <div class="callout callout--failed" role="alert" data-testid="destination-save-error">
+                                <Icon Name="state-failed" /><div class="callout-body">@_destError</div>
+                            </div>
+                        }
+                    </ConfirmDialog>
+
+                    <ConfirmDialog @bind-Open="_destDisconnectOpen" Title="Disconnect the backup share?" ConfirmLabel="Disconnect" OnConfirm="DisconnectDestinationAsync"
+                                   OnCancel="ClearDestinationError" CloseOnConfirm="false"
+                                   TestId="destination-disconnect-dialog" ConfirmTestId="destination-disconnect-confirm">
+                        <ul class="restore-notes">
+                            <li>Unmounts <code>@(_destination?.Configured?.Source ?? "the share")</code> from <code>@BackupDestinationManager.HostPath</code> on @HostNode and deletes the saved NAS password.</li>
+                            <li>Future backups go to @(HostNode)'s disk again. Backups already on the share stay there.</li>
+                        </ul>
+                        @if (_destError is not null)
+                        {
+                            <div class="callout callout--failed" role="alert" data-testid="destination-disconnect-error">
+                                <Icon Name="state-failed" /><div class="callout-body">@_destError</div>
+                            </div>
+                        }
+                    </ConfirmDialog>
+                </div>
+
+            <section class="section" aria-labelledby="files-title">
+                <div class="section-head">
+                    <h2 id="files-title">Backup files</h2>
+                    @if (_schedule.Files.Count > 0)
+                    {
+                        <span class="section-note"><span class="num">@_schedule.Files.Count</span> in <code>@_schedule.Directory</code></span>
+                    }
+                </div>
+                @if (_schedule.Files.Count == 0)
+                {
+                    <EmptyState Title="No backup files yet" HeadingLevel="3" Inline="true" TestId="backup-files-empty">
+                        <ChildContent>
+                            <p>Scheduled backups appear here once the first one is written. Point the directory at a NAS so they survive a reinstall of @HostNode (see the README).</p>
+                        </ChildContent>
+                    </EmptyState>
+                }
+                else
+                {
+                    <div class="panel panel--scroll-x">
+                        <table class="data-table data-table--stack" data-testid="backup-files">
+                            <caption class="visually-hidden">Backup files in the backup directory</caption>
+                            <thead>
+                                <tr>
+                                    <th scope="col">File</th>
+                                    <th scope="col">Created</th>
+                                    <th scope="col">Size</th>
+                                    <th scope="col"><span class="visually-hidden">Actions</span></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var file in Pager.Slice(_schedule.Files, _filesPage, _filesSize))
+                                {
+                                    <tr data-testid="@($"backup-file-{file.Name}")">
+                                        <td class="col-primary"><code>@file.Name</code></td>
+                                        <td data-label="Created" class="num">@UiFormat.RunTime(file.CreatedAt)</td>
+                                        <td data-label="Size" class="num">@UiFormat.Bytes(file.Bytes)</td>
+                                        <td class="col-actions">
+                                            <a class="btn btn-sm btn-ghost" href="@($"api/backup/files/{Uri.EscapeDataString(file.Name)}")" download="@file.Name"
+                                               aria-label="@($"Download {file.Name}")"><Icon Name="download" /> Download</a>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <Pager Total="_schedule.Files.Count" @bind-Page="_filesPage" @bind-Size="_filesSize" QueryPrefix="files" Noun="files" TestId="backup-files-pager" />
+                }
+            </section>
+
+</div><div>
+            <section class="panel panel-body backup-panel download-panel" aria-labelledby="download-title" data-testid="download-panel">
+                <div class="download-intro">
+                    <h2 id="download-title">Download a copy to this computer</h2>
+                    <p class="muted">A one-off backup file, separate from the automatic ones, with the same contents. The file name carries this host's name and the time in UTC.</p>
+                </div>
+                <div class="download-body">
+                    <div class="field">
+                        <label class="field-label" for="backup-passphrase">Passphrase</label>
+                        <input type="password" class="form-control" id="backup-passphrase" data-testid="backup-passphrase" autocomplete="new-password"
+                               aria-describedby="backup-passphrase-hint" @bind="_passphrase" @bind:event="oninput" />
+                        <div class="passphrase-meter" role="meter" aria-label="Passphrase strength" aria-valuemin="0" aria-valuemax="4" aria-valuenow="@StrengthLevel" aria-valuetext="@StrengthText" data-testid="passphrase-meter">@for (int i = 0; i < 4; i++) { <span data-on="@(i < StrengthLevel ? "true" : "false")" aria-hidden="true"></span> }</div>
+                        <span class="strength" id="backup-passphrase-hint" data-testid="passphrase-strength" aria-live="polite">@StrengthText</span>
+                    </div>
+                    <div class="field">
+                        <label class="field-label" for="backup-passphrase-confirm">Confirm passphrase</label>
+                        <input type="password" class="form-control" id="backup-passphrase-confirm" data-testid="backup-passphrase-confirm" autocomplete="new-password"
+                               aria-describedby="@(PassphraseMismatch ? "backup-passphrase-mismatch" : null)" aria-invalid="@(PassphraseMismatch ? "true" : null)"
+                               @bind="_passphraseConfirm" @bind:event="oninput" />
+                        @if (PassphraseMismatch)
+                        {
+                            <div class="validation-message" id="backup-passphrase-mismatch" data-testid="passphrase-mismatch">The passphrases don't match.</div>
+                        }
+                    </div>
+                    @if (string.IsNullOrEmpty(_passphrase))
+                    {
+                        <div class="callout callout--busy" data-testid="no-passphrase-warning">
+                            <Icon Name="warning" />
+                            <div class="callout-body">
+                                Without a passphrase the backup has no secrets section: API keys won't be restored, so every client needs a new key afterwards. Saved tokens, the backup share's password and the CA are left out too.
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <p class="field-hint">Keep the passphrase somewhere other than @HostNode: without it, the API keys in this file can't be restored.</p>
+                    }
+                    <div class="backup-actions">
+                        <button type="button" class="btn btn-primary" data-testid="download-backup" disabled="@(!CanDownload)" @onclick="DownloadAsync">
+                            <Icon Name="download" /> @(_downloading ? "Preparing…" : "Download backup")
+                        </button>
+                    </div>
+                    @if (_downloadError is not null)
+                    {
+                        <div class="callout callout--failed" role="alert" data-testid="download-error">
+                            <Icon Name="state-failed" /><div class="callout-body">@_downloadError</div>
+                        </div>
+                    }
+                    @if (_downloaded is { } done)
+                    {
+                        <div class="callout callout--ready" role="status" data-testid="download-ready">
+                            <Icon Name="state-ready" />
+                            <div class="callout-body">
+                                @if (done.Url is null)
+                                {
+                                    <span>Downloaded <code>@done.FileName</code> (<span class="num">@UiFormat.Bytes(done.Bytes)</span>, @(done.HasSecrets ? "API keys encrypted" : "no API keys")).</span>
+                                }
+                                else
+                                {
+                                    <span>
+                                        Ready: <a href="@done.Url" download="@done.FileName" data-testid="download-link">@done.FileName</a>
+                                        (<span class="num">@UiFormat.Bytes(done.Bytes)</span>). The link works once, for two minutes.
+                                    </span>
+                                }
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+            </div></div>
+        }
+        else if (Fleet?.Status is { Stage: FleetRecoveryStage.Installed, Result: { } installed })
+        {
+            <section class="section panel panel-body backup-panel" aria-labelledby="fleet-installed-title" data-testid="fleet-installed">
+                <h2 id="fleet-installed-title">Backup installed: restarting into normal mode</h2>
+                <ul class="restore-notes" data-testid="fleet-installed-summary">
+                    <li>Master <code>@installed.MasterInstanceId</code> at epoch <span class="num">@installed.Epoch</span>.</li>
+                    <li><span class="num">@installed.Nodes</span> node@(installed.Nodes == 1 ? "" : "s"), <span class="num">@installed.Models</span> model@(installed.Models == 1 ? "" : "s"), <span class="num">@installed.ApiKeys</span> API key@(installed.ApiKeys == 1 ? "" : "s"), <span class="num">@installed.ServiceContainers</span> managed container@(installed.ServiceContainers == 1 ? "" : "s").</li>
+                    <li>@(installed.CaWrittenToDisk ? "The CA from the backup is in place." : "The CA comes from configuration and matches the backup's; it was not written to disk.")</li>
+                    <li>The takeover runs by itself right after the restart (this install requested it; you confirmed the old master is stopped): the restored master moves above every agent's epoch. A node that does not answer then reads Pending takeover until it does; one that returns holding a higher epoch is continued from the red banner.</li>
+                    @foreach (string note in installed.Notes)
+                    {
+                        <li>@note</li>
+                    }
+                </ul>
+            </section>
+        }
+        else if (_fleetPreview is { } fleetPreview && _backup is { } fleetBackup)
+        {
+            <section class="section" aria-labelledby="fleet-preview-title" data-testid="fleet-preview">
+                <div class="section-head">
+                    <h2 id="fleet-preview-title">Fleet recovery: what this backup restores</h2>
+                    <button type="button" class="btn btn-sm btn-ghost" data-testid="choose-another" @onclick="ResetPreview">Choose another file</button>
+                </div>
+                <div class="panel panel-body">
+                    <dl class="kv kv--wide" data-testid="fleet-facts">
+                        <dt>Made</dt>
+                        <dd><span class="num">@UiFormat.RunTime(fleetBackup.CreatedAt)</span> on <code>@fleetBackup.HostName</code>, MirbadLLM <code>@fleetBackup.AppVersion</code></dd>
+                        <dt>Master</dt>
+                        <dd><code>@fleetBackup.Master?.MasterInstanceId</code> at epoch <span class="num">@fleetBackup.Master?.Epoch</span></dd>
+                        <dt>Models</dt>
+                        <dd><span class="num">@fleetBackup.Models.Count</span>, with their placements</dd>
+                        <dt>API keys</dt>
+                        <dd><span class="num">@(_secrets?.ApiKeys.Count ?? 0)</span></dd>
+                        <dt>CA</dt>
+                        <dd>@(_secrets?.Pki is null ? "Not in the backup" : "In the encrypted section")</dd>
+                        <dt>Running models</dt>
+                        <dd data-testid="fleet-running">@(fleetBackup.RunningModels is null ? "Not recorded in this backup" : $"{RunningCount} come back on their nodes after the restart (those not running there are started, like after a node restart)")</dd>
+                        <dt>Also restored</dt>
+                        <dd data-testid="fleet-extras">@FleetExtras(fleetBackup)</dd>
+                    </dl>
+                </div>
+                <div class="panel panel--scroll-x">
+                    <table class="data-table data-table--stack" data-testid="fleet-nodes">
+                        <caption class="visually-hidden">Nodes in the backup</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Node</th>
+                                <th scope="col">State</th>
+                                <th scope="col">Certificate</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var node in fleetBackup.Nodes ?? [])
+                            {
+                                <tr data-testid="@($"fleet-node-{node.Id}")">
+                                    <td class="col-primary">
+                                        <div>@(node.DisplayName ?? node.Id)</div>
+                                        <div class="model-card-id">@node.Id · uid @node.Uid[..Math.Min(8, node.Uid.Length)]…</div>
+                                    </td>
+                                    <td data-label="State">@FleetNodeState(node)</td>
+                                    <td data-label="Certificate">
+                                        @if (node.CertNotAfter is { } notAfter && notAfter <= DateTimeOffset.UtcNow && !node.Revoked)
+                                        {
+                                            <span class="state state--failed"><Icon Name="warning" /> Expired: re-pair with <code>join --rekey</code></span>
+                                        }
+                                        else if (node.CertNotAfter is { } valid)
+                                        {
+                                            <span>Valid until <span class="num">@UiFormat.RunTime(valid)</span></span>
+                                        }
+                                        else
+                                        {
+                                            <span class="muted">Not enrolled</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                @if (!fleetPreview.IsEmpty)
+                {
+                    <div class="callout callout--failed page-alert" role="alert" data-testid="fleet-not-empty">
+                        <Icon Name="state-failed" />
+                        <div class="callout-body">
+                            This master is not empty, so fleet recovery is refused (fleets are never merged):
+                            <ul>
+                                @foreach (string blocker in fleetPreview.Blockers)
+                                {
+                                    <li>@blocker</li>
+                                }
+                            </ul>
+                        </div>
+                    </div>
+                }
+                <div class="backup-actions section">
+                    <button type="button" class="btn btn-danger" data-testid="fleet-install" disabled="@(!fleetPreview.IsEmpty || _secrets?.Pki is null)"
+                            @onclick="() => _fleetConfirmOpen = true">
+                        Install backup and restart
+                    </button>
+                </div>
+                @if (_restoreError is not null)
+                {
+                    <div class="callout callout--failed" role="alert" data-testid="restore-error">
+                        <Icon Name="state-failed" /><div class="callout-body">@_restoreError</div>
+                    </div>
+                }
+            </section>
+
+            <ConfirmDialog @bind-Open="_fleetConfirmOpen" Title="Install this backup as the fleet's master?"
+                           ConfirmLabel="Install and restart" OnConfirm="InstallFleetAsync" TestId="fleet-dialog" ConfirmTestId="confirm-fleet"
+                           CloseOnConfirm="false" ConfirmDisabled="@(!_fleetOldMasterStopped)">
+                <ul class="restore-notes" data-testid="fleet-plan">
+                    <li>Writes the master identity, the CA, @((fleetBackup.Nodes ?? []).Count) node(s) with their pins and state, @fleetBackup.Models.Count model definition(s), the API keys and the Services list into this master's data directory.</li>
+                    @if (RunningCount > 0)
+                    {
+                        <li>Records the @RunningCount model(s) that were running, so each node starts the ones it no longer runs once it reconnects.</li>
+                    }
+                    <li>Then removes the recovery marker and restarts MirbadLLM in normal mode, where the takeover runs by itself and moves this master above every agent's epoch. A master that still runs would take the nodes back: stop it first.</li>
+                </ul>
+                <div class="field confirm-field form-check">
+                    <input id="fleet-old-master-stopped" type="checkbox" class="form-check-input" data-testid="fleet-old-master-stopped"
+                           checked="@_fleetOldMasterStopped" @onchange="e => _fleetOldMasterStopped = e.Value is true" />
+                    <label class="form-check-label" for="fleet-old-master-stopped">The previous master is stopped</label>
+                </div>
+                @if (_confirmError is not null)
+                {
+                    <div class="callout callout--failed" role="alert" data-testid="fleet-confirm-error">
+                        <Icon Name="state-failed" /><div class="callout-body">@_confirmError</div>
+                    </div>
+                }
+            </ConfirmDialog>
+        }
+        else if (Job is { } job)
+        {
+            <section class="section" aria-labelledby="progress-title" data-testid="restore-progress">
+                <div class="section-head">
+                    <h2 id="progress-title">Restore progress</h2>
+                    <span class="section-note" role="status" data-testid="restore-job-state">
+                        @JobStateText(job) · started <span class="num">@UiFormat.RunTime(job.StartedAt)</span>
+                    </span>
+                </div>
+                @if (job.Error is not null)
+                {
+                    <div class="callout callout--failed page-alert" role="alert"><Icon Name="state-failed" /><div class="callout-body">@job.Error</div></div>
+                }
+                @if (job.Notes.Count > 0)
+                {
+                    <ul class="restore-notes muted" data-testid="restore-notes">
+                        @foreach (string note in job.Notes)
+                        {
+                            <li>@note</li>
+                        }
+                    </ul>
+                }
+                <div class="panel panel--scroll-x">
+                    <table class="data-table data-table--stack" data-testid="restore-progress-table">
+                        <caption class="visually-hidden">Progress per model</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col">Model</th>
+                                <th scope="col">State</th>
+                                <th scope="col">Progress</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in Pager.Slice(job.Models, _progressPage, _progressSize))
+                            {
+                                var (cls, icon, label) = StateLook(row.State);
+                                <tr class="restore-progress-row" data-testid="@($"restore-row-{row.Id}")">
+                                    <td class="col-primary">
+                                        <div>@row.Name</div>
+                                        <div class="model-card-id">@row.Id</div>
+                                    </td>
+                                    <td data-label="State"><span class="state @cls"><Icon Name="@icon" /> @label</span></td>
+                                    <td data-label="Progress">
+                                        @if (row.State == RestoreModelState.Downloading)
+                                        {
+                                            <span class="num">@(row.Percent is { } p ? $"{p.ToString("F0", CultureInfo.InvariantCulture)}%" : UiFormat.Missing)</span>
+                                            <span class="num muted">@UiFormat.Bytes(row.BytesDone) of @(row.BytesTotal > 0 ? UiFormat.Bytes(row.BytesTotal) : "unknown size")</span>
+                                            <div class="progress-track" role="progressbar" aria-label="@($"Download progress for {row.Name}")"
+                                                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="@((row.Percent ?? 0).ToString("F0", CultureInfo.InvariantCulture))">
+                                                <div class="progress-fill" style="width:@((row.Percent ?? 0).ToString("F1", CultureInfo.InvariantCulture))%"></div>
+                                            </div>
+                                        }
+                                        @if (row.Detail is not null)
+                                        {
+                                            <span class="restore-detail">@row.Detail</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <Pager Total="job.Models.Count" @bind-Page="_progressPage" @bind-Size="_progressSize" QueryPrefix="progress" Noun="models" TestId="restore-progress-pager" />
+                <div class="backup-actions section">
+                    @if (job.IsRunning)
+                    {
+                        <button type="button" class="btn btn-outline-danger" data-testid="cancel-restore" @onclick="CancelRestoreAsync">
+                            <Icon Name="stop" /> Cancel restore
+                        </button>
+                        <span class="muted">The download in progress is cancelled; models already restored stay restored.</span>
+                    }
+                    else
+                    {
+                        <a class="btn btn-primary" href="/"><Icon Name="dashboard" /> Go to the Dashboard</a>
+                        <button type="button" class="btn btn-outline-secondary" data-testid="new-restore" @onclick="NewRestore">Restore another file</button>
+                    }
+                </div>
+            </section>
+        }
+        else if (_preview is null)
+        {
+            <section class="panel panel-body backup-panel" aria-labelledby="restore-title" data-testid="restore-form">
+                <h2 id="restore-title">Restore from a backup file</h2>
+                <div class="field">
+                    <span class="field-label" id="restore-mode-label">What to restore</span>
+                    <div class="segmented" role="radiogroup" aria-labelledby="restore-mode-label" data-testid="restore-mode">
+                        <label class="segmented-option">
+                            <input type="radio" name="restore-mode" data-testid="restore-mode-import" checked="@(_mode == RestoreMode.ConfigurationImport)"
+                                   @onchange="() => _mode = RestoreMode.ConfigurationImport" />
+                            <span><strong>Configuration import</strong><small>Bring model definitions, keys and the Services list into this master.</small></span>
+                        </label>
+                        <label class="segmented-option">
+                            <input type="radio" name="restore-mode" data-testid="restore-mode-fleet" checked="@(_mode == RestoreMode.FleetRecovery)"
+                                   disabled="@(Fleet?.IsActive != true)" @onchange="() => _mode = RestoreMode.FleetRecovery" />
+                            <span><strong>Fleet disaster recovery</strong><small>Restore identity, trust and placements on an empty master.</small></span>
+                        </label>
+                    </div>
+                    <span class="field-hint" data-testid="restore-mode-hint">
+                        @if (_mode == RestoreMode.FleetRecovery)
+                        {
+                            <span>Restores the whole fleet on this empty master: master identity, CA, nodes with their pins and state, models with placements, keys and the Services list. Needs a version-2 backup with its passphrase.</span>
+                        }
+                        else if (Fleet?.IsActive == true)
+                        {
+                            <span>Imports model definitions, tags, sources, API keys and the Services list. Never the CA, node trust or fencing data.</span>
+                        }
+                        else
+                        {
+                            <span>Imports model definitions, tags, sources, API keys and the Services list; a model keeps its node only when a node here has the same uid. Fleet recovery needs the master started in recovery mode on an empty data volume (<code>MirbadLLM__Recovery__Mode=FleetRestore</code>).</span>
+                        }
+                    </span>
+                </div>
+                <p class="muted">Nothing changes yet: the file is read and compared with this master first, and you choose what to restore.</p>
+                <div class="field">
+                    <label class="field-label" for="restore-file">Backup file</label>
+                    <InputFile id="restore-file" class="form-control restore-file-drop" accept=".json,application/json" OnChange="OnFileChosenAsync" data-testid="restore-file"
+                               aria-describedby="restore-file-hint" />
+                    <span class="field-hint" id="restore-file-hint">A <code>mirbadllm-backup-….json</code> file, from a download or the backup directory.</span>
+                </div>
+                <div class="field">
+                    <label class="field-label" for="restore-passphrase">Passphrase</label>
+                    <input type="password" class="form-control" id="restore-passphrase" data-testid="restore-passphrase" autocomplete="off"
+                           aria-describedby="restore-passphrase-hint" @bind="_restorePassphrase" />
+                    <span class="field-hint" id="restore-passphrase-hint">@(_mode == RestoreMode.FleetRecovery ? "Required: the CA and the API keys are in the encrypted section." : "Needed to restore the API keys. Leave it empty for a backup made without one.")</span>
+                </div>
+                <div class="field">
+                    <label class="field-label" for="restore-hf-token">Hugging Face token (optional)</label>
+                    <TokenPicker Id="restore-hf-token" TestId="restore-hf-token" DescribedBy="restore-hf-token-hint" @bind-Value="_hfTokenId" />
+                    <span class="field-hint" id="restore-hf-token-hint">Only for gated or private repos. A saved token from Access &gt; Tokens, used for this restore's downloads and never logged.</span>
+                </div>
+                <div class="backup-actions">
+                    <button type="button" class="btn btn-primary" data-testid="preview-restore" disabled="@(_fileBytes is null || _previewing)" @onclick="PreviewAsync">
+                        <Icon Name="upload" /> @(_previewing ? "Reading…" : "Preview restore")
+                    </button>
+                </div>
+                @if (_restoreError is not null)
+                {
+                    <div class="callout callout--failed" role="alert" data-testid="restore-error">
+                        <Icon Name="state-failed" /><div class="callout-body">@_restoreError</div>
+                    </div>
+                }
+            </section>
+        }
+        else
+        {
+            var preview = _preview;
+            <section class="section" aria-labelledby="preview-title" data-testid="restore-preview">
+                <div class="section-head">
+                    <h2 id="preview-title">What this backup holds</h2>
+                    <button type="button" class="btn btn-sm btn-ghost" data-testid="choose-another" @onclick="ResetPreview">Choose another file</button>
+                </div>
+                <div class="panel panel-body">
+                    <dl class="kv kv--wide" data-testid="preview-facts">
+                        <dt>Made</dt>
+                        <dd><span class="num">@UiFormat.RunTime(preview.CreatedAt)</span> on <code>@preview.HostName</code>, MirbadLLM <code>@preview.AppVersion</code></dd>
+                        <dt>Models</dt>
+                        <dd>
+                            <span class="num">@preview.Models.Count</span>:
+                            <span class="num">@preview.Models.Count(m => m.Change == RestoreModelChange.New)</span> new,
+                            <span class="num">@preview.Models.Count(m => m.Change == RestoreModelChange.Changed)</span> changed,
+                            <span class="num">@preview.Models.Count(m => m.Change == RestoreModelChange.Identical)</span> identical
+                        </dd>
+                        <dt>API keys</dt>
+                        <dd data-testid="preview-keys">
+                            @if (!preview.HasSecrets)
+                            {
+                                <span>None: the backup was made without a passphrase.</span>
+                            }
+                            else if (!preview.SecretsUnlocked)
+                            {
+                                <span>Encrypted; enter the passphrase and preview again to restore them.</span>
+                            }
+                            else
+                            {
+                                <span><span class="num">@preview.ApiKeysNew</span> new, <span class="num">@preview.ApiKeysExisting</span> already here; <span class="num">@BackupTokenCount</span> saved token@(BackupTokenCount == 1 ? "" : "s")</span>
+                            }
+                        </dd>
+                        <dt>Services</dt>
+                        <dd><span><span class="num">@preview.HostContainers</span> managed container@(preview.HostContainers == 1 ? "" : "s")@(BackupUnitCount > 0 ? $", {BackupUnitCount} managed service{(BackupUnitCount == 1 ? "" : "s")} on {_backup!.HostUnits!.Count} node{(_backup.HostUnits.Count == 1 ? "" : "s")}" : "")</span></dd>
+                        <dt>Running models</dt>
+                        <dd data-testid="preview-running">
+                            @if (_backup?.RunningModels is null)
+                            {
+                                <span>Not recorded in this backup.</span>
+                            }
+                            else
+                            {
+                                <span><span class="num">@RunningCount</span> of the backup's models were running when it was made.</span>
+                            }
+                        </dd>
+                        <dt>History</dt>
+                        <dd data-testid="preview-history">
+                            @if (_backup?.History is { } history)
+                            {
+                                <span><span class="num">@history.Benchmarks.Count</span> benchmark and <span class="num">@history.Tuning.Count</span> tuning result@(history.Tuning.Count == 1 ? "" : "s"), <span class="num">@history.StartupTimes.Count</span> start time@(history.StartupTimes.Count == 1 ? "" : "s")@(history.OmittedRuns > 0 ? $" ({history.OmittedRuns} older results were left out of the backup)" : "")</span>
+                            }
+                            else
+                            {
+                                <span>Not in this backup.</span>
+                            }
+                        </dd>
+                        @if (_backup?.AgentUpdatesAutomatic is bool automaticUpdates)
+                        {
+                            <dt>Agent updates</dt>
+                            <dd data-testid="preview-agent-updates">@(automaticUpdates ? "Automatic" : "Manual") in the backup.</dd>
+                        }
+                        @if (_backup?.BackupDestination is { } backupDestination)
+                        {
+                            <dt>Backup destination</dt>
+                            <dd data-testid="preview-destination">
+                                @if (DestinationToApply is not null)
+                                {
+                                    <span>Backups were going to <code>@backupDestination.Source</code>; the restore can connect it again@(backupDestination.Type == "smb" ? " (its password is in the encrypted section)" : "").</span>
+                                }
+                                else
+                                {
+                                    <span>Backups were going to <code>@backupDestination.Source</code>; re-enter the password to reconnect.</span>
+                                }
+                                <button type="button" class="btn btn-sm btn-ghost" data-testid="use-backup-destination" @onclick="() => UseBackupDestination(backupDestination)">
+                                    Use these settings
+                                </button>
+                            </dd>
+                        }
+                    </dl>
+                </div>
+            </section>
+
+            <section class="section" aria-labelledby="preview-models-title">
+                <div class="section-head">
+                    <h2 id="preview-models-title">Models</h2>
+                    <span class="section-note" data-testid="preview-selected"><span class="num">@_selected.Count</span> of <span class="num">@preview.Models.Count</span> selected</span>
+                </div>
+                <div class="panel panel--scroll-x">
+                    <table class="data-table data-table--stack" data-testid="preview-table">
+                        <caption class="visually-hidden">Models in the backup</caption>
+                        <thead>
+                            <tr>
+                                <th scope="col" class="col-check">
+                                    <input type="checkbox" class="form-check-input" aria-label="Select every model that can be restored" data-testid="select-all"
+                                           checked="@AllSelected" @onchange="ToggleAll" />
+                                </th>
+                                <th scope="col">Model</th>
+                                <th scope="col">Compared with this box</th>
+                                @if (ShowPlacement)
+                                {
+                                    <th scope="col">Node</th>
+                                }
+                                <th scope="col">Checkpoint</th>
+                                <th scope="col">Auto-start</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var m in Pager.Slice(preview.Models, _previewPage, _previewSize))
+                            {
+                                var model = m.Model;
+                                bool selectable = m.Problem is null;
+                                <tr class="@(_selected.Contains(model.Id) ? "is-selected" : null)" data-testid="@($"preview-row-{model.Id}")">
+                                    <td class="col-check">
+                                        <input type="checkbox" class="form-check-input" id="@($"restore-select-{model.Id}")" aria-label="@($"Restore {model.ServedName}")"
+                                               data-testid="@($"select-{model.Id}")" disabled="@(!selectable)" checked="@_selected.Contains(model.Id)"
+                                               @onchange="e => Toggle(model.Id, e.Value is true)" />
+                                    </td>
+                                    <td class="col-primary">
+                                        <div>@model.ServedName</div>
+                                        <div class="model-card-id">@model.Id</div>
+                                        <TagList Tags="model.Tags" />
+                                        @if (m.Problem is not null)
+                                        {
+                                            <span class="restore-detail validation-message" data-testid="@($"problem-{model.Id}")">@m.Problem</span>
+                                        }
+                                    </td>
+                                    <td data-label="Compared with this box" data-testid="@($"change-{model.Id}")">
+                                        @switch (m.Change)
+                                        {
+                                            case RestoreModelChange.New:
+                                                <span class="state state--ready"><Icon Name="plus" /> New</span>
+                                                break;
+                                            case RestoreModelChange.Changed:
+                                                <span class="state state--starting"><Icon Name="edit" /> Changed</span>
+                                                <span class="restore-detail">@string.Join(", ", m.ChangedFields)</span>
+                                                break;
+                                            default:
+                                                <span class="state state--stopped"><Icon Name="check" /> Identical</span>
+                                                break;
+                                        }
+                                    </td>
+                                    @if (ShowPlacement)
+                                    {
+                                        <td data-label="Node" data-testid="@($"placement-{model.Id}")">
+                                            @if (m.Placement is { } placement)
+                                            {
+                                                var (pcls, picon, plabel) = PlacementLook(placement);
+                                                <span class="state @pcls"><Icon Name="@picon" /> @plabel</span>
+                                                <span class="restore-detail">@placement.Detail</span>
+                                                <select class="form-select form-select-sm" aria-label="@($"Target node for {model.ServedName}")" data-testid="@($"target-{model.Id}")"
+                                                        value="@TargetValue(m)" @onchange="e => SetTarget(model.Id, e.Value?.ToString())">
+                                                    <option value="@UnplacedValue">Leave unplaced</option>
+                                                    @foreach (var node in preview.TargetNodes)
+                                                    {
+                                                        <option value="@node.Id">@node.Label@(node.Draining ? " (draining)" : "")</option>
+                                                    }
+                                                </select>
+                                                @if (TargetChoice(m) is { Discrete: true } discreteTarget && !KeepsBackupGpus(m, discreteTarget))
+                                                {
+                                                    <span class="restore-detail" data-testid="@($"target-gpus-{model.Id}")">GPUs on @discreteTarget.Id are chosen automatically (the largest equal cards); change them in the model editor after the restore.</span>
+                                                }
+                                            }
+                                        </td>
+                                    }
+                                    <td data-label="Checkpoint" data-testid="@($"checkpoint-{model.Id}")">
+                                        @if (m.Manual)
+                                        {
+                                            <span class="state state--failed"><Icon Name="warning" /> Manual</span>
+                                            <span class="restore-detail">No download source: copy <code>/models/@model.ModelPath</code> back by hand@(model.Placement is { } manualOn ? $", on node {manualOn.NodeId}" : ", once the model is placed").</span>
+                                        }
+                                        else if (m.NeedsDownload)
+                                        {
+                                            <span class="state state--starting"><Icon Name="download" /> Download</span>
+                                            <span class="restore-detail">
+                                                <span class="num">@DownloadSizeText(m)</span> from
+                                                @string.Join(", ", m.Sources.Where(s => !s.Present).Select(s => s.Source.RepoId))
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span class="state state--ready"><Icon Name="state-ready" /> On disk</span>
+                                        }
+                                    </td>
+                                    <td data-label="Auto-start" data-testid="@($"autostart-{model.Id}")">
+                                        @(model.AutoStart ? "Yes" : "No")
+                                        @if (_backup?.WasRunning(model.Id) == true)
+                                        {
+                                            <span class="restore-detail">Was running</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <Pager Total="preview.Models.Count" @bind-Page="_previewPage" @bind-Size="_previewSize" QueryPrefix="preview" Noun="models" TestId="preview-pager" />
+                @foreach (string backupNode in UnmatchedBackupNodes)
+                {
+                    <div class="field" data-testid="@($"group-target-field-{backupNode}")">
+                        <label class="field-label" for="@($"group-target-{backupNode}")">Models from the backup's node <code>@backupNode</code> (no node here has its uid)</label>
+                        <select class="form-select" id="@($"group-target-{backupNode}")" data-testid="@($"group-target-{backupNode}")"
+                                @onchange="e => SetGroupTarget(backupNode, e.Value?.ToString())">
+                            <option value="">Choose per model above</option>
+                            <option value="@UnplacedValue">Leave all unplaced</option>
+                            @foreach (var node in preview.TargetNodes)
+                            {
+                                <option value="@node.Id">Place all on @node.Label</option>
+                            }
+                        </select>
+                    </div>
+                }
+            </section>
+
+            @if (preview.Nodes.Count > 0)
+            {
+                <section class="section" aria-labelledby="preview-nodes-title" data-testid="preview-nodes">
+                    <div class="section-head">
+                        <h2 id="preview-nodes-title">Nodes</h2>
+                        <span class="section-note"><span class="num">@preview.Nodes.Count(n => n.SettingChanges.Count > 0)</span> with settings to apply</span>
+                    </div>
+                    <div class="panel panel--scroll-x">
+                        <table class="data-table data-table--stack" data-testid="preview-nodes-table">
+                            <caption class="visually-hidden">The backup's nodes compared with the nodes here</caption>
+                            <thead>
+                                <tr>
+                                    <th scope="col">Node in the backup</th>
+                                    <th scope="col">Settings</th>
+                                    <th scope="col">Storage, as reported</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var node in preview.Nodes)
+                                {
+                                    <tr data-testid="@($"preview-node-{node.BackupNodeId}")">
+                                        <td class="col-primary">
+                                            <div>@node.BackupNodeId</div>
+                                            <div class="model-card-id">@(node.LocalNodeId is null ? "No node here has its uid" : $"Same uid as '{node.LocalNodeId}' here")</div>
+                                        </td>
+                                        <td data-label="Settings" data-testid="@($"node-settings-{node.BackupNodeId}")">
+                                            @if (node.LocalNodeId is null)
+                                            {
+                                                <span class="muted">Not applied to any node.</span>
+                                            }
+                                            else if (node.SettingChanges.Count == 0)
+                                            {
+                                                <span class="state state--stopped"><Icon Name="check" /> Same</span>
+                                            }
+                                            else
+                                            {
+                                                <span class="state state--starting"><Icon Name="edit" /> @node.SettingChanges.Count to apply</span>
+                                                <span class="restore-detail">@string.Join("; ", node.SettingChanges)</span>
+                                            }
+                                        </td>
+                                        <td data-label="Storage" data-testid="@($"node-storage-{node.BackupNodeId}")">
+                                            @if (node.StorageDiffers)
+                                            {
+                                                <span class="state state--starting"><Icon Name="warning" /> Differs</span>
+                                            }
+                                            @foreach (string line in node.Storage)
+                                            {
+                                                <span class="restore-detail">@line</span>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="field-hint" data-testid="storage-guidance">
+                        Storage is shown, never changed: the models root, cache root, approved images, tag pulls, the download helper
+                        image and the port range live in each node's <code>agent.json</code>, which MirbadLLM cannot read or write. Set them on the node.
+                    </p>
+                </section>
+            }
+
+            <section class="section panel panel-body restore-options" aria-labelledby="restore-options-title">
+                <h2 id="restore-options-title">Options</h2>
+                @if (SelectedExisting > 0)
+                {
+                    <div class="field">
+                        <span class="field-label" id="existing-label">Models that already exist here (<span class="num">@SelectedExisting</span> selected)</span>
+                        <div class="segmented" role="radiogroup" aria-labelledby="existing-label" data-testid="existing-mode">
+                            <label class="segmented-option">
+                                <input type="radio" name="existing-mode" data-testid="existing-replace" checked="@_replaceExisting" @onchange="() => _replaceExisting = true" />
+                                <span>Replace with the backup's</span>
+                            </label>
+                            <label class="segmented-option">
+                                <input type="radio" name="existing-mode" data-testid="existing-skip" checked="@(!_replaceExisting)" @onchange="() => _replaceExisting = false" />
+                                <span>Keep what's here</span>
+                            </label>
+                        </div>
+                    </div>
+                }
+                <div class="form-check">
+                    <input type="checkbox" class="form-check-input" id="import-keys" data-testid="import-keys" disabled="@(!HasSecretsToImport)"
+                           checked="@(_importKeys && HasSecretsToImport)" @onchange="e => _importKeys = e.Value is true" />
+                    <label class="form-check-label" for="import-keys">
+                        Import API keys (<span class="num">@preview.ApiKeysNew</span> new; keys already here are kept, never duplicated)
+                        @if (BackupTokenCount > 0)
+                        {
+                            <span> and saved tokens (<span class="num">@BackupTokenCount</span>; a token whose name is in use here is skipped)</span>
+                        }
+                    </label>
+                </div>
+                @if (_backup?.HostServices is not null || BackupUnitCount > 0)
+                {
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="import-services" data-testid="import-services"
+                               checked="@_importServices" @onchange="e => _importServices = e.Value is true" />
+                        <label class="form-check-label" for="import-services">
+                            Restore the Services list (<span class="num">@preview.HostContainers</span> managed container@(preview.HostContainers == 1 ? "" : "s")@(BackupUnitCount > 0 ? $", {BackupUnitCount} managed service{(BackupUnitCount == 1 ? "" : "s")} added back where missing" : ""))
+                        </label>
+                    </div>
+                }
+                @if (RunningCount > 0)
+                {
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="start-running" data-testid="start-running"
+                               checked="@_startRunning" @onchange="e => _startRunning = e.Value is true" />
+                        <label class="form-check-label" for="start-running">
+                            Start the models that were running (<span class="num">@RunningCount</span>), one at a time per node like auto-start models; one whose memory doesn't fit is left stopped
+                        </label>
+                    </div>
+                }
+                @if (HasNodeSettings)
+                {
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="apply-node-settings" data-testid="apply-node-settings"
+                               checked="@_applyNodeSettings" @onchange="e => _applyNodeSettings = e.Value is true" />
+                        <label class="form-check-label" for="apply-node-settings">
+                            Apply node settings (<span class="num">@preview.Nodes.Count(n => n.SettingChanges.Count > 0)</span> node@(preview.Nodes.Count(n => n.SettingChanges.Count > 0) == 1 ? "" : "s") with the same uid: reserves, default images, starts, labels, name@(_backup?.AgentUpdatesAutomatic is not null ? "; and the agent-update setting" : "")). Approval, pins and addresses stay as they are.
+                        </label>
+                    </div>
+                }
+                @if (_backup?.History is not null)
+                {
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="import-history" data-testid="import-history"
+                               checked="@_importHistory" @onchange="e => _importHistory = e.Value is true" />
+                        <label class="form-check-label" for="import-history">
+                            Restore benchmark, tuning and start-time history (results already here are kept)
+                        </label>
+                    </div>
+                }
+                @if (DestinationToApply is not null)
+                {
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="apply-destination" data-testid="apply-destination"
+                               checked="@_applyDestination" @onchange="e => _applyDestination = e.Value is true" />
+                        <label class="form-check-label" for="apply-destination">
+                            Connect the backup destination <code>@_backup!.BackupDestination!.Source</code> again (mounted on @HostNode; future backups go there)
+                        </label>
+                    </div>
+                }
+                <div class="backup-actions">
+                    <button type="button" class="btn btn-primary" data-testid="restore-button" disabled="@(_selected.Count == 0)" @onclick="() => _confirmOpen = true">
+                        Restore @_selected.Count @(_selected.Count == 1 ? "model" : "models")
+                    </button>
+                </div>
+                @if (_restoreError is not null)
+                {
+                    <div class="callout callout--failed" role="alert" data-testid="restore-error">
+                        <Icon Name="state-failed" /><div class="callout-body">@_restoreError</div>
+                    </div>
+                }
+            </section>
+
+            <ConfirmDialog @bind-Open="_confirmOpen" Title="@($"Restore {_selected.Count} {(_selected.Count == 1 ? "model" : "models")}?")"
+                           ConfirmLabel="Restore" OnConfirm="StartRestoreAsync" TestId="restore-dialog" ConfirmTestId="confirm-restore"
+                           CloseOnConfirm="false">
+                <ul class="restore-notes" data-testid="restore-plan">
+                    @foreach (string line in PlanLines())
+                    {
+                        <li>@line</li>
+                    }
+                </ul>
+                @if (_confirmError is not null)
+                {
+                    <div class="callout callout--failed" role="alert" data-testid="restore-confirm-error">
+                        <Icon Name="state-failed" /><div class="callout-body">@_confirmError</div>
+                    </div>
+                }
+            </ConfirmDialog>
+        }
+            </div>
+        </div>
+    </ChildContent>
+</Tabs>
+
+@code {
+    private static readonly IReadOnlyList<TabItem> TabItems = [new("backup", "Back up"), new("restore", "Restore")];
+
+    private string _tab = "backup";
+    private BackupScheduleStatus _schedule = null!;
+    private int _filesPage = 1;
+    private int? _filesSize;
+    private int _previewPage = 1;
+    private int? _previewSize;
+    private int _progressPage = 1;
+    private int? _progressSize;
+    private IJSObjectReference? _module;
+
+    // Back up
+    private string _passphrase = "";
+    private string _passphraseConfirm = "";
+    private bool _downloading;
+    private bool _runningNow;
+    private string? _downloadError;
+    private DownloadDone? _downloaded;
+
+    // Restore
+    private byte[]? _fileBytes;
+    private string _restorePassphrase = "";
+    private string? _hfTokenId;
+    private bool _previewing;
+    private string? _restoreError;
+    private BackupDocument? _backup;
+    private BackupSecrets? _secrets;
+    private RestorePreview? _preview;
+    private bool _fleetOldMasterStopped;
+    private readonly HashSet<string> _selected = new(StringComparer.Ordinal);
+    private bool _replaceExisting = true;
+    private bool _importKeys = true;
+
+    /// <summary>Saved tokens in the unlocked backup's secrets.</summary>
+    private int BackupTokenCount => _secrets?.Tokens?.Count ?? 0;
+
+    private bool HasSecretsToImport => (_preview?.ApiKeysNew ?? 0) > 0 || BackupTokenCount > 0;
+    private bool _importServices = true;
+    private bool _startRunning = true;
+    private bool _applyNodeSettings = true;
+    private bool _importHistory = true;
+    private bool _applyDestination = true;
+    private bool _confirmOpen;
+    private string? _confirmError;
+
+    /// <summary>The backup's models that were running when it was made.</summary>
+    private int RunningCount => _backup is { } b ? b.Models.Count(m => b.WasRunning(m.Id)) : 0;
+
+    /// <summary>Managed systemd/Windows services in the backup, over every node.</summary>
+    private int BackupUnitCount => _backup?.HostUnits?.Values.Sum(u => u.Count) ?? 0;
+
+    private bool HasNodeSettings => _preview is { } p && (p.Nodes.Any(n => n.SettingChanges.Count > 0) || _backup?.AgentUpdatesAutomatic is not null);
+
+    /// <summary>
+    /// The destination the restore can apply again: the encrypted settings when they hold what the share needs (an SMB
+    /// password, or NFS), else an NFS description, which needs no password. Null when it cannot be applied as it stands.
+    /// </summary>
+    private BackupDestinationRequest? DestinationToApply =>
+        _destinations is null || _backup?.BackupDestination is not { } info ? null
+        : _secrets?.BackupDestination is { } kept && (kept.Kind == BackupDestinationKind.Nfs || !string.IsNullOrEmpty(kept.Password)) ? kept
+        : info.Type == "nfs" ? BackupDestinationManager.FromInfo(info, null)
+        : null;
+
+    private bool NeedsServicesAuthorization =>
+        (_importServices && (_backup?.HostServices is not null || BackupUnitCount > 0)) || (_applyDestination && DestinationToApply is not null);
+
+    // Restore modes (design §9.4, MN-113)
+    private const string UnplacedValue = "__unplaced__";
+    private RestoreMode _mode = RestoreMode.ConfigurationImport;
+    private readonly Dictionary<string, string?> _targets = new(StringComparer.Ordinal);
+    private MasterEmptiness? _fleetPreview;
+    private bool _fleetConfirmOpen;
+
+    /// <summary>
+    /// Fleet recovery, composed only by the P2 host (MN-130); null in the single-box wiring. Resolved once in
+    /// <see cref="OnInitialized"/>: <see cref="DisposeAsync"/> runs while the request scope is being disposed, where a lookup
+    /// throws <see cref="ObjectDisposedException"/> (W9 review MN-132: it aborted a prerendered response).
+    /// </summary>
+    private FleetRecovery? Fleet { get; set; }
+
+    private bool ShowPlacement => _preview is { TargetNodes.Count: > 0 };
+
+    /// <summary>Backup nodes with models that need a target (no node here with the same uid).</summary>
+    private IEnumerable<string> UnmatchedBackupNodes =>
+        _preview is null || !ShowPlacement
+            ? []
+            : _preview.Models.Where(m => m.Placement is { NeedsTarget: true, BackupNodeId: not null })
+                .Select(m => m.Placement!.BackupNodeId!).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
+
+    private sealed record DownloadDone(string FileName, long Bytes, bool HasSecrets, string? Url);
+
+    private RestoreJobSnapshot? Job => Restores.Current;
+
+    protected override void OnInitialized()
+    {
+        Fleet = ServiceProvider.GetService<FleetRecovery>();
+        _schedule = Scheduler.GetStatus();
+        Restores.Changed += OnRestoreChanged;
+        if (Restores.Current is not null)
+        {
+            _tab = "restore";
+        }
+
+        if (Fleet is { IsActive: true } fleet)
+        {
+            // Recovery mode serves the Restore tab for fleet recovery; configuration import stays available.
+            _tab = "restore";
+            _mode = RestoreMode.FleetRecovery;
+            fleet.Changed += OnFleetChanged;
+        }
+    }
+
+    private void OnFleetChanged(FleetRecoveryStatus status) => _ = InvokeAsync(StateHasChanged);
+
+    private void OnTabSelected(string tab)
+    {
+        _tab = tab;
+        if (tab == "backup")
+        {
+            _schedule = Scheduler.GetStatus();
+        }
+    }
+
+    private void OnRestoreChanged(RestoreJobSnapshot snapshot) => _ = InvokeAsync(StateHasChanged);
+
+    // --- Back up ---
+
+    private bool PassphraseMismatch => _passphraseConfirm.Length > 0 && !string.Equals(_passphrase, _passphraseConfirm, StringComparison.Ordinal);
+
+    private bool CanDownload => !_downloading &&
+        (_passphrase.Length == 0 || (_passphrase.Length >= 8 && string.Equals(_passphrase, _passphraseConfirm, StringComparison.Ordinal)));
+
+    private int StrengthLevel
+    {
+        get
+        {
+            if (_passphrase.Length == 0) return 0;
+            if (_passphrase.Length < 8) return 1;
+            int classes = new[] { _passphrase.Any(char.IsLower), _passphrase.Any(char.IsUpper), _passphrase.Any(char.IsDigit), _passphrase.Any(c => !char.IsLetterOrDigit(c)) }.Count(x => x);
+            return _passphrase.Length >= 16 || (_passphrase.Length >= 12 && classes >= 3) ? 4 : _passphrase.Length >= 12 || classes >= 3 ? 3 : 2;
+        }
+    }
+
+    /// <summary>A rough length/variety hint, not a dictionary or password-cracking estimate.</summary>
+    private string StrengthText => StrengthLevel switch
+    {
+        0 => "Optional. With one, the API keys are included, encrypted (AES-256-GCM, key from PBKDF2-SHA256).",
+        1 => "Too short: use at least 8 characters (12 or more is better).",
+        4 => "Strength: Strong. Good.",
+        3 => "Strength: Fair. A longer passphrase of several words is stronger.",
+        _ => "Strength: Weak. A longer passphrase of several words is stronger.",
+    };
+
+    private async Task DownloadAsync()
+    {
+        _downloadError = null;
+        _downloaded = null;
+        _downloading = true;
+        try
+        {
+            string? passphrase = _passphrase.Length == 0 ? null : _passphrase;
+            var document = await Task.Run(() => Backups.CreateAsync(passphrase));
+            byte[] content = BackupService.Serialize(document);
+            string fileName = BackupService.FileName(document);
+            string url = $"api/backup/download/{DownloadTokens.Issue(content, fileName)}";
+
+            bool clicked = false;
+            try
+            {
+                _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./interop.js");
+                if (_module is not null)
+                {
+                    clicked = await _module.InvokeAsync<bool>("downloadUrl", url, fileName);
+                }
+            }
+            catch (Exception ex) when (ex is JSException or JSDisconnectedException or InvalidOperationException)
+            {
+                clicked = false;
+            }
+
+            _downloaded = new DownloadDone(fileName, content.Length, document.Secrets is not null, clicked ? null : url);
+            _passphrase = "";
+            _passphraseConfirm = "";
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _downloadError = $"The backup could not be created: {ex.Message}";
+        }
+        finally
+        {
+            _downloading = false;
+        }
+    }
+
+    private async Task RunNowAsync()
+    {
+        _runningNow = true;
+        try
+        {
+            await Task.Run(() => Scheduler.RunNowAsync());
+        }
+        finally
+        {
+            _runningNow = false;
+            _schedule = Scheduler.GetStatus();
+        }
+    }
+
+    // --- Destination (NAS share) ---
+
+    private IBackupDestinationManager? _destinations;
+    private BackupDestinationStatus? _destination;
+    private BackupDestinationKind _destKind = BackupDestinationKind.Local;
+    private BackupDestinationRequest _dest = new();
+    private BackupDestinationTestResult? _destTest;
+    private bool _destTesting;
+    private bool _destSaveOpen;
+    private bool _destDisconnectOpen;
+    private string? _destError;
+    private bool _destLoginEnabled;
+    private bool _destPasswordKept = true;
+    private string _clientKey = "unknown";
+    private System.Security.Claims.ClaimsPrincipal? _user;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _destinations = ServiceProvider.GetService<IBackupDestinationManager>();
+        _destLoginEnabled = ServiceProvider.GetService<IAdminReauthenticator>()?.LoginEnabled ?? false;
+        var caller = await AdminCallers.ResolveAsync(ServiceProvider);
+        _clientKey = caller.ClientKey;
+        _user = caller.User;
+        await LoadHostNodeAsync();
+        await LoadDestinationAsync(prefill: true);
+    }
+
+    private async Task LoadDestinationAsync(bool prefill)
+    {
+        if (_destinations is null)
+        {
+            _destination = new BackupDestinationStatus(false, BackupDestinationManager.AgentMissingMessage, BackupDestinationKind.Local, null,
+                BackupDestinationManager.HostPath, false, null, null, null, null, null, false);
+            return;
+        }
+
+        _destination = await _destinations.GetStatusAsync();
+        _destPasswordKept = _destination.Kind != BackupDestinationKind.Smb || (await _destinations.ExportForBackupAsync())?.Password is not null;
+        if (prefill)
+        {
+            Prefill(_destination.Kind, _destination.Configured);
+        }
+    }
+
+    /// <summary>Fills the form from a configuration (never a password: the NAS password is not kept by MirbadLLM).</summary>
+    private void Prefill(BackupDestinationKind kind, BackupDestinationInfo? info)
+    {
+        _destKind = kind;
+        _dest = new BackupDestinationRequest { Kind = kind == BackupDestinationKind.Local ? BackupDestinationKind.Smb : kind };
+        if (info is not null)
+        {
+            _dest.Server = info.Server;
+            _dest.Share = info.Share;
+            _dest.Subfolder = info.Subfolder;
+            _dest.Username = info.Username;
+            _dest.Domain = info.Domain;
+            if (kind == BackupDestinationKind.Smb && info.Version.Length > 0)
+            {
+                _dest.SmbVersion = info.Version;
+            }
+            else if (kind == BackupDestinationKind.Nfs && info.Version.Length > 0)
+            {
+                _dest.NfsVersion = info.Version;
+            }
+        }
+    }
+
+    private void SetDestinationKind(BackupDestinationKind kind)
+    {
+        _destKind = kind;
+        _destTest = null;
+        _destError = null;
+        if (kind != BackupDestinationKind.Local)
+        {
+            _dest.Kind = kind;
+        }
+    }
+
+    private bool DestinationComplete =>
+        _destKind != BackupDestinationKind.Local
+        && !string.IsNullOrWhiteSpace(_dest.Server)
+        && !string.IsNullOrWhiteSpace(_dest.Share)
+        && (_destKind == BackupDestinationKind.Nfs || (!string.IsNullOrWhiteSpace(_dest.Username) && !string.IsNullOrEmpty(_dest.Password)));
+
+    /// <summary>What will be mounted, as the agent will write it: //server/share[/subfolder] or server:/export[/subfolder].</summary>
+    private string SourcePreview
+    {
+        get
+        {
+            string server = _dest.Server.Trim();
+            string share = _dest.Share.Trim();
+            string sub = string.IsNullOrWhiteSpace(_dest.Subfolder) ? "" : "/" + _dest.Subfolder.Trim().Trim('/');
+            return _destKind == BackupDestinationKind.Smb ? $"//{server}/{share}{sub}" : $"{server}:{share.TrimEnd('/')}{sub}";
+        }
+    }
+
+    private BackupDestinationRequest CurrentRequest()
+    {
+        _dest.Kind = _destKind;
+        return _dest;
+    }
+
+    private async Task TestDestinationAsync()
+    {
+        if (_destinations is null || !DestinationComplete)
+        {
+            return;
+        }
+
+        _destTest = null;
+        _destTesting = true;
+        try
+        {
+            _destTest = await _destinations.TestAsync(CurrentRequest());
+        }
+        finally
+        {
+            _destTesting = false;
+        }
+    }
+
+    private void OpenSave()
+    {
+        _destError = null;
+
+        _destSaveOpen = true;
+    }
+
+    private void OpenDisconnect()
+    {
+        _destError = null;
+
+        _destDisconnectOpen = true;
+    }
+
+    private void ClearDestinationError()
+    {
+        _destError = null;
+    }
+
+    private async Task SaveDestinationAsync()
+    {
+        if (_destinations is null)
+        {
+            return;
+        }
+
+        _destError = null;
+        try
+        {
+            _destination = await _destinations.ApplyAsync(CurrentRequest(), _user, _clientKey);
+            _destPasswordKept = true;
+            _destSaveOpen = false;
+            _destTest = null;
+            _dest.Password = null;
+            Prefill(_destination.Kind, _destination.Configured);
+            _schedule = Scheduler.GetStatus();
+        }
+        catch (AdminReauthenticationException ex)
+        {
+            _destError = ex.Message;
+        }
+        catch (BackupDestinationException ex)
+        {
+            _destError = ex.Message;
+        }
+    }
+
+    private async Task DisconnectDestinationAsync()
+    {
+        if (_destinations is null)
+        {
+            return;
+        }
+
+        _destError = null;
+        try
+        {
+            _destination = await _destinations.DisconnectAsync(_user, _clientKey);
+            _destDisconnectOpen = false;
+            Prefill(_destination.Kind, _destination.Configured);
+            _schedule = Scheduler.GetStatus();
+        }
+        catch (AdminReauthenticationException ex)
+        {
+            _destError = ex.Message;
+        }
+        catch (BackupDestinationException ex)
+        {
+            _destError = ex.Message;
+        }
+    }
+
+    /// <summary>From a restore preview: fill the destination form with the backup's share (the password must be typed again).</summary>
+    private void UseBackupDestination(BackupDestinationInfo info)
+    {
+        var kind = info.Type == "nfs" ? BackupDestinationKind.Nfs : BackupDestinationKind.Smb;
+        Prefill(kind, info);
+        _destTest = null;
+        OnTabSelected("backup");
+    }
+
+    // --- Setup checklist ---
+
+    /// <summary>How much one setup item matters: it stops backups, it weakens them, or it is an option not taken.</summary>
+    public enum SetupLevel
+    {
+        Needed,
+        Recommended,
+        Optional,
+    }
+
+    /// <summary>One setup problem in operator words: what is wrong, how to fix it, and the raw message behind it.</summary>
+    public sealed record SetupItem(string TestId, SetupLevel Level, string Title, RenderFragment Fix, string? Details);
+
+    /// <summary>The node MirbadLLM (the controller) runs on, where backups are written and shares are mounted.</summary>
+    private string HostNode { get; set; } = MirbadLLM.Orchestration.RegistryMigrationOptions.DefaultBootstrapNodeId;
+
+    private async Task LoadHostNodeAsync()
+    {
+        string id = ServiceProvider.GetService<IOptions<MirbadLLM.Orchestration.RegistryMigrationOptions>>()?.Value.EffectiveBootstrapNodeId
+            ?? MirbadLLM.Orchestration.RegistryMigrationOptions.DefaultBootstrapNodeId;
+        HostNode = id;
+        if (ServiceProvider.GetService<INodeRegistry>() is { } nodes)
+        {
+            try
+            {
+                if (await nodes.GetAsync(id) is { DisplayName: { Length: > 0 } name })
+                {
+                    HostNode = name;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // The id still names the node.
+            }
+        }
+    }
+
+    /// <summary>Where backups end up, naming the node (the status record's own text says "this DGX").</summary>
+    private string DescribeDestination(BackupDestinationStatus status)
+    {
+        if (status.Kind == BackupDestinationKind.Local || status.Configured is null)
+        {
+            return status.ContainerSeesShare
+                ? status.Describe()
+                : $"{HostNode}'s own disk, at {status.HostPath}";
+        }
+
+        if (!status.ContainerSeesShare && status.HostMounted)
+        {
+            return $"{status.Configured.Source} (mounted on {HostNode}, not yet visible to MirbadLLM)";
+        }
+
+        return status.Describe();
+    }
+
+    /// <summary>Every setup problem on the Back up tab, most serious first. Empty when backups are fully set up.</summary>
+    private List<SetupItem> SetupItems()
+    {
+        var items = new List<SetupItem>();
+        if (!_schedule.DirectoryCheck.Ready)
+        {
+            if (!_schedule.Enabled)
+            {
+                items.Add(new SetupItem("backup-directory-problem", SetupLevel.Recommended, "Scheduled backups are off",
+                    Fix(@<span>Set <code>MirbadLLM:Backup:Directory</code> (the <code>MIRBADLLM_BACKUPS</code> mount in <code>deploy/.env</code>) and restart MirbadLLM. You can still download a backup by hand below.</span>),
+                    _schedule.DirectoryCheck.Problem));
+            }
+            else
+            {
+                items.Add(new SetupItem("backup-directory-problem", SetupLevel.Needed, "MirbadLLM can't write to its backup directory",
+                    Fix(@<span>Mount a host directory at <code>@_schedule.DirectoryCheck.Path</code>, writable by uid 1654 (<code>MIRBADLLM_BACKUPS</code> in <code>deploy/.env</code>), then restart MirbadLLM. Until then scheduled backups and Back up now are skipped.</span>),
+                    _schedule.DirectoryCheck.Problem));
+            }
+        }
+
+        if (_destination is { } destination)
+        {
+            if (destination.AgentAvailable && destination.ShareMissing)
+            {
+                items.Add(destination.HostMounted
+                    ? new SetupItem("destination-share-missing", SetupLevel.Needed, $"The NAS share is mounted on {HostNode} but MirbadLLM can't see it",
+                        Fix(@<span>Its <code>/backups</code> volume needs mount propagation: redeploy MirbadLLM with this version's <code>deploy/compose.yaml</code> (or restart the controller). Scheduled backups are skipped until then, so nothing lands on the local disk by mistake.</span>),
+                        null)
+                    : new SetupItem("destination-share-missing", SetupLevel.Needed, "The NAS share is not mounted",
+                        Fix(@<span>Check that the NAS is on and reachable from @HostNode, then save the destination again. Until then scheduled backups are skipped.</span>),
+                        null));
+            }
+
+            if (destination.LastError is not null)
+            {
+                items.Add(new SetupItem("destination-last-error", SetupLevel.Needed, "The last change to the backup share failed",
+                    Fix(@<span>Check the share's settings below and test the connection, then save again.</span>),
+                    destination.LastError));
+            }
+
+            if (destination.Warning is not null)
+            {
+                items.Add(new SetupItem("destination-warning", SetupLevel.Recommended, "The backup share needs a look",
+                    Fix(@<span>@destination.Warning</span>),
+                    null));
+            }
+
+            if (!destination.AgentAvailable)
+            {
+                items.Add(new SetupItem("destination-agent-missing", SetupLevel.Optional, $"A NAS share can't be set up on {HostNode} yet",
+                    Fix(@<span>Backups stay on @(HostNode)'s own disk, which is lost if the node is reinstalled. To write them to a NAS, install or update the host agent on @HostNode: <code>sudo bash deploy/hostd/install-hostd.sh</code></span>),
+                    destination.AgentProblem));
+            }
+        }
+
+        if (_schedule.Enabled && !_schedule.PassphraseConfigured)
+        {
+            items.Add(new SetupItem("scheduled-no-passphrase", SetupLevel.Recommended, "Scheduled backups carry no secrets",
+                Fix(@<span>Without <code>MirbadLLM:Backup:Passphrase</code> they have no encrypted section, so they leave out the API keys, the saved tokens, the backup share's password and the CA: a restore from them needs new keys and tokens, the share password typed again, and fleet recovery is not possible. Set <code>MIRBADLLM_BACKUP_PASSPHRASE</code> in <code>deploy/.env</code> and redeploy.</span>),
+                null));
+        }
+
+        if (_destination is { Kind: BackupDestinationKind.Smb } && !_destPasswordKept)
+        {
+            items.Add(new SetupItem("destination-password-not-kept", SetupLevel.Recommended, "Backups don't carry the share's password yet",
+                Fix(@<span>MirbadLLM keeps the NAS password (encrypted) only from the next time the destination is saved. Enter the password and save the destination once, so backups with a passphrase can reconnect the share on restore.</span>),
+                null));
+        }
+
+        return [.. items.OrderBy(i => i.Level)];
+    }
+
+    private static RenderFragment Fix(RenderFragment fragment) => fragment;
+
+    private static (string Class, string Icon, string Label) SetupLook(SetupLevel level) => level switch
+    {
+        SetupLevel.Needed => ("state--failed", "state-failed", "Needed"),
+        SetupLevel.Recommended => ("state--starting", "warning", "Recommended"),
+        _ => ("state--stopped", "info", "Optional"),
+    };
+
+    private static readonly string[] RestoreStepLabels = ["Choose a backup file", "Pick what to restore", "Restore"];
+
+    /// <summary>Where the restore flow is: the file, then the choice of models and options, then the run.</summary>
+    private static RenderFragment RestoreSteps(int current) => __builder =>
+    {
+        <ol class="wizard-steps restore-steps" style="--wizard-count: 3" aria-label="Restore steps" data-testid="restore-steps">
+            @for (int i = 0; i < RestoreStepLabels.Length; i++)
+            {
+                string state = i < current ? "done" : i == current ? "current" : "todo";
+                <li class="wizard-step wizard-step--@state" aria-current="@(state == "current" ? "step" : null)">
+                    <span class="wizard-step-btn restore-step">
+                        <span class="wizard-step-num" aria-hidden="true">
+                            @if (state == "done")
+                            {
+                                <Icon Name="check" />
+                            }
+                            else
+                            {
+                                @(i + 1)
+                            }
+                        </span>
+                        <span class="wizard-step-text"><span class="wizard-step-label">@RestoreStepLabels[i]</span></span>
+                    </span>
+                </li>
+            }
+        </ol>
+    };
+
+    /// <summary>The one place setup problems are shown: a checklist, each item with its fix and the raw message folded away.</summary>
+    private RenderFragment SetupChecklist() => __builder =>
+    {
+        var items = SetupItems();
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        int needed = items.Count(i => i.Level == SetupLevel.Needed);
+        <div class="hub-block setup-checklist" role="group" aria-labelledby="setup-title" data-testid="setup-checklist">
+            <div class="setup-head">
+                <h3 id="setup-title" class="hub-subtitle">@(needed > 0 ? "Setup needed" : "Worth setting up")</h3>
+                <span class="setup-count" data-testid="setup-count">
+                    @(needed > 0 ? $"{needed} of {items.Count} item{(items.Count == 1 ? "" : "s")} stop{(needed == 1 ? "s" : "")} backups" : $"{items.Count} item{(items.Count == 1 ? "" : "s")} to consider")
+                </span>
+            </div>
+            <ul class="setup-list">
+                @foreach (var item in items)
+                {
+                    var (cls, icon, label) = SetupLook(item.Level);
+                    <li class="setup-item" data-testid="@item.TestId" data-level="@item.Level.ToString().ToLowerInvariant()">
+                        <span class="state @cls setup-state"><Icon Name="@icon" /> @label</span>
+                        <div class="setup-body">
+                            <h4 class="setup-title">@item.Title</h4>
+                            <p class="setup-fix">@item.Fix</p>
+                            @if (item.Details is not null)
+                            {
+                                <details class="setup-details">
+                                    <summary>Details</summary>
+                                    <p>@item.Details</p>
+                                </details>
+                            }
+                        </div>
+                    </li>
+                }
+            </ul>
+        </div>
+    };
+
+    private static (string Class, string Icon, string Label) DestinationLook(BackupDestinationStatus status)
+    {
+        if (status.Kind == BackupDestinationKind.Local || status.Configured is null)
+        {
+            return status.ContainerSeesShare ? ("state--ready", "state-ready", "Network share") : ("state--stopped", "server", "Local disk");
+        }
+
+        if (status.ContainerSeesShare)
+        {
+            return ("state--ready", "state-ready", "Connected");
+        }
+
+        return status.HostMounted ? ("state--starting", "warning", "Not visible yet") : ("state--failed", "state-failed", "Not mounted");
+    }
+
+    // --- Restore ---
+
+    private async Task OnFileChosenAsync(InputFileChangeEventArgs e)
+    {
+        _restoreError = null;
+        _fileBytes = null;
+        try
+        {
+            await using var stream = e.File.OpenReadStream(BackupService.MaxFileBytes);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            _fileBytes = buffer.ToArray();
+        }
+        catch (IOException ex)
+        {
+            _restoreError = $"The file could not be read: {ex.Message}";
+        }
+    }
+
+    private async Task PreviewAsync()
+    {
+        if (_fileBytes is null)
+        {
+            return;
+        }
+
+        _restoreError = null;
+        _previewing = true;
+        try
+        {
+            byte[] bytes = _fileBytes;
+            string passphrase = _restorePassphrase;
+            var backup = BackupService.Parse(bytes);
+            BackupSecrets? secrets = null;
+            if (backup.Secrets is not null && passphrase.Length > 0)
+            {
+                secrets = await Task.Run(() => BackupService.DecryptSecrets(backup, passphrase));
+            }
+
+            if (_mode == RestoreMode.FleetRecovery && Fleet is { } fleet)
+            {
+                FleetRecovery.ValidateBackup(backup, secrets);
+                var emptiness = await fleet.CheckEmptinessAsync();
+                _backup = backup;
+                _secrets = secrets;
+                _fleetPreview = emptiness; // last: it switches the page to the fleet preview
+                return;
+            }
+
+            var preview = await Planner.PreviewAsync(backup, secrets, await PickedTokenAsync());
+            _backup = backup;
+            _secrets = secrets;
+            _targets.Clear();
+            _selected.Clear();
+            foreach (var m in preview.Models.Where(m => m.Problem is null))
+            {
+                _selected.Add(m.Model.Id);
+            }
+
+            _importKeys = preview.ApiKeysNew > 0 || (secrets?.Tokens?.Count ?? 0) > 0;
+            _importServices = backup.HostServices is not null || backup.HostUnits is { Count: > 0 };
+            _startRunning = true;
+            _applyNodeSettings = true;
+            _importHistory = true;
+            _applyDestination = true;
+            _preview = preview; // last: it switches the page to the preview, whose options must be set by then
+        }
+        catch (Exception ex) when (ex is BackupFormatException or BackupPassphraseException or FleetRecoveryException or InvalidOperationException)
+        {
+            _restoreError = ex.Message;
+        }
+        finally
+        {
+            _previewing = false;
+            _restorePassphrase = "";
+        }
+    }
+
+    private void ResetPreview()
+    {
+        _preview = null;
+        _fleetPreview = null;
+        _targets.Clear();
+        _backup = null;
+        _secrets = null;
+        _fileBytes = null;
+        _restoreError = null;
+        _selected.Clear();
+    }
+
+    private bool AllSelected => _preview is not null && _preview.Models.Where(m => m.Problem is null).All(m => _selected.Contains(m.Model.Id));
+
+    private int SelectedExisting => _preview?.Models.Count(m => m.Change != RestoreModelChange.New && _selected.Contains(m.Model.Id)) ?? 0;
+
+    private void Toggle(string id, bool on)
+    {
+        if (on)
+        {
+            _selected.Add(id);
+        }
+        else
+        {
+            _selected.Remove(id);
+        }
+    }
+
+    private void ToggleAll(ChangeEventArgs e)
+    {
+        _selected.Clear();
+        if (e.Value is true && _preview is not null)
+        {
+            foreach (var m in _preview.Models.Where(m => m.Problem is null))
+            {
+                _selected.Add(m.Model.Id);
+            }
+        }
+    }
+
+    private static string DownloadSizeText(RestoreModelPreview m) =>
+        m.DownloadSizeUnknown
+            ? m.DownloadBytes > 0 ? $"at least {UiFormat.Bytes(m.DownloadBytes)}" : "size unknown"
+            : UiFormat.Bytes(m.DownloadBytes);
+
+    /// <summary>What the confirm dialog says will happen, in exact numbers.</summary>
+    private IEnumerable<string> PlanLines()
+    {
+        if (_preview is null)
+        {
+            yield break;
+        }
+
+        var chosen = _preview.Models.Where(m => _selected.Contains(m.Model.Id)).ToList();
+        int fresh = chosen.Count(m => m.Change == RestoreModelChange.New);
+        int existing = chosen.Count - fresh;
+        int written = fresh + (_replaceExisting ? existing : 0);
+        string existingPart = existing == 0 ? "" : _replaceExisting ? $", {existing} replacing the definition here" : $"; {existing} already here are kept as they are";
+        yield return $"Writes {written} model definition{(written == 1 ? "" : "s")}: {fresh} new{existingPart}.";
+
+        yield return _importKeys && _preview.ApiKeysNew > 0
+            ? $"Imports {_preview.ApiKeysNew} API key{(_preview.ApiKeysNew == 1 ? "" : "s")}; keys already here are kept, none are duplicated."
+            : "Leaves the API keys as they are.";
+
+        if (_importKeys && BackupTokenCount > 0)
+        {
+            yield return $"Imports up to {BackupTokenCount} saved token{(BackupTokenCount == 1 ? "" : "s")}; a token whose name is already in use here is skipped.";
+        }
+
+        if (ShowPlacement)
+        {
+            int kept = chosen.Count(m => m.Placement?.Match == RestorePlacementMatch.SameUid && !_targets.ContainsKey(m.Model.Id));
+            int picked = chosen.Count(m => _targets.TryGetValue(m.Model.Id, out var t) && t is not null);
+            int unplaced = chosen.Count(m => _targets.TryGetValue(m.Model.Id, out var t) ? t is null : m.Placement is { DefaultTargetNodeId: null });
+            yield return $"Placement: {kept} keep their node (same uid), {picked} go to the node you picked, {unplaced} are restored unplaced.";
+        }
+
+        if (_backup?.HostServices is not null)
+        {
+            yield return _importServices
+                ? $"Replaces the Services list with the backup's {_preview.HostContainers} managed container{(_preview.HostContainers == 1 ? "" : "s")}."
+                : "Leaves the Services list as it is.";
+        }
+
+        if (_importServices && BackupUnitCount > 0)
+        {
+            yield return $"Adds back the backup's {BackupUnitCount} managed service{(BackupUnitCount == 1 ? "" : "s")} on the nodes with the same uid, where they are not managed already.";
+        }
+
+        if (HasNodeSettings)
+        {
+            int nodesToChange = _preview.Nodes.Count(n => n.SettingChanges.Count > 0);
+            yield return _applyNodeSettings
+                ? $"Applies the backup's settings to {nodesToChange} node{(nodesToChange == 1 ? "" : "s")} with the same uid{(_backup?.AgentUpdatesAutomatic is bool auto ? $" and sets automatic agent updates {(auto ? "on" : "off")}" : "")}; approval, pins and addresses are not touched."
+                : "Leaves the node settings as they are.";
+        }
+
+        if (_backup?.History is { } history)
+        {
+            yield return _importHistory
+                ? $"Adds up to {history.Benchmarks.Count + history.Tuning.Count} benchmark and tuning result{(history.Benchmarks.Count + history.Tuning.Count == 1 ? "" : "s")} and {history.StartupTimes.Count} start time{(history.StartupTimes.Count == 1 ? "" : "s")} that are not here; results already here are kept."
+                : "Leaves the benchmark, tuning and start-time history as it is.";
+        }
+
+        if (DestinationToApply is not null)
+        {
+            yield return _applyDestination
+                ? $"Connects the backup destination {_backup!.BackupDestination!.Source} again on {HostNode}; if it can't be mounted, the current destination stays."
+                : "Leaves the backup destination as it is.";
+        }
+
+        var restoredModels = chosen.Where(m => m.Change == RestoreModelChange.New || _replaceExisting).ToList();
+        var downloads = restoredModels.Where(m => !m.Manual).SelectMany(m => m.Sources.Where(s => !s.Present)).ToList();
+        if (downloads.Count == 0)
+        {
+            yield return "Downloads nothing: every checkpoint with a source is already on disk.";
+        }
+        else
+        {
+            long total = downloads.Sum(s => s.DownloadBytes ?? 0);
+            int unknown = downloads.Count(s => s.DownloadBytes is null);
+            string size = unknown == 0 ? UiFormat.Bytes(total) : $"{UiFormat.Bytes(total)} plus {unknown} of unknown size";
+            yield return $"Downloads {downloads.Count} checkpoint folder{(downloads.Count == 1 ? "" : "s")} from Hugging Face, one at a time: {size} in total.";
+        }
+
+        int autoStart = restoredModels.Count(m => m.Model.AutoStart && !m.Manual);
+        int wasRunning = _startRunning ? restoredModels.Count(m => !m.Model.AutoStart && !m.Manual && _backup?.WasRunning(m.Model.Id) == true) : 0;
+        if (autoStart > 0 && wasRunning == 0)
+        {
+            yield return $"Then starts the {autoStart} model{(autoStart == 1 ? "" : "s")} set to auto-start, one at a time; one whose memory budget doesn't fit is left stopped.";
+        }
+        else if (wasRunning > 0)
+        {
+            yield return $"Then starts {autoStart + wasRunning} model{(autoStart + wasRunning == 1 ? "" : "s")}: {autoStart} set to auto-start and {wasRunning} that {(wasRunning == 1 ? "was" : "were")} running when the backup was made, one at a time per node; one whose memory budget doesn't fit is left stopped.";
+        }
+
+        int manual = restoredModels.Count(m => m.Manual);
+        if (manual > 0)
+        {
+            yield return $"{manual} model{(manual == 1 ? " has" : "s have")} no download source: copy {(manual == 1 ? "its checkpoint" : "their checkpoints")} back by hand.";
+        }
+    }
+
+    private async Task StartRestoreAsync()
+    {
+        if (_backup is null)
+        {
+            return;
+        }
+
+        _confirmError = null;
+        if (NeedsServicesAuthorization)
+        {
+            var reauth = ServiceProvider.GetService<IAdminReauthenticator>();
+            var outcome = reauth?.Verify(_user) ?? AdminReauthOutcome.LoginDisabled;
+
+            _confirmError = outcome switch
+            {
+                AdminReauthOutcome.Verified => null,
+                AdminReauthOutcome.LoginRequired => "Sign in to the portal. Nothing was restored.",
+                AdminReauthOutcome.RateLimited => "Too many attempts. Wait a minute and try again.",
+                _ => "Restoring the managed services list or the backup destination needs admin login. Set MirbadLLM__AdminPassword and restart MirbadLLM, or untick them.",
+            };
+            if (_confirmError is not null)
+            {
+                return;
+            }
+        }
+
+        _confirmOpen = false;
+        try
+        {
+            Restores.Start(new RestoreRequest(
+                _backup,
+                _importKeys ? _secrets : null,
+                _selected.ToList(),
+                _replaceExisting,
+                _importKeys && _secrets is not null,
+                _importServices && (_backup.HostServices is not null || BackupUnitCount > 0),
+                await PickedTokenAsync(),
+                [.. _targets.Where(t => _selected.Contains(t.Key)).Select(t => new RestoreTarget(t.Key, t.Value))],
+                StartRunning: _startRunning,
+                ApplyNodeSettings: _applyNodeSettings,
+                ImportHistory: _importHistory,
+                ApplyDestination: _applyDestination ? DestinationToApply : null,
+                ClientKey: _clientKey) { User = _user });
+            ResetPreview();
+        }
+        catch (InvalidOperationException ex)
+        {
+            _restoreError = ex.Message;
+        }
+    }
+
+    /// <summary>The picked saved token's value, read on the server only when a preview or restore needs it; null for none.</summary>
+    private async Task<string?> PickedTokenAsync()
+    {
+        if (string.IsNullOrEmpty(_hfTokenId))
+        {
+            return null;
+        }
+
+        string? value = ServiceProvider.GetService<ITokenStore>() is { } store ? await store.GetValueAsync(_hfTokenId) : null;
+        return value ?? throw new InvalidOperationException("The picked Hugging Face token was deleted. Pick another one, or none.");
+    }
+
+    private string TargetValue(RestoreModelPreview m) =>
+        _targets.TryGetValue(m.Model.Id, out var chosen)
+            ? chosen ?? UnplacedValue
+            : m.Placement?.DefaultTargetNodeId ?? UnplacedValue;
+
+    private RestoreNodeChoice? TargetChoice(RestoreModelPreview m) =>
+        TargetValue(m) is var id && id != UnplacedValue ? _preview?.TargetNodes.FirstOrDefault(n => n.Id == id) : null;
+
+    // The uid-matched node keeps the backup's GPUs (RestorePlacements.Resolve).
+    private static bool KeepsBackupGpus(RestoreModelPreview m, RestoreNodeChoice target) =>
+        m.Placement is { Match: RestorePlacementMatch.SameUid } p && p.DefaultTargetNodeId == target.Id;
+
+    private void SetTarget(string modelId, string? value) =>
+        _targets[modelId] = string.IsNullOrEmpty(value) || value == UnplacedValue ? null : value;
+
+    private void SetGroupTarget(string backupNodeId, string? value)
+    {
+        if (string.IsNullOrEmpty(value) || _preview is null)
+        {
+            return;
+        }
+
+        foreach (var m in _preview.Models.Where(m => m.Placement is { NeedsTarget: true } p && p.BackupNodeId == backupNodeId))
+        {
+            SetTarget(m.Model.Id, value);
+        }
+    }
+
+    private static (string Class, string Icon, string Label) PlacementLook(RestorePlacementPreview placement) => placement.Match switch
+    {
+        RestorePlacementMatch.SameUid => ("state--ready", "check", "Same node"),
+        RestorePlacementMatch.Unplaced => ("state--stopped", "state-stopped", "Unplaced"),
+        _ when placement.DefaultTargetNodeId is not null => ("state--ready", "check", placement.DefaultTargetNodeId),
+        RestorePlacementMatch.SlugOnly => ("state--starting", "warning", "Name only"),
+        _ => ("state--starting", "warning", "No match"),
+    };
+
+    /// <summary>What fleet recovery installs besides identity, nodes, models and keys, in one line.</summary>
+    private string FleetExtras(BackupDocument backup)
+    {
+        var parts = new List<string>();
+        if (backup.History is { } history)
+        {
+            parts.Add($"{history.Benchmarks.Count + history.Tuning.Count} benchmark and tuning results, {history.StartupTimes.Count} start times");
+        }
+
+        if (backup.AgentUpdatesAutomatic is bool automatic)
+        {
+            parts.Add($"automatic agent updates {(automatic ? "on" : "off")}");
+        }
+
+        if (_secrets?.BackupDestination is { } destination)
+        {
+            parts.Add($"the backup destination's settings{(string.IsNullOrEmpty(destination.Password) ? "" : " and password")} (kept for later backups)");
+        }
+
+        if (BackupUnitCount > 0)
+        {
+            parts.Add("managed systemd/Windows services stay as the nodes keep them");
+        }
+
+        return parts.Count == 0 ? "Nothing else in this backup." : string.Join("; ", parts) + ".";
+    }
+
+    private static string FleetNodeState(BackupNode node) =>
+        node.Revoked ? "Revoked" : !node.Approved ? "Pending approval" : node.Draining ? "Approved, draining" : "Approved";
+
+    private async Task InstallFleetAsync()
+    {
+        if (_backup is null || Fleet is not { } fleet)
+        {
+            return;
+        }
+
+        _confirmError = null;
+        if (!_fleetOldMasterStopped)
+        {
+            // The takeover after the restart is the operator's confirmed action (design §4.2, §9.4 step 4; D105).
+            _confirmError = "Confirm that the previous master is stopped. Nothing was installed.";
+            return;
+        }
+
+        var reauth = ServiceProvider.GetService<IAdminReauthenticator>();
+        var outcome = reauth?.Verify(_user) ?? AdminReauthOutcome.LoginDisabled;
+
+        _confirmError = outcome switch
+        {
+            AdminReauthOutcome.Verified => null,
+            AdminReauthOutcome.LoginRequired => "Sign in to the portal. Nothing was installed.",
+            AdminReauthOutcome.RateLimited => "Too many attempts. Wait a minute and try again.",
+            _ => "Fleet recovery needs admin login. Set MirbadLLM__AdminPassword and restart MirbadLLM in recovery mode.",
+        };
+        if (_confirmError is not null)
+        {
+            return;
+        }
+
+        _fleetConfirmOpen = false;
+        try
+        {
+            await fleet.InstallAsync(_backup, _secrets);
+            _fleetPreview = null;
+            _backup = null;
+            _secrets = null;
+        }
+        catch (FleetRecoveryException ex)
+        {
+            _restoreError = ex.Message;
+        }
+    }
+
+    private Task CancelRestoreAsync() => Restores.CancelAsync();
+
+    private void NewRestore() => Restores.Clear();
+
+    private static string JobStateText(RestoreJobSnapshot job) => job.State switch
+    {
+        RestoreJobState.Running => "Running",
+        RestoreJobState.Completed => "Finished",
+        RestoreJobState.Cancelled => "Cancelled",
+        _ => "Failed",
+    };
+
+    private static (string Class, string Icon, string Label) StateLook(RestoreModelState state) => state switch
+    {
+        RestoreModelState.Queued => ("state--stopped", "clock", "Queued"),
+        RestoreModelState.Downloading => ("state--starting", "download", "Downloading"),
+        RestoreModelState.Ready => ("state--ready", "state-ready", "Ready"),
+        RestoreModelState.WaitingToStart => ("state--starting", "clock", "Waiting to start"),
+        RestoreModelState.Started => ("state--ready", "play", "Started"),
+        RestoreModelState.NotStarted => ("state--starting", "warning", "Not started"),
+        RestoreModelState.Skipped => ("state--stopped", "state-stopped", "Skipped"),
+        RestoreModelState.Unplaced => ("state--stopped", "state-stopped", "Unplaced"),
+        RestoreModelState.Manual => ("state--failed", "warning", "Manual copy needed"),
+        RestoreModelState.Cancelled => ("state--stopped", "stop", "Cancelled"),
+        _ => ("state--failed", "state-failed", "Failed"),
+    };
+
+    public async ValueTask DisposeAsync()
+    {
+        Restores.Changed -= OnRestoreChanged;
+        if (Fleet is { } fleet)
+        {
+            fleet.Changed -= OnFleetChanged;
+        }
+
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Expected when the circuit is already gone.
+            }
+        }
+    }
+}

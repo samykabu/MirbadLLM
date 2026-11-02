@@ -1,0 +1,11 @@
+{
+  "hostdAvailable": false,
+  "hostdError": null,
+  "units": [],
+  "discovered": null,
+  "discoveryErrors": null,
+  "denyPatterns": null,
+  "containersAvailable": false,
+  "containersError": null,
+  "containers": []
+}

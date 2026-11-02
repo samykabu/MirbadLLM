@@ -1,0 +1,34 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* The shared header of the Access area: one job, handing out access, split over three pages. Connect (/access) says
+   where clients point and what to paste; API keys (/access/keys) issues and revokes the keys they send; Tokens (/access/tokens) keeps the outside credentials
+   (Hugging Face) that downloads, moves and restores pick by name. The tabs are
+   links (each is its own page and route), drawn as Line tabs with aria-current on the page you are on. *@
+<PageHeader Title="Access">
+    <Subtitle>Point a client at MirbadLLM and give it a key. Every Ready model sits behind one OpenAI-compatible endpoint.</Subtitle>
+</PageHeader>
+
+<nav class="access-tabs" aria-label="Access" data-testid="access-tabs">
+    <a href="access" aria-current="@(Current == AccessPage.Connect ? "page" : null)" data-testid="access-tab-connect">
+        <Icon Name="plug" /> Connect
+    </a>
+    <a href="access/keys" aria-current="@(Current == AccessPage.Keys ? "page" : null)" data-testid="access-tab-keys" data-tour="access-keys-tab">
+        <Icon Name="key" /> API keys
+        @if (KeyCount is int count)
+        {
+            <span class="visually-hidden">, </span><span class="access-tab-count num">@count</span><span class="visually-hidden"> active</span>
+        }
+    </a>
+    <a href="access/tokens" aria-current="@(Current == AccessPage.Tokens ? "page" : null)" data-testid="access-tab-tokens">
+        <Icon Name="lock" /> Tokens
+    </a>
+</nav>
+
+@code {
+    /// <summary>Which Access page is showing.</summary>
+    [Parameter, EditorRequired]
+    public AccessPage Current { get; set; }
+
+    /// <summary>Active keys, shown on the API keys tab when known.</summary>
+    [Parameter]
+    public int? KeyCount { get; set; }
+}

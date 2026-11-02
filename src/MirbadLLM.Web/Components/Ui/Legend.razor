@@ -1,0 +1,35 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* Always-visible key for a chart or bar: swatch shape, name and (optionally) the current value. *@
+<ul class="legend" aria-label="@AriaLabel" data-testid="@TestId">
+    @foreach (var item in Items)
+    {
+        <li class="legend-item">
+            <span class="swatch @SwatchClass(item.Swatch)" style="color:@item.Color" aria-hidden="true"></span>
+            <span>@item.Label</span>
+            @if (item.Value is not null)
+            {
+                <span class="legend-value num">@item.Value</span>
+            }
+        </li>
+    }
+</ul>
+
+@code {
+    [Parameter, EditorRequired]
+    public IReadOnlyList<LegendItem> Items { get; set; } = [];
+
+    [Parameter]
+    public string AriaLabel { get; set; } = "Legend";
+
+    [Parameter]
+    public string? TestId { get; set; }
+
+    private static string SwatchClass(LegendSwatch swatch) => swatch switch
+    {
+        LegendSwatch.Dashed => "swatch--dashed",
+        LegendSwatch.Dotted => "swatch--dotted",
+        LegendSwatch.Block => "swatch--block",
+        LegendSwatch.Outline => "swatch--block swatch--outline",
+        _ => "",
+    };
+}

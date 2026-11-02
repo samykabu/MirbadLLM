@@ -1,0 +1,43 @@
+/* The current node of an existing model: name, state badge and the consequence line, its two actions beside it on
+   wide panels and under it on phones (the field grid already collapses to one column there). */
+.placement-current {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--ss-sp-3);
+    min-width: 0;
+    padding: var(--ss-sp-3);
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius);
+}
+
+.placement-current-text {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ss-sp-2);
+    min-width: 0;
+    flex: 1 1 280px;
+}
+
+.placement-current-text .muted {
+    flex-basis: 100%;
+    font-size: var(--ss-fs-100);
+}
+
+.placement-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-2);
+}
+
+.segmented-option--disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+@media (max-width: 639.98px) {
+    .placement-actions { width: 100%; }
+    .placement-actions .btn { flex: 1 1 auto; }
+}

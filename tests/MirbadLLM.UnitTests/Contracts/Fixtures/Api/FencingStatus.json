@@ -1,0 +1,37 @@
+{
+  "instanceId": "master-1",
+  "epoch": 8,
+  "takeoverRequested": false,
+  "takeoverOptionSet": true,
+  "actionNeeded": true,
+  "lastTakeover": {
+    "takeoverId": "tk-2",
+    "epoch": 8,
+    "previousEpoch": 4,
+    "at": "2026-10-06T09:00:00+00:00",
+    "operator": "admin:a1b2c3d4e5f6",
+    "answered": [
+      {
+        "nodeId": "dgx",
+        "nodeUid": "0f9a1b2c3d4e5f60718293a4b5c6d7e8",
+        "acceptedEpoch": 7
+      }
+    ],
+    "unreachable": [
+      "pc-office"
+    ],
+    "continuations": []
+  },
+  "nodes": [
+    {
+      "nodeId": "dgx",
+      "state": "Current",
+      "agentEpoch": 8
+    },
+    {
+      "nodeId": "pc-office",
+      "state": "NeedsContinuation",
+      "agentEpoch": 9
+    }
+  ]
+}

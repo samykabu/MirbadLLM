@@ -1,0 +1,7 @@
+{
+  "expectedSpkiSha256": "q3vYc2ZpeHR1cmUtc3BraS1oYXNoLW5vdC1yZWFsMDE=",
+  "address": "https://192.0.2.50:9443",
+  "altAddresses": [
+    "https://pc-office.lan:9443"
+  ]
+}

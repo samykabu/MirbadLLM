@@ -1,0 +1,73 @@
+.components-reconnect-first-attempt-visible,
+.components-reconnect-repeated-attempt-visible,
+.components-reconnect-failed-visible,
+.components-pause-visible,
+.components-resume-failed-visible,
+.components-rejoining-animation {
+    display: none;
+}
+
+/* Exactly one of these classes is ever present on the modal at a time (see ReconnectModal.razor.js),
+   so each state maps to exactly one visible message below — no compound/bare-class rules that could
+   also match while another state's class is still attached. */
+#components-reconnect-modal.components-reconnect-show .components-reconnect-first-attempt-visible,
+#components-reconnect-modal.components-reconnect-show .components-rejoining-animation,
+#components-reconnect-modal.components-reconnect-retrying .components-reconnect-repeated-attempt-visible,
+#components-reconnect-modal.components-reconnect-retrying .components-rejoining-animation,
+#components-reconnect-modal.components-reconnect-failed .components-reconnect-failed-visible,
+#components-reconnect-modal.components-reconnect-paused .components-pause-visible,
+#components-reconnect-modal.components-reconnect-resume-failed .components-resume-failed-visible {
+    display: block;
+}
+
+#components-reconnect-modal {
+    width: min(22rem, calc(100vw - 32px));
+    margin: 20vh auto;
+    padding: var(--ss-sp-5);
+    border: 1px solid var(--ss-panel-edge);
+    border-radius: var(--ss-radius);
+    background: var(--ss-panel);
+    color: var(--ss-text);
+    box-shadow: 0 16px 48px rgb(0 0 0 / 0.28);
+}
+
+#components-reconnect-modal::backdrop {
+    background: var(--ss-overlay);
+}
+
+.components-reconnect-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--ss-sp-3);
+    text-align: center;
+}
+
+.reconnect-title {
+    font-size: var(--ss-fs-300);
+}
+
+#components-reconnect-modal p {
+    margin: 0;
+    color: var(--ss-text-muted);
+}
+
+.components-rejoining-animation {
+    width: 28px;
+    height: 28px;
+    border: 2px solid var(--ss-border);
+    border-top-color: var(--ss-accent);
+    border-radius: 50%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .components-rejoining-animation {
+        animation: reconnect-spin 0.9s linear infinite;
+    }
+}
+
+@keyframes reconnect-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}

@@ -1,0 +1,13 @@
+{
+  "seq": 1,
+  "at": "2026-10-03T10:00:00Z",
+  "memory": {
+    "model": "unified",
+    "hostTotalGiB": 121.0,
+    "hostAvailableGiB": 45.0,
+    "gpus": []
+  },
+  "gpus": [],
+  "gpuProcesses": [],
+  "models": []
+}

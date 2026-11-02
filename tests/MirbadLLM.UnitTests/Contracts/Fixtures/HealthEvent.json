@@ -1,0 +1,14 @@
+{
+  "type": "health",
+  "health": {
+    "reasons": [
+      {
+        "code": "docker_unreachable",
+        "message": "Docker is unreachable: connection refused"
+      }
+    ]
+  },
+  "bootId": "b11ac10b-58cc-4372-a567-0e02b2c3d479",
+  "seq": 6,
+  "at": "2026-10-03T10:00:25+00:00"
+}

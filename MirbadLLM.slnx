@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MirbadLLM.Agent.Contracts/MirbadLLM.Agent.Contracts.csproj" />
+    <Project Path="src/MirbadLLM.Agent/MirbadLLM.Agent.csproj" />
+    <Project Path="src/MirbadLLM.Core/MirbadLLM.Core.csproj" />
+    <Project Path="src/MirbadLLM.HostAgent/MirbadLLM.HostAgent.csproj" />
+    <Project Path="src/MirbadLLM.NodeRuntime/MirbadLLM.NodeRuntime.csproj" />
+    <Project Path="src/MirbadLLM.Orchestration/MirbadLLM.Orchestration.csproj" />
+    <Project Path="src/MirbadLLM.Pki/MirbadLLM.Pki.csproj" />
+    <Project Path="src/MirbadLLM.Router/MirbadLLM.Router.csproj" />
+    <Project Path="src/MirbadLLM.Web/MirbadLLM.Web.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MirbadLLM.FakeLlamaServer/MirbadLLM.FakeLlamaServer.csproj" />
+    <Project Path="tests/MirbadLLM.UnitTests/MirbadLLM.UnitTests.csproj" />
+  </Folder>
+</Solution>

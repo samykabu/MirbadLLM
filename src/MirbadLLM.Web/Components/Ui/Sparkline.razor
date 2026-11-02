@@ -1,0 +1,79 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using System.Globalization
+@* Minimal trend line over a fixed window. Gaps (null) break the line instead of being interpolated. *@
+@if (_path is null)
+{
+    <div class="sparkline-empty" data-testid="@(TestId is null ? null : $"{TestId}-empty")">@EmptyText</div>
+}
+else
+{
+    <svg class="sparkline" viewBox="0 0 100 28" preserveAspectRatio="none" role="img" aria-label="@_ariaLabel"
+         data-testid="@TestId">
+        <path class="sparkline-line" d="@_path" style="@(Color is null ? null : $"stroke:{Color}")" />
+    </svg>
+}
+
+@code {
+    /// <summary>Evenly spaced samples, oldest first. Null is a gap.</summary>
+    [Parameter]
+    public IReadOnlyList<double?> Values { get; set; } = [];
+
+    /// <summary>What the line shows, for the accessible description (e.g. "Generation tok/s, last 15 minutes").</summary>
+    [Parameter]
+    public string Label { get; set; } = "Trend";
+
+    /// <summary>Scale from zero (true, honest for rates and sizes) or from the window's minimum.</summary>
+    [Parameter]
+    public bool ZeroBased { get; set; } = true;
+
+    /// <summary>Line colour (a CSS colour or var); the data accent when not set.</summary>
+    [Parameter]
+    public string? Color { get; set; }
+
+    [Parameter]
+    public string EmptyText { get; set; } = "Not enough data yet";
+
+    [Parameter]
+    public string? TestId { get; set; }
+
+    private string? _path;
+    private string _ariaLabel = "";
+
+    protected override void OnParametersSet()
+    {
+        var present = Values.Where(UiFormat.HasValue).Select(v => v!.Value).ToList();
+        if (present.Count < 2)
+        {
+            _path = null;
+            return;
+        }
+
+        double min = ZeroBased ? Math.Min(0, present.Min()) : present.Min();
+        double max = present.Max();
+        if (max - min < 1e-9)
+        {
+            max = min + 1;
+        }
+
+        var segments = new List<string>(Values.Count);
+        bool drawing = false;
+        double step = 100.0 / (Values.Count - 1);
+        for (int i = 0; i < Values.Count; i++)
+        {
+            if (!UiFormat.HasValue(Values[i]))
+            {
+                drawing = false;
+                continue;
+            }
+
+            double x = i * step;
+            double y = 27 - ((Values[i]!.Value - min) / (max - min) * 26);
+            char command = drawing ? 'L' : 'M';
+            segments.Add(string.Create(CultureInfo.InvariantCulture, $"{command}{x:0.##},{y:0.##}"));
+            drawing = true;
+        }
+
+        _path = string.Join(' ', segments);
+        _ariaLabel = $"{Label}: low {UiFormat.Number(present.Min())}, high {UiFormat.Number(present.Max())}, latest {UiFormat.Number(present[^1])}";
+    }
+}

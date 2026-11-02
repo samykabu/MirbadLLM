@@ -1,0 +1,32 @@
+@using MirbadLLM.Orchestration.Recovery
+@inject IServiceProvider ServiceProvider
+@* Recovery-mode notices (design §9.4, D76; MN-130), from the MasterBoot the composition decided at startup:
+   - recovery mode: the master serves only the Restore tab until a backup is installed;
+   - a red warning while MirbadLLM__Recovery__Mode=FleetRestore is still set after a fleet recovery finished on this
+     volume (the option is one-shot and ignored now; remove it). Nothing renders on a normal boot. *@
+@if (_boot is { IsRecovery: true })
+{
+    <div class="takeover-banner takeover-banner--option" role="alert" data-testid="recovery-mode-banner">
+        <span class="takeover-icon" aria-hidden="true"><Icon Name="warning" /></span>
+        <div class="takeover-text">
+            <strong>Recovery mode.</strong>
+            <span>MirbadLLM serves only the Restore tab and answers /v1 with 503 until a fleet backup is installed; then it restarts in normal mode.</span>
+        </div>
+    </div>
+}
+else if (_boot is { RecoveryOptionStillSet: true })
+{
+    <div class="takeover-banner takeover-banner--option" role="alert" data-testid="recovery-option-warning">
+        <span class="takeover-icon" aria-hidden="true"><Icon Name="warning" /></span>
+        <div class="takeover-text">
+            <strong>MirbadLLM__Recovery__Mode is still set.</strong>
+            <span>The fleet recovery on this volume finished, so the option is ignored. Remove it from the master's configuration.</span>
+        </div>
+    </div>
+}
+
+@code {
+    private MasterBoot? _boot;
+
+    protected override void OnInitialized() => _boot = ServiceProvider.GetService<MasterBoot>();
+}

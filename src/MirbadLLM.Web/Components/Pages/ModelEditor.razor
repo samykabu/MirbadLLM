@@ -1,0 +1,3517 @@
+@page "/models/new"
+@page "/models/{Id}"
+@page "/models/{Id}/settings"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using System.Globalization
+@using MirbadLLM.Orchestration
+@using MirbadLLM.Orchestration.Multinode
+@using MirbadLLM.Orchestration.Nodes
+@using MirbadLLM.Web.Components.ModelEditor
+@inject IModelRegistry Registry
+@inject IModelRuntime Runtime
+@inject IMemoryProbe MemoryProbe
+@inject Microsoft.Extensions.Options.IOptions<MirbadLLMOptions> SparkOptions
+@inject IHuggingFaceDownloader Downloader
+@inject IHuggingFaceRepoInspector RepoInspector
+@inject NavigationManager Nav
+@inject IServiceProvider Services
+
+<PageTitle>@(IsNew ? "Add model" : $"{_model.ServedName} · Settings") · MirbadLLM</PageTitle>
+
+@if (_notFound)
+{
+    <PageHeader Title="Model settings" BackHref="models" BackLabel="Models" />
+    <EmptyState Title="@($"No model called \"{Id}\"")" TestId="editor-not-found">
+        <ChildContent><p>It may have been deleted. Add it again, or pick another model from the list.</p></ChildContent>
+        <Actions>
+            <a class="btn btn-primary" href="models/new"><Icon Name="plus" /> Add model</a>
+            <a class="btn btn-outline-secondary" href="models">Go to Models</a>
+        </Actions>
+    </EmptyState>
+}
+else
+{
+    @if (IsNew)
+    {
+        <PageHeader Title="Add model" BackHref="models" BackLabel="Models">
+            <Subtitle>
+                @if (IsLlamaCpp)
+                {
+                    <span>Register a GGUF as a llama.cpp model. Fields fill in from its header; every setting has an info button.</span>
+                }
+                else if (IsMlx)
+                {
+                    <span>Register an MLX checkpoint folder as an MLX model. The estimate fills in from the folder; every setting has an info button.</span>
+                }
+                else
+                {
+                    <span>Register a checkpoint as a vLLM model. Fields fill in from the checkpoint; every setting has an info button.</span>
+                }
+            </Subtitle>
+        </PageHeader>
+    }
+    else
+    {
+        <ModelHeader ModelId="@(Id ?? "")" Current="settings" StatusChanged="OnHeaderStatusAsync" />
+        <p class="editor-lede" data-testid="editor-lede">
+            Every setting is @(IsLlamaCpp ? "a llama-server" : IsMlx ? "an mlx_lm.server" : "a vLLM") launch argument: a running model picks changes up when it restarts. Saving asks whether to restart now.
+        </p>
+    }
+
+    @if (_saveError is not null)
+    {
+        <div class="callout callout--failed page-alert" role="alert" data-testid="save-error">
+            <Icon Name="state-failed" />
+            <div class="callout-body">
+                <span>@_saveError</span>
+                @if (_saveErrorDetails.Count > 0)
+                {
+                    <ul class="plain-list" data-testid="save-error-details">
+                        @foreach (string detail in _saveErrorDetails)
+                        {
+                            <li>@detail</li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    }
+
+    @if (_saveNotice is not null)
+    {
+        <div class="callout callout--busy page-alert" role="status" data-testid="save-notice">
+            <Icon Name="warning" />
+            <div class="callout-body">@_saveNotice</div>
+        </div>
+    }
+
+    @if (IsNew)
+    {
+        @* Add model is a wizard: every step's sections stay rendered (state, validation and the live fit keep working),
+           and only the current step is shown. The stepper lets an expert jump to any step. *@
+        <nav class="wizard-nav" aria-label="Add model steps" data-testid="wizard-steps">
+            <ol class="wizard-steps" style="--wizard-count: @WizardSteps.Count">
+                @for (int i = 0; i < WizardSteps.Count; i++)
+                {
+                    var step = WizardSteps[i];
+                    bool locked = i > MaxOpenIndex;
+                    string state = i == WizardIndex ? "current" : locked ? "locked" : StepComplete(step) && (i < WizardIndex || _visited.Contains(step)) ? "done" : "todo";
+                    <li class="wizard-step wizard-step--@state">
+                        <button type="button" class="wizard-step-btn" aria-current="@(state == "current" ? "step" : null)" disabled="@locked"
+                                title="@(locked ? "Finish the steps before this one first" : null)"
+                                data-testid="@($"wizard-step-{StepKey(step)}")" @ref="_stepButtons[step]" @onclick="() => GoToStepAsync(step)">
+                            <span class="wizard-step-num" aria-hidden="true">
+                                @if (state == "done")
+                                {
+                                    <Icon Name="check" />
+                                }
+                                else
+                                {
+                                    @(i + 1)
+                                }
+                            </span>
+                            <span class="wizard-step-text">
+                                <span class="wizard-step-label">@StepLabel(step)</span>
+                                <span class="wizard-step-hint">@StepHint(step)</span>
+                            </span>
+                            @if (state == "done")
+                            {
+                                <span class="visually-hidden">, done</span>
+                            }
+                            else if (locked)
+                            {
+                                <span class="visually-hidden">, not available yet</span>
+                            }
+                        </button>
+                    </li>
+                }
+            </ol>
+            <div class="wizard-meter" aria-hidden="true"><span style="width: @WizardPercent%"></span></div>
+        </nav>
+    }
+
+    <div class="form-sections@(IsNew ? " wizard" : null)">
+        @if (_multiNode)
+        {
+            RenderFragment placement = @<PlacementSection Nodes="_nodes" IsNew="IsNew" NodeId="@_nodeId" NodeIdChanged="OnNodeChangedAsync" NodeMissing="_nodeMissing"
+                              GpuUuids="_gpus" GpuUuidsChanged="OnGpusChangedAsync" StoredGpus="_original?.Placement?.GpuUuids"
+                              NodeFits="_nodeFits" Fit="_fit" KeepServing="_keepServing" KeepServingChanged="v => _keepServing = v"
+                              Move="_move" MovesAvailable="@(_moves is not null)"
+                              OnMove="() => OpenMoveAsync(progress: false)" OnUnplace="OpenUnplace" OnViewMove="() => OpenMoveAsync(progress: true)"
+                              Runtime="_runtime" RuntimeChanged="OnRuntimeChangedAsync" GpuBudgets="_llama.GpuBudgets" GpuBudgetsChanged="OnGpuBudgetsChangedAsync"
+                              MemoryBudgetGiB="_model.MemoryBudgetGiB" TensorSplit="@LlamaTensorSplit" BudgetTooSmall="BudgetTooSmall" />;
+            @if (IsNew)
+            {
+                <div class="wizard-wrap" data-wizard-step="where" hidden="@StepHidden(WizardStep.Where)">@placement</div>
+            }
+            else
+            {
+                @placement
+            }
+        }
+        else if (IsNew && RuntimePicker.Offers(_singleNode, _runtime))
+        {
+            @* A fleet of one that offers a runtime choice: the runtime decides what a checkpoint is (a folder or a GGUF), so it comes first. *@
+            <section class="panel form-section" aria-labelledby="sec-runtime" data-wizard-step="where" hidden="@StepHidden(WizardStep.Where)" data-testid="runtime-step">
+                <div class="form-section-intro">
+                    <h2 id="sec-runtime">Runtime</h2>
+                    <p>@SingleNodeText serves models with more than one runtime. The runtime decides what a checkpoint is: @RuntimeCheckpointText.</p>
+                </div>
+                <div class="field-grid">
+                    <RuntimePicker Node="_singleNode" IsNew="true" Runtime="_runtime" RuntimeChanged="OnRuntimeChangedAsync" />
+                </div>
+            </section>
+        }
+
+        @if (IsNew)
+        {
+            <section class="panel form-section" aria-labelledby="sec-source" data-wizard-step="checkpoint" hidden="@StepHidden(WizardStep.Checkpoint)">
+                <div class="form-section-intro">
+                    <h2 id="sec-source">Checkpoint</h2>
+                    @if (IsLlamaCpp)
+                    {
+                        <p>llama-server serves one GGUF file from a folder under the node's models root.</p>
+                    }
+                    else if (IsMlx)
+                    {
+                        <p data-testid="mlx-checkpoint-hint">mlx_lm.server serves an MLX checkpoint folder under the node's models root: a <code>config.json</code> with <code>*.safetensors</code> and the tokenizer, e.g. a download of <code>mlx-community/Qwen3-0.6B-4bit</code>.</p>
+                    }
+                    else
+                    {
+                        <p>vLLM serves a checkpoint folder under the @(_multiNode ? "node's " : "")models root, mounted at <code>/models</code> in every container.</p>
+                    }
+                </div>
+                <div class="field-grid">
+                    <div class="field field--wide">
+                        <FieldHelp Label="Checkpoint source" For="source-mode" ShowLabel="false" Help="@ModelFieldHelp.SourceMode">
+                            <Leading><span class="field-label" id="source-mode-label">Checkpoint source</span></Leading>
+                        </FieldHelp>
+                        <div class="source-picker" role="radiogroup" aria-labelledby="source-mode-label">
+                            <label class="source-option" data-testid="source-folder-tab">
+                                <input type="radio" name="sourceMode" id="source-folder" checked="@(_source == SourceMode.Folder)" @onchange="() => SetSource(SourceMode.Folder)" />
+                                <Icon Name="folder" Class="icon--lg" />
+                                <span class="source-option-text">
+                                    <span class="source-option-title">@FolderOptionTitle</span>
+                                    <span class="source-option-note">Pick a checkpoint under the models root.</span>
+                                </span>
+                            </label>
+                            <label class="source-option" data-testid="source-download-tab">
+                                <input type="radio" name="sourceMode" id="source-download" checked="@(_source == SourceMode.Download)" @onchange="() => SetSource(SourceMode.Download)" />
+                                <Icon Name="download" Class="icon--lg" />
+                                <span class="source-option-text">
+                                    <span class="source-option-title">Download from Hugging Face</span>
+                                    <span class="source-option-note">Fetch a repo first, then configure it.</span>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+
+                    @if (_source == SourceMode.Folder && IsLlamaCpp)
+                    {
+                        <div class="field field--wide">
+                            <FieldHelp Label="Folder" For="field-source-folder" Help="@ModelFieldHelp.ModelPath" />
+                            <select class="form-select" id="field-source-folder" data-testid="field-source-folder"
+                                    @bind="_selectedFolder" @bind:after="() => ApplyFolderAsync(_selectedFolder)">
+                                <option value="">@(_folderError is not null ? "Folders unavailable" : NeedsNode ? "Choose the node under Placement first" : _entries.Count == 0 ? "No folders found under the models root" : "Choose a folder")</option>
+                                @foreach (var entry in _entries)
+                                {
+                                    <option value="@entry.Folder">@entry.Folder · @UiFormat.Bytes(entry.SizeBytes)</option>
+                                }
+                            </select>
+                            @if (_folderError is not null)
+                            {
+                                <div class="callout callout--failed" role="alert" data-testid="folder-error">
+                                    <Icon Name="state-failed" /><div class="callout-body">@_folderError</div>
+                                </div>
+                            }
+                        </div>
+                        @if (!string.IsNullOrEmpty(_selectedFolder))
+                        {
+                            <div class="field field--wide">
+                                <GgufPicker Folder="@_selectedFolder" Candidates="_ggufCandidates" File="@_llama.File" FileChanged="f => _llama.File = f"
+                                            OnRead="ReadGgufAsync" Summary="_gguf" Error="@_ggufError" Estimate="_estimate" Rooms="GgufRooms" />
+                            </div>
+                        }
+                    }
+                    else if (_source == SourceMode.Folder)
+                    {
+                        <div class="field field--wide">
+                            <FieldHelp Label="Folder" For="field-source-folder" Help="@ModelFieldHelp.ModelPath" />
+                            <select class="form-select" id="field-source-folder" data-testid="field-source-folder"
+                                    aria-describedby="@(_inspection is null ? null : "folder-inspection")"
+                                    @bind="_selectedFolder" @bind:after="() => ApplyFolderAsync(_selectedFolder)">
+                                <option value="">@(_folderError is not null ? "Folders unavailable" : NeedsNode ? "Choose the node under Placement first" : _folders.Count == 0 ? "No checkpoint folders found under the models root" : "Choose a folder")</option>
+                                @foreach (var folder in _folders)
+                                {
+                                    <option value="@folder.Folder">@folder.Folder · @folder.WeightsGiB.ToString("F1", CultureInfo.InvariantCulture) GiB · @folder.DetectedFormat</option>
+                                }
+                            </select>
+                            @if (_folderError is not null)
+                            {
+                                <div class="callout callout--failed" role="alert" data-testid="folder-error">
+                                    <Icon Name="state-failed" /><div class="callout-body">@_folderError</div>
+                                </div>
+                            }
+                            @if (_inspection is not null)
+                            {
+                                <div class="field-hint" id="folder-inspection" data-testid="folder-inspection">
+                                    Detected: @(_inspection.Architecture ?? "unknown architecture"), @_inspection.DetectedFormat,
+                                    <span class="num">@_inspection.WeightsGiB.ToString("F1", CultureInfo.InvariantCulture) GiB</span> weights@(_inspection.MaxPositionEmbeddings is { } cap ? $", max context {cap:N0} tokens" : "")@(_inspection.MaySupportMtp ? ", may support MTP" : "").
+                                    The fields below were filled in from it.
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="field">
+                            <FieldHelp Label="Repo id" For="field-repo-id" Help="@ModelFieldHelp.RepoId" />
+                            <input class="form-control" id="field-repo-id" data-testid="field-repo-id" @bind="_download.RepoId" placeholder="owner/name" autocomplete="off" spellcheck="false" />
+                        </div>
+                        <div class="field">
+                            <FieldHelp Label="Revision" For="field-revision" Help="@ModelFieldHelp.Revision" />
+                            <input class="form-control" id="field-revision" data-testid="field-revision" @bind="_download.Revision" placeholder="Default branch" autocomplete="off" spellcheck="false" />
+                        </div>
+                        <div class="field">
+                            <FieldHelp Label="Folder" For="field-download-folder" Help="@ModelFieldHelp.Folder" />
+                            <input class="form-control" id="field-download-folder" data-testid="field-download-folder" @bind="_download.Folder" placeholder="From the repo name" autocomplete="off" spellcheck="false" />
+                        </div>
+                        <div class="field">
+                            <FieldHelp Label="Access token (optional)" For="field-token" Help="@ModelFieldHelp.Token" />
+                            <TokenPicker Id="field-token" TestId="field-token" @bind-Value="_download.TokenId" />
+                        </div>
+                        <div class="field field--wide">
+                            <FieldHelp Label="Allow patterns" For="field-allow-patterns" Help="@ModelFieldHelp.AllowPatterns" />
+                            <input class="form-control num" id="field-allow-patterns" data-testid="field-allow-patterns" @bind="_download.AllowPatternsText" spellcheck="false" />
+                        </div>
+
+                        <div class="field field--wide" aria-live="polite">
+                            <div>
+                                <button type="button" class="btn btn-outline-secondary btn-sm" data-testid="inspect-repo-button" @onclick="InspectRepoAsync">
+                                    Inspect repo
+                                </button>
+                            </div>
+                            @if (_inspectError is not null)
+                            {
+                                <div class="callout callout--failed" role="alert" data-testid="inspect-error">
+                                    <Icon Name="state-failed" /><div class="callout-body">@_inspectError</div>
+                                </div>
+                            }
+                            @if (_repoInspection is not null)
+                            {
+                                <div class="field-hint" data-testid="repo-format">Detected format: @FormatLabel(_repoInspection.Format)</div>
+
+                                @if (IsLlamaCpp && _repoInspection.Variants.Count > 0)
+                                {
+                                    <div class="field field--wide">
+                                        <FieldHelp Label="Variant" For="gguf-variants" ShowLabel="false" Help="@ModelFieldHelp.GgufVariant">
+                                            <Leading><span class="field-label">Variant</span></Leading>
+                                        </FieldHelp>
+                                        <GgufPicker Variants="_repoInspection.Variants" Projectors="RepoProjectors" SelectedVariant="@_selectedVariant"
+                                                    SelectedVariantChanged="SelectLlamaVariant" SelectedProjector="@_selectedProjector"
+                                                    SelectedProjectorChanged="SelectProjector" Rooms="GgufRooms" />
+                                    </div>
+                                }
+                                else if (IsLlamaCpp)
+                                {
+                                    <div class="field field--wide">
+                                        <div class="callout callout--busy" data-testid="gguf-none">
+                                            <Icon Name="warning" />
+                                            <div class="callout-body">This repo has no GGUF files. llama.cpp serves a GGUF: pick a GGUF repo, or switch the runtime to vLLM.</div>
+                                        </div>
+                                    </div>
+                                }
+                                else if (IsMlx)
+                                {
+                                    @if (_repoInspection.Format == RepoFormat.Gguf)
+                                    {
+                                        <div class="field field--wide">
+                                            <div class="callout callout--busy" data-testid="mlx-gguf-repo">
+                                                <Icon Name="warning" />
+                                                <div class="callout-body">This repo holds GGUF files only. MLX serves a folder of safetensors: pick an MLX repo (e.g. from mlx-community), or switch the runtime to llama.cpp.</div>
+                                            </div>
+                                        </div>
+                                    }
+                                }
+                                else if (_repoInspection.Format is RepoFormat.Gguf or RepoFormat.Mixed && _repoInspection.Variants.Count > 0)
+                                {
+                                    <div class="field">
+                                        <FieldHelp Label="Variant" For="field-gguf-variant" Help="@ModelFieldHelp.GgufVariant" />
+                                        <select class="form-select num" id="field-gguf-variant" data-testid="field-gguf-variant"
+                                                aria-describedby="@(SelectedVariant is null ? null : "gguf-variant-size")"
+                                                @bind="_selectedVariant" @bind:after="() => SelectVariant(_selectedVariant)">
+                                            @foreach (var variant in _repoInspection.Variants)
+                                            {
+                                                <option value="@variant.Name">@variant.Name — @variant.FileCount file@(variant.FileCount == 1 ? "" : "s"), @UiFormat.Bytes(variant.TotalBytes)</option>
+                                            }
+                                        </select>
+                                        @if (SelectedVariant is { } sv)
+                                        {
+                                            <div class="field-hint" id="gguf-variant-size" data-testid="gguf-variant-size">
+                                                <span class="num">@UiFormat.Bytes(sv.TotalBytes)</span> vs <span class="num">@UiFormat.GiB(_memory.AvailableGiB)</span> available on @(_multiNode ? "the bootstrap node" : "this box") right now
+                                            </div>
+                                        }
+                                    </div>
+
+                                    <div class="field field--wide">
+                                        <div class="callout callout--busy" data-testid="gguf-runtime-note">
+                                            <Icon Name="warning" />
+                                            <div class="callout-body">
+                                                MirbadLLM runs models with vLLM. vLLM's GGUF support is experimental, needs a single-file GGUF
+                                                (split files must be merged first), and does not cover every architecture — this model may not start.
+                                            </div>
+                                        </div>
+                                    </div>
+                                }
+                            }
+                        </div>
+
+                        <div class="field field--wide" aria-live="polite">
+                            @if (_downloadError is not null)
+                            {
+                                <div class="callout callout--failed" role="alert" data-testid="download-error">
+                                    <Icon Name="state-failed" /><div class="callout-body">@_downloadError</div>
+                                </div>
+                            }
+
+                            @if (_downloadStatus is null)
+                            {
+                                <div>
+                                    <button type="button" class="btn btn-primary" data-testid="start-download-button" disabled="@NeedsNode" @onclick="StartDownloadAsync">
+                                        <Icon Name="download" /> Start download
+                                    </button>
+                                </div>
+                            }
+                            else
+                            {
+                                <div class="download" data-testid="download-progress">
+                                    <div class="download-head">
+                                        <span>State: <strong data-testid="download-state">@_downloadStatus.State</strong></span>
+                                        @if (_downloadStatus.State is DownloadState.Downloading or DownloadState.Queued)
+                                        {
+                                            <span class="num muted">
+                                                @UiFormat.Bytes(_downloadStatus.BytesDownloaded) of @(_downloadStatus.TotalBytes > 0 ? UiFormat.Bytes(_downloadStatus.TotalBytes) : "unknown size")@(_downloadStatus.BytesPerSecond is { } rate ? $" · {UiFormat.Bytes((long)rate)}/s" : "")
+                                            </span>
+                                        }
+                                    </div>
+                                    @if (_downloadStatus.State is DownloadState.Downloading or DownloadState.Queued)
+                                    {
+                                        var pct = DownloadPercent(_downloadStatus);
+                                        <div class="progress-track" role="progressbar" aria-label="Download progress"
+                                             aria-valuemin="0" aria-valuemax="100" aria-valuenow="@pct.ToString("F0", CultureInfo.InvariantCulture)"
+                                             aria-valuetext="@($"{pct:F0}%, {UiFormat.Bytes(_downloadStatus.BytesDownloaded)} downloaded")">
+                                            <div class="progress-fill" style="width:@(pct.ToString("F1", CultureInfo.InvariantCulture))%"></div>
+                                        </div>
+                                        <div class="download-foot">
+                                            <span class="num" data-testid="download-percent">@pct.ToString("F0", CultureInfo.InvariantCulture)%</span>
+                                            <span class="muted">@(_downloadStatus.State == DownloadState.Queued ? "Waiting for the download container to start." : "Progress counts files as they finish, so it moves in steps.")@(_otherDownloads.Count > 0 ? $" Also downloading on this node: {string.Join(", ", _otherDownloads)}." : "")</span>
+                                            <button type="button" class="btn btn-sm btn-outline-danger" data-testid="cancel-download-button" @onclick="CancelDownloadAsync">
+                                                Cancel download
+                                            </button>
+                                        </div>
+                                    }
+                                    else if (_downloadStatus.State == DownloadState.Failed)
+                                    {
+                                        <div class="failure" data-testid="download-failed">
+                                            <span><strong>Download failed:</strong> <span class="failure-cause">@UiFormat.FailureSummary(_downloadStatus.Error)</span></span>
+                                            @if (!string.IsNullOrWhiteSpace(_downloadStatus.Error))
+                                            {
+                                                <details><summary>Full output</summary><pre>@_downloadStatus.Error</pre></details>
+                                            }
+                                        </div>
+                                        <div>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="retry-download-button" @onclick="StartDownloadAsync">Retry download</button>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="dismiss-download-button" @onclick="CancelDownloadAsync">Dismiss</button>
+                                        </div>
+                                    }
+                                    else if (_downloadStatus.State == DownloadState.Completed)
+                                    {
+                                        <div class="callout callout--ready" data-testid="download-complete">
+                                            <Icon Name="state-ready" /><div class="callout-body">Download complete. The fields below were filled in from the checkpoint.</div>
+                                        </div>
+                                        <div><button type="button" class="btn btn-sm btn-outline-secondary" data-testid="dismiss-download-button" @onclick="CancelDownloadAsync">Dismiss</button></div>
+                                    }
+                                </div>
+                            }
+                        </div>
+
+                        @if (IsLlamaCpp && _downloadStatus?.State == DownloadState.Completed && !string.IsNullOrEmpty(_selectedFolder))
+                        {
+                            <div class="field field--wide">
+                                <GgufPicker Folder="@_selectedFolder" Candidates="_ggufCandidates" File="@_llama.File" FileChanged="f => _llama.File = f"
+                                            OnRead="ReadGgufAsync" Summary="_gguf" Error="@_ggufError" Estimate="_estimate" Rooms="GgufRooms" />
+                            </div>
+                        }
+                    }
+                </div>
+            </section>
+        }
+
+        <EditForm @ref="_form" Model="_model" OnValidSubmit="SaveAsync" OnInvalidSubmit="OnInvalidSubmitAsync" data-testid="model-form" class="form-sections">
+            <DataAnnotationsValidator />
+            @if (IsNew && CurrentStep != WizardStep.Review)
+            {
+                @* The form's first submit button is its default one: disabled, it makes Enter in a field do nothing until the
+                   review step, so a half-filled wizard is never added by accident. *@
+                <button type="submit" class="wizard-enter-guard" disabled tabindex="-1" aria-hidden="true"></button>
+            }
+
+            <section class="panel form-section" aria-labelledby="sec-identity" data-wizard-step="@WizardAttr(WizardStep.Identity)" hidden="@StepHidden(WizardStep.Identity)">
+                <div class="form-section-intro">
+                    <h2 id="sec-identity">Identity</h2>
+                    <p>How the controller and API clients refer to this model.</p>
+                </div>
+                <div class="field-grid">
+                    <div class="field">
+                        <FieldHelp Label="Id" For="field-id" Help="@ModelFieldHelp.Id" />
+                        <InputText class="form-control num" id="field-id" @bind-Value="_model.Id" disabled="@(!IsNew)" data-testid="field-id" autocomplete="off" spellcheck="false"
+                                   aria-describedby="field-id-error" />
+                        <div id="field-id-error"><ValidationMessage For="() => _model.Id" /></div>
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="Served name" For="field-served-name" Help="@ModelFieldHelp.ServedName" />
+                        <InputText class="form-control" id="field-served-name" @bind-Value="_model.ServedName" data-testid="field-served-name" autocomplete="off" spellcheck="false"
+                                   aria-describedby="field-served-name-error" />
+                        <div id="field-served-name-error"><ValidationMessage For="() => _model.ServedName" /></div>
+                    </div>
+                    @if (!_multiNode)
+                    {
+                        <div class="field">
+                            <span class="field-label" id="field-node-label">Node</span>
+                            <div class="field-static num" aria-labelledby="field-node-label" data-testid="field-node-readonly">@SingleNodeText</div>
+                        </div>
+                        @* The runtime is the node's property, not the fleet's (MN-239 item 3, D131): a fleet of one
+                           Windows PC offers llama.cpp here. A node that reports none (the DGX) shows nothing new. *@
+                        @if (!IsNew && RuntimePicker.Offers(_singleNode, _runtime))
+                        {
+                            <RuntimePicker Node="_singleNode" IsNew="IsNew" Runtime="_runtime" RuntimeChanged="OnRuntimeChangedAsync" />
+                        }
+                    }
+                    <div class="field field--wide">
+                        <FieldHelp Label="Model path" For="field-model-path" Help="@ModelFieldHelp.ModelPath" />
+                        <InputText class="form-control num" id="field-model-path" @bind-Value="_model.ModelPath" data-testid="field-model-path" autocomplete="off" spellcheck="false"
+                                   aria-describedby="field-model-path-error" />
+                        <div id="field-model-path-error"><ValidationMessage For="() => _model.ModelPath" /></div>
+                    </div>
+                    <div class="field field--wide">
+                        <FieldHelp Label="Tags" For="field-tag-input" ShowLabel="false" Help="@ModelFieldHelp.Tags">
+                            <Leading><span class="field-label" id="tags-label">Tags</span></Leading>
+                        </FieldHelp>
+                        <div class="tag-editor" role="group" aria-labelledby="tags-label" aria-describedby="tags-hint" data-testid="tag-editor">
+                            <div class="tag-editor-row">
+                                @foreach (var info in ModelTags.BuiltIn)
+                                {
+                                    bool on = EffectiveTags.Contains(info.Id);
+                                    bool suggested = SuggestedTags.Contains(info.Id);
+                                    <button type="button" class="tag-toggle @(suggested ? "tag-toggle--suggested" : null)" aria-pressed="@(on ? "true" : "false")"
+                                            title="@info.Description" data-testid="@($"tag-toggle-{info.Id}")" @onclick="() => ToggleTag(info.Id)">
+                                        @if (on)
+                                        {
+                                            <Icon Name="check" />
+                                        }
+                                        <span>@info.Label</span>
+                                        @if (suggested)
+                                        {
+                                            <span class="tag-suggested">· suggested</span>
+                                        }
+                                    </button>
+                                }
+                            </div>
+                            @if (CustomTags.Count > 0)
+                            {
+                                <ul class="tag-list" aria-label="Custom tags" data-testid="tag-custom-list">
+                                    @foreach (string tag in CustomTags)
+                                    {
+                                        <li class="tag-chip tag-chip--removable" data-testid="@($"tag-custom-{tag}")">
+                                            @tag
+                                            <button type="button" class="tag-remove" aria-label="@($"Remove tag {tag}")" data-testid="@($"tag-remove-{tag}")"
+                                                    @onclick="() => RemoveTag(tag)">
+                                                <Icon Name="close" />
+                                            </button>
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                            <div class="tag-editor-add">
+                                @* form="…" names no form, so Enter here adds the tag instead of submitting the editor. *@
+                                <input class="form-control" id="field-tag-input" form="tag-input-detached" data-testid="field-tag-input" aria-label="Add a custom tag"
+                                       placeholder="Add your own, e.g. long-context" autocomplete="off" spellcheck="false" maxlength="40"
+                                       aria-describedby="@Described("tags-hint", _tagError is null ? null : "tag-error")" aria-invalid="@(_tagError is null ? null : "true")"
+                                       @bind="_tagInput" @bind:event="oninput" @onkeydown="OnTagKeyDown" />
+                                <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="tag-add" @onclick="AddCustomTag">
+                                    <Icon Name="plus" /> Add tag
+                                </button>
+                                @if (UnappliedSuggestions.Count > 0)
+                                {
+                                    <button type="button" class="btn btn-sm btn-ghost" data-testid="tag-add-suggested" @onclick="AddSuggestedTags">
+                                        Add suggested (@UnappliedSuggestions.Count)
+                                    </button>
+                                }
+                            </div>
+                            @if (_tagError is not null)
+                            {
+                                <div class="validation-message" id="tag-error" role="alert" data-testid="tag-error">@_tagError</div>
+                            }
+                            <div class="field-hint" id="tags-hint" data-testid="tags-hint">
+                                <span class="num">@EffectiveTags.Count</span> of <span class="num">@ModelTags.MaxTags</span>.
+                                @(IsNew && !_tagsTouched ? "Prefilled with the suggested tags until you change them." : "Changing tags never needs a restart.")
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel form-section" aria-labelledby="sec-download-source" data-wizard-step="@WizardAttr(WizardStep.Identity)" hidden="@StepHidden(WizardStep.Identity)">
+                <div class="form-section-intro">
+                    <h2 id="sec-download-source">Source</h2>
+                    <p>Where the checkpoint comes from, so a restore from a backup can download it again.</p>
+                </div>
+                <div class="field-grid">
+                    @if (string.IsNullOrWhiteSpace(_model.SourceRepoId) && _model.ExtraSources.Count == 0)
+                    {
+                        <div class="field field--wide">
+                            <div class="callout callout--busy" data-testid="no-source-hint">
+                                <Icon Name="warning" />
+                                <div class="callout-body">No download source — this model can't be re-downloaded after a restore. Add the Hugging Face repo it came from.</div>
+                            </div>
+                        </div>
+                    }
+                    <div class="field">
+                        <FieldHelp Label="Repo id" For="field-source-repo" Help="@ModelFieldHelp.SourceRepo" />
+                        <input class="form-control num" id="field-source-repo" data-testid="field-source-repo" @bind="_model.SourceRepoId"
+                               placeholder="owner/name" autocomplete="off" spellcheck="false" aria-describedby="source-repo-hint" />
+                        <div class="field-hint" id="source-repo-hint">
+                            Downloads into <code>/models/@(string.IsNullOrWhiteSpace(_model.ModelPath) ? "…" : _model.ModelPath)</code> (the model path).
+                        </div>
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="Revision" For="field-source-revision" Help="@ModelFieldHelp.SourceRevision" />
+                        <input class="form-control num" id="field-source-revision" data-testid="field-source-revision" @bind="_model.SourceRevision"
+                               placeholder="Default branch" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="field field--wide">
+                        <FieldHelp Label="Allow patterns" For="field-source-patterns" Help="@ModelFieldHelp.SourceAllowPatterns" />
+                        <input class="form-control num" id="field-source-patterns" data-testid="field-source-patterns" @bind="_model.SourcePatternsText"
+                               placeholder="Download defaults" autocomplete="off" spellcheck="false" />
+                    </div>
+                    <div class="field field--wide">
+                        <FieldHelp Label="Extra checkpoints" For="add-extra-source" ShowLabel="false" Help="@ModelFieldHelp.ExtraSources">
+                            <Leading><span class="field-label" id="extra-sources-label">Extra checkpoints</span></Leading>
+                        </FieldHelp>
+                        @if (_model.ExtraSources.Count > 0)
+                        {
+                            <ul class="source-list" aria-labelledby="extra-sources-label" data-testid="extra-sources">
+                                @for (int i = 0; i < _model.ExtraSources.Count; i++)
+                                {
+                                    var row = _model.ExtraSources[i];
+                                    int n = i + 1;
+                                    <li class="source-row" data-testid="@($"extra-source-{n}")">
+                                        <div class="field">
+                                            <label class="field-label" for="@($"extra-source-repo-{n}")">Repo id</label>
+                                            <input class="form-control num" id="@($"extra-source-repo-{n}")" data-testid="@($"extra-source-repo-{n}")" @bind="row.RepoId"
+                                                   placeholder="owner/name" autocomplete="off" spellcheck="false" />
+                                        </div>
+                                        <div class="field">
+                                            <label class="field-label" for="@($"extra-source-folder-{n}")">Folder</label>
+                                            <input class="form-control num" id="@($"extra-source-folder-{n}")" data-testid="@($"extra-source-folder-{n}")" @bind="row.Folder"
+                                                   placeholder="Folder under /models" autocomplete="off" spellcheck="false" />
+                                        </div>
+                                        <div class="field">
+                                            <label class="field-label" for="@($"extra-source-revision-{n}")">Revision</label>
+                                            <input class="form-control num" id="@($"extra-source-revision-{n}")" @bind="row.Revision"
+                                                   placeholder="Default branch" autocomplete="off" spellcheck="false" />
+                                        </div>
+                                        <div class="field">
+                                            <label class="field-label" for="@($"extra-source-patterns-{n}")">Allow patterns</label>
+                                            <input class="form-control num" id="@($"extra-source-patterns-{n}")" @bind="row.PatternsText"
+                                                   placeholder="Download defaults" autocomplete="off" spellcheck="false" />
+                                        </div>
+                                        <div class="source-row-actions">
+                                            <button type="button" class="btn btn-sm btn-ghost" aria-label="@($"Remove extra checkpoint {n}")"
+                                                    data-testid="@($"remove-extra-source-{n}")" @onclick="() => _model.ExtraSources.Remove(row)">
+                                                <Icon Name="trash" /> Remove
+                                            </button>
+                                        </div>
+                                    </li>
+                                }
+                            </ul>
+                        }
+                        <div>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" id="add-extra-source" data-testid="add-extra-source"
+                                    @onclick="() => _model.ExtraSources.Add(new SourceRow())">
+                                <Icon Name="plus" /> Add a checkpoint
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            @if (IsLlamaCpp && !IsNew)
+            {
+                <section class="panel form-section" aria-labelledby="sec-gguf" data-testid="llamacpp-gguf">
+                    <div class="form-section-intro">
+                        <h2 id="sec-gguf">GGUF</h2>
+                        <p>The file llama-server loads from the model folder (<code>@_model.ModelPath</code>). Its header gives the estimate below.</p>
+                    </div>
+                    <div class="field-grid">
+                        <div class="field field--wide">
+                            <GgufPicker Folder="@_model.ModelPath" Candidates="_ggufCandidates" File="@_llama.File" FileChanged="f => _llama.File = f"
+                                        OnRead="ReadGgufAsync" Summary="_gguf" Error="@_ggufError" Estimate="_estimate" Rooms="GgufRooms" />
+                        </div>
+                    </div>
+                </section>
+            }
+
+            @if (IsLlamaCpp)
+            {
+                RenderFragment llama = @<LlamaCppSection Form="_llama" OnChanged="OnLlamaChangedAsync" Summary="_gguf" Estimate="_estimate" EstimateError="@(_estimateError ?? _ggufError)"
+                                 MemoryBudgetGiB="_model.MemoryBudgetGiB" MemoryBudgetGiBChanged="OnLlamaBudgetChangedAsync" Fit="@(_multiNode ? _fit : null)"
+                                 Versions="LlamaVersions" AutoStart="_model.AutoStart" AutoStartChanged="v => _model.AutoStart = v" />;
+                @if (IsNew)
+                {
+                    <div class="wizard-wrap" data-wizard-step="memory" hidden="@StepHidden(WizardStep.Memory)">@llama</div>
+                }
+                else
+                {
+                    @llama
+                }
+            }
+            else if (IsMlx)
+            {
+                RenderFragment mlx = @<MlxSection Form="_mlx" OnChanged="OnMlxChangedAsync" Inspection="MemoryInspection" Estimate="_mlxEstimate"
+                                 MemoryBudgetGiB="_model.MemoryBudgetGiB" MemoryBudgetGiBChanged="OnLlamaBudgetChangedAsync" Fit="@(_multiNode ? _fit : null)"
+                                 Versions="MlxVersions" AutoStart="_model.AutoStart" AutoStartChanged="v => _model.AutoStart = v" />;
+                @if (IsNew)
+                {
+                    <div class="wizard-wrap" data-wizard-step="memory" hidden="@StepHidden(WizardStep.Memory)">@mlx</div>
+                }
+                else
+                {
+                    @mlx
+                }
+            }
+            else
+            {
+            <section class="panel form-section" aria-labelledby="sec-memory" data-wizard-step="@WizardAttr(WizardStep.Memory)" hidden="@StepHidden(WizardStep.Memory)">
+                <div class="form-section-intro">
+                    <h2 id="sec-memory">Memory and context</h2>
+                    <p>The budget is checked against free memory before the model starts, so it must cover weights, KV cache and activations.</p>
+                </div>
+                <div class="field-grid">
+                    <div class="field">
+                        <FieldHelp Label="Memory budget (GiB)" For="field-memory-budget" Help="@ModelFieldHelp.MemoryBudgetGiB" />
+                        <InputNumber class="form-control num" id="field-memory-budget" @bind-Value="_model.MemoryBudgetGiB" @bind-Value:after="RefreshFitAsync" data-testid="field-memory-budget"
+                                     aria-describedby="field-memory-budget-error memory-budget-hint" />
+                        <div id="field-memory-budget-error"><ValidationMessage For="() => _model.MemoryBudgetGiB" /></div>
+                        <div class="field-hint" id="memory-budget-hint" data-testid="memory-budget-hint">
+                            @if (_suggestionFormula is not null)
+                            {
+                                <div>Suggested: <span class="num">@_suggestionFormula</span></div>
+                            }
+                            @if (BudgetTooSmall && MemoryInspection is { } mi)
+                            {
+                                <div class="budget-check budget-check--over" data-testid="memory-budget-too-small">
+                                    <Icon Name="warning" />
+                                    <span>Too small for this context: one <span class="num">@_model.MaxModelLen.ToString("N0", CultureInfo.InvariantCulture)</span>-token request needs about <span class="num">@UiFormat.GiB(Math.Ceiling(mi.MinimumBudgetGiB(_model.MaxModelLen)))</span> (<span class="num">@mi.WeightsGiB.ToString("F1", CultureInfo.InvariantCulture)</span> weights + <span class="num">@ModelFolderInspector.RuntimeOverheadGiB.ToString("F1", CultureInfo.InvariantCulture)</span> runtime + <span class="num">@mi.KvGiB(_model.MaxModelLen).ToString("F1", CultureInfo.InvariantCulture)</span> KV cache GiB). vLLM will refuse to start. Raise the budget or lower Max model len.</span>
+                                </div>
+                            }
+                            @if (_multiNode && _fit is { } fit)
+                            {
+                                @* A budget below the model's minimum never "fits", even when the node has room for it. *@
+                                bool roomButTooSmall = fit.Fits == true && BudgetTooSmall;
+                                <div class="budget-check @(fit.Fits == false || roomButTooSmall ? "budget-check--over" : fit.Fits == true ? "budget-check--ok" : null)" data-testid="memory-budget-fit"
+                                     data-fits="@(roomButTooSmall ? "too-small" : fit.Fits switch { true => "true", false => "false", _ => "unknown" })">
+                                    <Icon Name="@(fit.Fits == true && !roomButTooSmall ? "check" : "warning")" />
+                                    <span>@(roomButTooSmall ? RoomButTooSmallText(_nodeId) : fit.Message)</span>
+                                </div>
+                            }
+                            @if (ShowBudgetCheck)
+                            {
+                                @if (_model.MemoryBudgetGiB > FreeAfterReserve)
+                                {
+                                    <div class="budget-check budget-check--over" data-testid="memory-budget-warning">
+                                        <Icon Name="warning" />
+                                        <span>Won't fit right now: needs <span class="num">@UiFormat.GiB(_model.MemoryBudgetGiB)</span>, <span class="num">@UiFormat.GiB(Math.Max(0, FreeAfterReserve))</span> free after the <span class="num">@UiFormat.GiB(_reserveGiB)</span> reserve. You can still save it; starting will ask you to confirm.</span>
+                                    </div>
+                                }
+                                else if (BudgetTooSmall)
+                                {
+                                    <div class="budget-check budget-check--over" data-testid="memory-budget-room-too-small">
+                                        <Icon Name="warning" />
+                                        <span>@RoomButTooSmallText(null)</span>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="budget-check budget-check--ok">
+                                        <Icon Name="check" />
+                                        <span>Fits right now: <span class="num">@UiFormat.GiB(FreeAfterReserve)</span> free after the <span class="num">@UiFormat.GiB(_reserveGiB)</span> reserve (of <span class="num">@UiFormat.GiB(_memory.TotalGiB)</span>).</span>
+                                    </div>
+                                }
+                            }
+                        </div>
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="Max model len" For="field-max-model-len" Help="@ModelFieldHelp.MaxModelLen" />
+                        <select class="form-select num" id="field-max-model-len" data-testid="field-max-model-len" @bind="MaxModelLenSelection"
+                                aria-describedby="field-max-model-len-error" aria-invalid="@Invalid(context, () => _model.MaxModelLen)">
+                            @foreach (int preset in _maxModelLenPresets)
+                            {
+                                <option value="@preset">@preset.ToString("N0", CultureInfo.InvariantCulture) tokens</option>
+                            }
+                            <option value="custom">Custom…</option>
+                        </select>
+                        @if (MaxModelLenSelection == "custom")
+                        {
+                            <InputNumber class="form-control num" @bind-Value="_model.MaxModelLen" data-testid="field-max-model-len-custom" aria-label="Custom max model len, in tokens"
+                                         aria-describedby="field-max-model-len-error" />
+                        }
+                        <div id="field-max-model-len-error"><ValidationMessage For="() => _model.MaxModelLen" /></div>
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="Max num seqs" For="field-max-num-seqs" Help="@ModelFieldHelp.MaxNumSeqs" />
+                        <select class="form-select num" id="field-max-num-seqs" data-testid="field-max-num-seqs" @bind="MaxNumSeqsSelection"
+                                aria-describedby="field-max-num-seqs-error" aria-invalid="@Invalid(context, () => _model.MaxNumSeqs)">
+                            @foreach (int preset in VllmOptionsCatalog.MaxNumSeqsPresets)
+                            {
+                                <option value="@preset">@preset</option>
+                            }
+                            <option value="custom">Custom…</option>
+                        </select>
+                        @if (MaxNumSeqsSelection == "custom")
+                        {
+                            <InputNumber class="form-control num" @bind-Value="_model.MaxNumSeqs" data-testid="field-max-num-seqs-custom" aria-label="Custom max num seqs"
+                                         aria-describedby="field-max-num-seqs-error" />
+                        }
+                        <div id="field-max-num-seqs-error"><ValidationMessage For="() => _model.MaxNumSeqs" /></div>
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="Max batched tokens" For="field-max-num-batched-tokens" Help="@ModelFieldHelp.MaxNumBatchedTokens" />
+                        <select class="form-select num" id="field-max-num-batched-tokens" data-testid="field-max-num-batched-tokens" @bind="MaxNumBatchedTokensSelection">
+                            <option value="">vLLM default</option>
+                            @foreach (int preset in MaxNumBatchedTokensPresets)
+                            {
+                                <option value="@preset">@preset.ToString("N0", CultureInfo.InvariantCulture)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="KV cache dtype" For="field-kv-cache-dtype" Help="@ModelFieldHelp.KvCacheDtype" />
+                        <select class="form-select" id="field-kv-cache-dtype" data-testid="field-kv-cache-dtype" @bind="_model.KvCacheDtype"
+                                aria-describedby="@Described("field-kv-cache-dtype-error", KvCacheDtypeHint is null ? null : "field-kv-cache-dtype-hint")"
+                                aria-invalid="@Invalid(context, () => _model.KvCacheDtype)">
+                            @foreach (var option in _catalog.KvCacheDtypes)
+                            {
+                                <option value="@option.Value">@option.Label</option>
+                            }
+                        </select>
+                        <div id="field-kv-cache-dtype-error"><ValidationMessage For="() => _model.KvCacheDtype" /></div>
+                        @if (KvCacheDtypeHint is not null)
+                        {
+                            <div class="field-hint" id="field-kv-cache-dtype-hint" data-testid="field-kv-cache-dtype-hint">@KvCacheDtypeHint</div>
+                        }
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="Quantization" For="field-quantization" Help="@ModelFieldHelp.Quantization" />
+                        <select class="form-select" id="field-quantization" data-testid="field-quantization" @bind="_model.Quantization"
+                                aria-describedby="@(QuantizationHint is null ? null : "field-quantization-hint")">
+                            @foreach (var option in _catalog.Quantizations)
+                            {
+                                <option value="@OptionValue(option.Value)">@option.Label</option>
+                            }
+                        </select>
+                        @if (QuantizationHint is not null)
+                        {
+                            <div class="field-hint" id="field-quantization-hint" data-testid="field-quantization-hint">@QuantizationHint</div>
+                        }
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel form-section" aria-labelledby="sec-parsers" data-wizard-step="@WizardAttr(WizardStep.Tuning)" hidden="@StepHidden(WizardStep.Tuning)">
+                <div class="form-section-intro">
+                    <h2 id="sec-parsers">Parsers</h2>
+                    <p>Turn the model's raw output into OpenAI tool calls and reasoning content. They must match the model family.</p>
+                </div>
+                <div class="field-grid">
+                    <div class="field">
+                        <FieldHelp Label="Tool call parser" For="field-tool-call-parser" Help="@ModelFieldHelp.ToolCallParser" />
+                        <select class="form-select" id="field-tool-call-parser" data-testid="field-tool-call-parser" @bind="_model.ToolCallParser">
+                            <option value="">None</option>
+                            @foreach (string parser in _catalog.ToolCallParsers)
+                            {
+                                <option value="@parser">@parser</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="Reasoning parser" For="field-reasoning-parser" Help="@ModelFieldHelp.ReasoningParser" />
+                        <select class="form-select" id="field-reasoning-parser" data-testid="field-reasoning-parser" @bind="_model.ReasoningParser">
+                            <option value="">None</option>
+                            @foreach (string parser in _catalog.ReasoningParsers)
+                            {
+                                <option value="@parser">@parser</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <section class="panel form-section" aria-labelledby="sec-performance" data-wizard-step="@WizardAttr(WizardStep.Tuning)" hidden="@StepHidden(WizardStep.Tuning)">
+                <div class="form-section-intro">
+                    <h2 id="sec-performance">Performance</h2>
+                    <p>Compilation and decoding options. The defaults are the settings measured on this box.</p>
+                </div>
+                <div class="field-grid">
+                    <div class="field">
+                        <FieldHelp Label="CUDA graph mode" For="field-cuda-graph-mode" Help="@ModelFieldHelp.CudaGraphMode" />
+                        <select class="form-select" id="field-cuda-graph-mode" data-testid="field-cuda-graph-mode" @bind="_model.CudaGraphMode"
+                                aria-describedby="@(CudaGraphModeHint is null ? null : "field-cuda-graph-mode-hint")">
+                            @foreach (var option in _catalog.CudaGraphModes)
+                            {
+                                <option value="@option.Value">@option.Label</option>
+                            }
+                        </select>
+                        @if (CudaGraphModeHint is not null)
+                        {
+                            <div class="field-hint" id="field-cuda-graph-mode-hint" data-testid="field-cuda-graph-mode-hint">@CudaGraphModeHint</div>
+                        }
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="Prefix caching" For="field-prefix-caching" Help="@ModelFieldHelp.EnablePrefixCaching" />
+                        <select class="form-select" id="field-prefix-caching" data-testid="field-prefix-caching" @bind="_model.PrefixCaching">
+                            <option value="">vLLM default</option>
+                            <option value="on">On</option>
+                            <option value="off">Off</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="Async scheduling" For="field-async-scheduling" Help="@ModelFieldHelp.AsyncScheduling" />
+                        <select class="form-select" id="field-async-scheduling" data-testid="field-async-scheduling" @bind="_model.AsyncScheduling">
+                            <option value="">vLLM default</option>
+                            <option value="on">On</option>
+                            <option value="off">Off</option>
+                        </select>
+                    </div>
+                    @if (ShowMambaCacheMode)
+                    {
+                        <div class="field">
+                            <FieldHelp Label="Mamba cache mode" For="field-mamba-cache-mode" Help="@ModelFieldHelp.MambaCacheMode" />
+                            <select class="form-select" id="field-mamba-cache-mode" data-testid="field-mamba-cache-mode" @bind="_model.MambaCacheMode">
+                                <option value="">vLLM default</option>
+                                @foreach (string mode in MambaCacheModeOptions)
+                                {
+                                    <option value="@mode">@mode</option>
+                                }
+                            </select>
+                        </div>
+                    }
+                    <div class="field field--wide">
+                        <FieldHelp Label="Other compilation-config keys (JSON)" For="field-compilation-config" Help="@ModelFieldHelp.CompilationConfig" />
+                        <InputText class="form-control num" id="field-compilation-config" data-testid="field-compilation-config" @bind-Value="_model.CompilationExtraJson"
+                                   placeholder="{}" spellcheck="false" />
+                    </div>
+                    <div class="field field--wide">
+                        <FieldHelp Label="Speculative decoding" For="speculativeEnabled" ShowLabel="false" Help="@ModelFieldHelp.SpeculativeEnabled">
+                            <Leading>
+                                <div class="form-check form-switch switch-row">
+                                    <InputCheckbox class="form-check-input" role="switch" @bind-Value="_model.SpeculativeEnabled" id="speculativeEnabled" data-testid="field-speculative-enabled" />
+                                    <label class="form-check-label" for="speculativeEnabled">Speculative decoding</label>
+                                </div>
+                            </Leading>
+                        </FieldHelp>
+                    </div>
+                    @if (_model.SpeculativeEnabled)
+                    {
+                        <div class="field">
+                            <FieldHelp Label="Method" For="field-speculative-method" Help="@ModelFieldHelp.SpeculativeMethod" />
+                            <select class="form-select" id="field-speculative-method" data-testid="field-speculative-method" @bind="_model.SpeculativeMethod"
+                                    aria-describedby="@(SpeculativeMethodHint is null ? null : "field-speculative-method-hint")">
+                                <option value="">None (inferred from the draft model)</option>
+                                @foreach (var option in _catalog.SpeculativeMethods.Where(o => o.Value != "none"))
+                                {
+                                    <option value="@option.Value">@option.Label</option>
+                                }
+                                @if (!string.IsNullOrEmpty(_model.SpeculativeMethod) && !_catalog.SpeculativeMethods.Any(o => o.Value == _model.SpeculativeMethod))
+                                {
+                                    <option value="@_model.SpeculativeMethod">@_model.SpeculativeMethod</option>
+                                }
+                            </select>
+                            @if (SpeculativeMethodHint is not null)
+                            {
+                                <div class="field-hint" id="field-speculative-method-hint" data-testid="field-speculative-method-hint">@SpeculativeMethodHint</div>
+                            }
+                        </div>
+                        <div class="field">
+                            <FieldHelp Label="Num speculative tokens" For="field-speculative-num-tokens" Help="@ModelFieldHelp.SpeculativeNumTokens" />
+                            <InputNumber class="form-control num" id="field-speculative-num-tokens" @bind-Value="_model.SpeculativeNumTokens"
+                                         aria-describedby="field-speculative-num-tokens-error" />
+                            <div id="field-speculative-num-tokens-error"><ValidationMessage For="() => _model.SpeculativeNumTokens" /></div>
+                        </div>
+                        <div class="field field--wide">
+                            <FieldHelp Label="Draft model path" For="field-speculative-draft-model" Help="@ModelFieldHelp.SpeculativeDraftModel" />
+                            <InputText class="form-control num" id="field-speculative-draft-model" data-testid="field-speculative-draft-model"
+                                       @bind-Value="_model.SpeculativeDraftModel" placeholder="/models/…" spellcheck="false" />
+                        </div>
+                        <div class="field field--wide">
+                            <FieldHelp Label="Advanced speculative keys (JSON)" For="field-speculative-extra" Help="@ModelFieldHelp.SpeculativeExtra" />
+                            <InputText class="form-control num" id="field-speculative-extra" data-testid="field-speculative-extra"
+                                       @bind-Value="_model.SpeculativeExtraJson" placeholder="{&quot;moe_backend&quot;:&quot;triton&quot;}" spellcheck="false" />
+                        </div>
+                    }
+                    @if (NeedsPiecewiseAdvice)
+                    {
+                        <div class="field field--wide">
+                            <div class="callout callout--busy" role="status" data-testid="mtp-piecewise-advice">
+                                <Icon Name="warning" />
+                                <div class="callout-body">
+                                    <span>MTP on the GB10 needs PIECEWISE; FULL crashed in cuBLAS in Phase 0.</span>
+                                    <div>
+                                        <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="set-piecewise" @onclick="SetPiecewise">
+                                            Set PIECEWISE
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </section>
+
+            <section class="panel form-section" aria-labelledby="sec-container" data-wizard-step="@WizardAttr(WizardStep.Tuning)" hidden="@StepHidden(WizardStep.Tuning)">
+                <div class="form-section-intro">
+                    <h2 id="sec-container">Container</h2>
+                    <p>The image the model runs in, raw vLLM arguments, and whether it starts with the controller.</p>
+                </div>
+                <div class="field-grid">
+                    <div class="field field--wide">
+                        <FieldHelp Label="Image override" For="field-image" Help="@ModelFieldHelp.Image" />
+                        <select class="form-select num" id="field-image" data-testid="field-image" @bind="_model.Image" @bind:after="OnImageChanged">
+                            <option value="" data-testid="field-image-default">@DefaultImageLabel</option>
+                            @foreach (string image in _catalog.Images)
+                            {
+                                <option value="@image">@image</option>
+                            }
+                        </select>
+                    </div>
+                    @if (!string.IsNullOrWhiteSpace(_model.Image))
+                    {
+                        <div class="field field--wide">
+                            <FieldHelp Label="Image digest" For="field-image-digest" Help="@ModelFieldHelp.ImageDigest" />
+                            <input class="form-control num" id="field-image-digest" data-testid="field-image-digest" @bind="_model.ImageDigest"
+                                   placeholder="sha256:… (needed on Linux PC nodes)" autocomplete="off" spellcheck="false"
+                                   aria-describedby="@Described("field-image-digest-hint", DigestProblem is null ? null : "field-image-digest-error")"
+                                   aria-invalid="@(DigestProblem is null ? null : "true")" />
+                            @if (DigestProblem is not null)
+                            {
+                                <div class="validation-message" id="field-image-digest-error" data-testid="field-image-digest-error">@DigestProblem</div>
+                            }
+                            <div class="field-hint" id="field-image-digest-hint">
+                                Pins this image to an approved digest. The DGX runs its locally built images by tag and needs none; a Linux PC node needs it.
+                            </div>
+                        </div>
+                    }
+                    <div class="field field--wide">
+                        <FieldHelp Label="Extra args (one per line)" For="field-extra-args" Help="@ModelFieldHelp.ExtraArgs" />
+                        <InputTextArea class="form-control num" id="field-extra-args" data-testid="field-extra-args" rows="3" @bind-Value="_model.ExtraArgsText" spellcheck="false"
+                                       aria-describedby="field-extra-args-hint" />
+                        <div class="field-hint" id="field-extra-args-hint">
+                            Flags that have their own field above (speculative and compilation config, max num seqs, max batched tokens,
+                            KV cache dtype, prefix caching, async scheduling, mamba cache mode@(_multiNode ? ", and the tensor parallel size when GPUs are ticked" : "")) are moved into that field when you save,
+                            so each is passed to vLLM exactly once.
+                        </div>
+                        @if (ExtraArgsPreview.Lifted.Count > 0)
+                        {
+                            <div class="callout callout--busy" role="status" data-testid="extra-args-lifted">
+                                <Icon Name="info" />
+                                <div class="callout-body">
+                                    <span>On save, these move into their fields:</span>
+                                    <ul class="plain-list">
+                                        @foreach (var lifted in ExtraArgsPreview.Lifted)
+                                        {
+                                            <li><code>@lifted.Flag</code> → @lifted.Field</li>
+                                        }
+                                    </ul>
+                                </div>
+                            </div>
+                        }
+                        @if (ExtraArgsPreview.Problems.Count > 0)
+                        {
+                            <div class="callout callout--failed" role="alert" data-testid="extra-args-problems">
+                                <Icon Name="state-failed" />
+                                <div class="callout-body">@string.Join(" ", ExtraArgsPreview.Problems)</div>
+                            </div>
+                        }
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="Auto-start on boot" For="autoStart" ShowLabel="false" Help="@ModelFieldHelp.AutoStart">
+                            <Leading>
+                                <div class="form-check form-switch switch-row">
+                                    <InputCheckbox class="form-check-input" role="switch" @bind-Value="_model.AutoStart" id="autoStart" />
+                                    <label class="form-check-label" for="autoStart">Start when the controller boots</label>
+                                </div>
+                            </Leading>
+                        </FieldHelp>
+                    </div>
+                </div>
+            </section>
+            }
+
+            @if (IsNew)
+            {
+                @WizardReview()
+                <div class="form-footer wizard-footer" data-testid="wizard-footer">
+                    @if (WizardIndex > 0)
+                    {
+                        <button type="button" class="btn btn-outline-secondary" data-testid="wizard-back" @onclick="BackStepAsync">
+                            <Icon Name="back" /> Back
+                        </button>
+                    }
+                    else
+                    {
+                        <a class="btn btn-outline-secondary" href="models">Cancel</a>
+                    }
+                    <span class="wizard-count" data-testid="wizard-count">Step <span class="num">@(WizardIndex + 1)</span> of <span class="num">@WizardSteps.Count</span></span>
+                    <span class="spacer"></span>
+                    @if (CurrentStep != WizardStep.Review)
+                    {
+                        string? blocker = NextBlocker ?? _nextProblem;
+                        @if (blocker is not null)
+                        {
+                            <span class="form-footer-note wizard-blocker" id="wizard-next-hint" data-testid="wizard-next-hint">@blocker</span>
+                        }
+                        <button type="button" class="btn btn-primary" data-testid="wizard-next" disabled="@(NextBlocker is not null)"
+                                aria-describedby="@(blocker is null ? null : "wizard-next-hint")" @onclick="NextStepAsync">
+                            Next: @StepLabel(WizardSteps[WizardIndex + 1]) <Icon Name="arrow-right" />
+                        </button>
+                    }
+                    <button type="submit" class="btn btn-primary" data-testid="save-button" hidden="@(CurrentStep != WizardStep.Review)">
+                        <Icon Name="plus" /> Add model
+                    </button>
+                </div>
+            }
+            else
+            {
+                <div class="form-footer">
+                    <button type="submit" class="btn btn-primary" data-testid="save-button">Save changes</button>
+                    <a class="btn btn-outline-secondary" href="models">Cancel</a>
+                </div>
+            }
+        </EditForm>
+
+        @if (!IsNew)
+        {
+            @* Destruction sits alone at the very end, away from Save (dashed red, its own seam). *@
+            <section class="danger-zone" aria-labelledby="sec-danger" data-testid="danger-zone">
+                <div class="danger-zone-text">
+                    <h2 class="panel-label" id="sec-danger">Delete this model</h2>
+                    <p class="muted">
+                        Removes the definition from MirbadLLM. The checkpoint files stay on disk, so you can add it again later.
+                        @if (_deleteDisabled)
+                        {
+                            <span id="delete-hint">Stop the model first: a running model can't be deleted.</span>
+                        }
+                    </p>
+                </div>
+                <button type="button" class="btn btn-outline-danger" disabled="@_deleteDisabled" data-testid="delete-button"
+                        aria-describedby="@(_deleteDisabled ? "delete-hint" : null)" @onclick="() => _deleteOpen = true">
+                    <Icon Name="trash" /> Delete model…
+                </button>
+            </section>
+        }
+    </div>
+
+    <ApplyChangesDialog @ref="_apply" OnFinished="AfterApplyAsync" />
+
+    @if (!IsNew && _multiNode && _original is not null)
+    {
+        <MoveModelDialog @ref="_moveDialog" Model="_original" Nodes="_nodes" Running="IsRunning" OnChanged="AfterMoveChangedAsync" />
+        <UnplaceModelDialog @ref="_unplace" Model="_original" Running="IsRunning" OnUnplaced="AfterMoveChangedAsync" />
+    }
+
+    @if (!IsNew)
+    {
+        <ConfirmDialog @bind-Open="_deleteOpen" Title="@($"Delete {Id}?")" ConfirmLabel="Delete model" Destructive="true"
+                       OnConfirm="DeleteAsync" TestId="delete-dialog" ConfirmTestId="confirm-delete">
+            <p>
+                This removes the model definition from MirbadLLM. The checkpoint files in
+                <code>/models/@_model.ModelPath</code> stay on disk, so you can add the model again later.
+            </p>
+        </ConfirmDialog>
+    }
+}
+
+@code {
+    private enum SourceMode { Folder, Download }
+
+    [Parameter]
+    public string? Id { get; set; }
+
+    /// <summary><c>?source=download</c> opens the Hugging Face download tab (used by the empty states).</summary>
+    [SupplyParameterFromQuery(Name = "source")]
+    public string? SourceQuery { get; set; }
+
+    /// <summary><c>?node=</c> preselects the node of a new model when the master has several (e.g. from a node's page).</summary>
+    [SupplyParameterFromQuery(Name = "node")]
+    public string? NodeQuery { get; set; }
+
+    private bool IsNew => string.IsNullOrEmpty(Id);
+
+    // ---------- Add model wizard ----------
+    // Every step's sections stay rendered so state, validation and the live fit keep working; only the current one is
+    // shown. Settings (edit) keeps the single long form.
+    private enum WizardStep { Where, Checkpoint, Identity, Memory, Tuning, Review }
+
+    private WizardStep _step = WizardStep.Where;
+    private readonly Dictionary<WizardStep, ElementReference> _stepButtons = [];
+    private bool _focusStep;
+
+    private bool HasWhereStep => _multiNode || RuntimePicker.Offers(_singleNode, _runtime);
+
+    private List<WizardStep> WizardSteps
+    {
+        get
+        {
+            var steps = new List<WizardStep>(6);
+            if (HasWhereStep)
+            {
+                steps.Add(WizardStep.Where);
+            }
+
+            steps.Add(WizardStep.Checkpoint);
+            steps.Add(WizardStep.Identity);
+            steps.Add(WizardStep.Memory);
+            if (!IsLlamaCpp && !IsMlx)
+            {
+                // llama.cpp and MLX keep their performance settings and auto-start in their own settings section.
+                steps.Add(WizardStep.Tuning);
+            }
+
+            steps.Add(WizardStep.Review);
+            return steps;
+        }
+    }
+
+    /// <summary>The step shown; when the list changes under it (llama.cpp drops Tuning) the nearest earlier step.</summary>
+    private WizardStep CurrentStep
+    {
+        get
+        {
+            var steps = WizardSteps;
+            return steps.Contains(_step) ? _step : steps.LastOrDefault(s => s < _step, steps[0]);
+        }
+    }
+
+    private int WizardIndex => WizardSteps.IndexOf(CurrentStep);
+
+    private string WizardPercent =>
+        (WizardSteps.Count <= 1 ? 100 : 100.0 * WizardIndex / (WizardSteps.Count - 1)).ToString("F1", CultureInfo.InvariantCulture);
+
+    private bool StepHidden(WizardStep step) => IsNew && CurrentStep != step;
+
+    // Steps the operator has opened: a step only shows its check once it has been seen and holds what it needs.
+    private readonly HashSet<WizardStep> _visited = [WizardStep.Where];
+
+    private bool StepComplete(WizardStep step) => step switch
+    {
+        WizardStep.Where => !NeedsNode,
+        WizardStep.Checkpoint => !string.IsNullOrWhiteSpace(_model.ModelPath) && (!IsLlamaCpp || !string.IsNullOrWhiteSpace(_llama.File)),
+        WizardStep.Identity => !string.IsNullOrWhiteSpace(_model.Id) && !string.IsNullOrWhiteSpace(_model.ServedName),
+        WizardStep.Review => false,
+        _ => _visited.Contains(step),
+    };
+
+    private string? WizardAttr(WizardStep step) => IsNew ? StepKey(step) : null;
+
+    private static string StepKey(WizardStep step) => step.ToString().ToLowerInvariant();
+
+    private string StepLabel(WizardStep step) => step switch
+    {
+        WizardStep.Where => _multiNode ? "Placement" : "Runtime",
+        WizardStep.Checkpoint => "Checkpoint",
+        WizardStep.Identity => "Name and tags",
+        WizardStep.Memory => IsLlamaCpp ? "llama.cpp settings" : IsMlx ? "MLX settings" : "Memory",
+        WizardStep.Tuning => "Tuning",
+        _ => "Review",
+    };
+
+    private string StepHint(WizardStep step) => step switch
+    {
+        WizardStep.Where => _multiNode ? "Node and GPUs" : RuntimeChoiceText,
+        WizardStep.Checkpoint => "A folder or a download",
+        WizardStep.Identity => "Id, served name, source",
+        WizardStep.Memory => IsLlamaCpp ? "Context, offload, budget" : IsMlx ? "Context, cache, budget" : "Budget and context",
+        WizardStep.Tuning => "Parsers, speed, image",
+        _ => "Check and add",
+    };
+
+    /// <summary>Why Next is not available yet, or null. Only what a later step cannot work without is required here.</summary>
+    private string? NextBlocker => CurrentStep switch
+    {
+        WizardStep.Where when NeedsNode => "Choose a node first.",
+        WizardStep.Checkpoint when string.IsNullOrWhiteSpace(_model.ModelPath) =>
+            _source == SourceMode.Download ? "Finish the download, or pick a folder instead." : "Choose a checkpoint folder.",
+        WizardStep.Checkpoint when IsLlamaCpp && string.IsNullOrWhiteSpace(_llama.File) => "Choose the GGUF file.",
+        WizardStep.Identity when string.IsNullOrWhiteSpace(_model.Id) || string.IsNullOrWhiteSpace(_model.ServedName) =>
+            "Fill in the id and the served name.",
+        _ => null,
+    };
+
+    // ---- Step order ----
+    // Steps open strictly in sequence: up to the furthest step reached through Next (each Next checks its step), and
+    // never past the first earlier step that has become incomplete again. Back, the stepper and Review's Edit links
+    // only go to steps within that reach.
+    private EditForm? _form;
+    private WizardStep _furthest = WizardStep.Where;
+    private string? _nextProblem;
+
+    private int FurthestIndex
+    {
+        get
+        {
+            var steps = WizardSteps;
+            int i = steps.FindLastIndex(s => s <= _furthest);
+            return i < 0 ? 0 : i;
+        }
+    }
+
+    /// <summary>The last step that may be opened now.</summary>
+    private int MaxOpenIndex
+    {
+        get
+        {
+            var steps = WizardSteps;
+            int max = Math.Max(FurthestIndex, WizardIndex);
+            for (int i = 0; i < max; i++)
+            {
+                if (StepProblem(steps[i]) is not null)
+                {
+                    return i;
+                }
+            }
+
+            return max;
+        }
+    }
+
+    private static readonly string[] IdentityFields = [nameof(EditModel.Id), nameof(EditModel.ServedName), nameof(EditModel.ModelPath)];
+    private static readonly string[] MemoryFields =
+        [nameof(EditModel.MemoryBudgetGiB), nameof(EditModel.MaxModelLen), nameof(EditModel.MaxNumSeqs), nameof(EditModel.KvCacheDtype)];
+    private static readonly string[] TuningFields = [nameof(EditModel.SpeculativeNumTokens)];
+
+    private string[] StepFields(WizardStep step) => step switch
+    {
+        WizardStep.Identity => IdentityFields,
+        WizardStep.Memory => IsLlamaCpp || IsMlx ? [nameof(EditModel.MemoryBudgetGiB)] : MemoryFields,
+        WizardStep.Tuning => TuningFields,
+        _ => [],
+    };
+
+    /// <summary>The model's own validation rules for these fields, checked directly (touched or not).</summary>
+    private bool FieldsValid(string[] fields)
+    {
+        var context = new System.ComponentModel.DataAnnotations.ValidationContext(_model);
+        foreach (string field in fields)
+        {
+            context.MemberName = field;
+            object? value = typeof(EditModel).GetProperty(field)!.GetValue(_model);
+            if (!System.ComponentModel.DataAnnotations.Validator.TryValidateProperty(value, context, null))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>What keeps a step from being complete, or null. Next and the stepper both go by it.</summary>
+    private string? StepProblem(WizardStep step)
+    {
+        string? required = step switch
+        {
+            WizardStep.Where when NeedsNode => "Choose a node first.",
+            WizardStep.Checkpoint when string.IsNullOrWhiteSpace(_model.ModelPath) =>
+                _source == SourceMode.Download ? "Finish the download, or pick a folder instead." : "Choose a checkpoint folder.",
+            WizardStep.Checkpoint when IsLlamaCpp && string.IsNullOrWhiteSpace(_llama.File) => "Choose the GGUF file.",
+            WizardStep.Identity when string.IsNullOrWhiteSpace(_model.Id) || string.IsNullOrWhiteSpace(_model.ServedName) =>
+                "Fill in the id and the served name.",
+            _ => null,
+        };
+        if (required is not null)
+        {
+            return required;
+        }
+
+        if (!FieldsValid(StepFields(step)))
+        {
+            return "Fix the fields marked in red first.";
+        }
+
+        return step switch
+        {
+            WizardStep.Memory when IsMlx && MlxSettingsProblem() is not null => "Fix the problems shown above first.",
+            WizardStep.Memory when !IsLlamaCpp && BudgetTooSmall => "The budget is too small for this context: raise it or lower Max model len.",
+            WizardStep.Tuning when ExtraArgsPreview.Problems.Count > 0 || DigestProblem is not null => "Fix the problems shown above first.",
+            _ => null,
+        };
+    }
+
+    private Task GoToStepAsync(WizardStep step)
+    {
+        if (IsNew && WizardSteps.IndexOf(step) > MaxOpenIndex)
+        {
+            return Task.CompletedTask;
+        }
+
+        return OpenStepAsync(step);
+    }
+
+    private Task OpenStepAsync(WizardStep step)
+    {
+        _visited.Add(CurrentStep);
+        _step = step;
+        _visited.Add(step);
+        _nextProblem = null;
+        _focusStep = true;
+        return Task.CompletedTask;
+    }
+
+    private Task NextStepAsync()
+    {
+        if (NextBlocker is not null || WizardIndex >= WizardSteps.Count - 1)
+        {
+            return Task.CompletedTask;
+        }
+
+        // Show the step's own field messages, then hold the step while anything on it is wrong.
+        if (_form?.EditContext is { } edit)
+        {
+            foreach (string field in StepFields(CurrentStep))
+            {
+                edit.NotifyFieldChanged(new FieldIdentifier(_model, field));
+            }
+        }
+
+        _nextProblem = StepProblem(CurrentStep);
+        if (_nextProblem is not null)
+        {
+            return Task.CompletedTask;
+        }
+
+        var next = WizardSteps[WizardIndex + 1];
+        if (next > _furthest)
+        {
+            _furthest = next;
+        }
+
+        return OpenStepAsync(next);
+    }
+
+    private Task BackStepAsync() => WizardIndex > 0 ? GoToStepAsync(WizardSteps[WizardIndex - 1]) : Task.CompletedTask;
+
+    /// <summary>An invalid Add opens the step that holds the first field to fix.</summary>
+    private Task OnInvalidSubmitAsync(EditContext form)
+    {
+        if (!IsNew)
+        {
+            return Task.CompletedTask;
+        }
+
+        bool identity = Invalid(form, () => _model.Id) is not null || Invalid(form, () => _model.ServedName) is not null
+            || Invalid(form, () => _model.ModelPath) is not null;
+        bool memory = Invalid(form, () => _model.MemoryBudgetGiB) is not null || Invalid(form, () => _model.MaxModelLen) is not null;
+        WizardStep target = identity ? WizardStep.Identity : memory || IsLlamaCpp || IsMlx ? WizardStep.Memory : WizardStep.Tuning;
+        return OpenStepAsync(target);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusStep && _stepButtons.TryGetValue(CurrentStep, out var button))
+        {
+            _focusStep = false;
+            try
+            {
+                await button.FocusAsync();
+            }
+            catch (Exception ex) when (ex is JSException or InvalidOperationException or TaskCanceledException)
+            {
+                // The circuit went away or the element was re-rendered: focus is a convenience only.
+            }
+        }
+    }
+
+    private RenderFragment WizardReview() => __builder =>
+    {
+        <section class="panel form-section wizard-review" aria-labelledby="sec-review" data-wizard-step="review"
+                 hidden="@StepHidden(WizardStep.Review)" data-testid="wizard-review">
+            <div class="form-section-intro">
+                <h2 id="sec-review">Review</h2>
+                <p>Check the choices, then add the model. Each row opens its step again.</p>
+            </div>
+            <dl class="review-list">
+                @if (HasWhereStep)
+                {
+                    <div class="review-row">
+                        <dt>@StepLabel(WizardStep.Where)</dt>
+                        <dd>
+                            <span class="review-value">
+                                @if (_multiNode && _nodeId is null)
+                                {
+                                    <span class="state state--failed"><Icon Name="warning" /> No node chosen</span>
+                                }
+                                else
+                                {
+                                    <span class="num">@(_multiNode ? _nodeId : SingleNodeText)</span>
+                                }
+                                @if (_multiNode && _gpus.Count > 0)
+                                {
+                                    <span class="muted"> · <span class="num">@_gpus.Count</span> GPU@(_gpus.Count == 1 ? "" : "s")</span>
+                                }
+                                <span class="muted"> · @LlamaCppEditing.RuntimeName(_runtime)</span>
+                            </span>
+                            <button type="button" class="btn btn-sm btn-ghost" data-testid="review-edit-where" @onclick="() => GoToStepAsync(WizardStep.Where)">Edit</button>
+                        </dd>
+                    </div>
+                }
+                <div class="review-row">
+                    <dt>Checkpoint</dt>
+                    <dd>
+                        <span class="review-value">
+                            @if (string.IsNullOrWhiteSpace(_model.ModelPath))
+                            {
+                                <span class="state state--failed"><Icon Name="warning" /> No checkpoint chosen</span>
+                            }
+                            else
+                            {
+                                <code>/models/@_model.ModelPath</code>
+                            }
+                            @if (IsLlamaCpp && !string.IsNullOrWhiteSpace(_llama.File))
+                            {
+                                <span class="muted"> · <code>@_llama.File</code></span>
+                            }
+                        </span>
+                        <button type="button" class="btn btn-sm btn-ghost" data-testid="review-edit-checkpoint" @onclick="() => GoToStepAsync(WizardStep.Checkpoint)">Edit</button>
+                    </dd>
+                </div>
+                <div class="review-row">
+                    <dt>Name</dt>
+                    <dd>
+                        <span class="review-value">
+                            @if (string.IsNullOrWhiteSpace(_model.ServedName) || string.IsNullOrWhiteSpace(_model.Id))
+                            {
+                                <span class="state state--failed"><Icon Name="warning" /> Id and served name needed</span>
+                            }
+                            else
+                            {
+                                <strong>@_model.ServedName</strong>
+                                <span class="num model-card-id">@_model.Id</span>
+                            }
+                            @if (EffectiveTags.Count > 0)
+                            {
+                                <TagList Tags="EffectiveTags" />
+                            }
+                        </span>
+                        <button type="button" class="btn btn-sm btn-ghost" data-testid="review-edit-identity" @onclick="() => GoToStepAsync(WizardStep.Identity)">Edit</button>
+                    </dd>
+                </div>
+                <div class="review-row">
+                    <dt>Memory</dt>
+                    <dd>
+                        <span class="review-value">
+                            <span><span class="num">@UiFormat.GiB(_model.MemoryBudgetGiB)</span> budget</span>
+                            @if (IsMlx)
+                            {
+                                <span class="muted" data-testid="review-mlx-context"> · <span class="num">@_mlx.ContextSize.ToString("N0", CultureInfo.InvariantCulture)</span> tokens per request × <span class="num">@_mlx.Parallel</span></span>
+                            }
+                            else if (!IsLlamaCpp)
+                            {
+                                <span class="muted"> · <span class="num">@_model.MaxModelLen.ToString("N0", CultureInfo.InvariantCulture)</span> tokens of context</span>
+                            }
+                            @if (BudgetTooSmall)
+                            {
+                                <span class="state state--failed review-flag"><Icon Name="warning" /> Too small for this context</span>
+                            }
+                            else if (_multiNode && _fit?.Fits is { } fits)
+                            {
+                                <span class="state @(fits ? "state--ready" : "state--starting") review-flag">
+                                    <Icon Name="@(fits ? "state-ready" : "warning")" /> @(fits ? $"Fits on {_nodeId} now" : $"Does not fit on {_nodeId} right now")
+                                </span>
+                            }
+                        </span>
+                        <button type="button" class="btn btn-sm btn-ghost" data-testid="review-edit-memory" @onclick="() => GoToStepAsync(WizardStep.Memory)">Edit</button>
+                    </dd>
+                </div>
+                @if (!IsLlamaCpp && !IsMlx)
+                {
+                    <div class="review-row">
+                        <dt>Tuning</dt>
+                        <dd>
+                            <span class="review-value">
+                                <code>@(string.IsNullOrWhiteSpace(_model.Image) ? DefaultImageLabel : _model.Image)</code>
+                                <span class="muted"> · auto-start @(_model.AutoStart ? "on" : "off")</span>
+                            </span>
+                            <button type="button" class="btn btn-sm btn-ghost" data-testid="review-edit-tuning" @onclick="() => GoToStepAsync(WizardStep.Tuning)">Edit</button>
+                        </dd>
+                    </div>
+                }
+            </dl>
+        </section>
+    };
+
+    private readonly EditModel _model = new();
+    private readonly DownloadFormModel _download = new();
+    private bool _notFound;
+    private bool _deleteDisabled;
+    private bool _deleteOpen;
+    private string? _saveError;
+    private List<string> _saveErrorDetails = [];
+    private string? _saveNotice;
+    private string? _downloadError;
+
+    private SourceMode _source = SourceMode.Folder;
+    private IReadOnlyList<ModelFolderSummary> _folders = [];
+
+    // Why the folder list or a folder's inspection is unavailable (the node's agent cannot answer), W4 review MN-096.
+    private string? _folderError;
+    private string _selectedFolder = "";
+    private ModelFolderInspection? _inspection;
+    private string? _suggestionFormula;
+
+    private VllmCatalog _catalog = new([], [], [], [], [], [], [], [], []);
+    private IReadOnlyList<int> _maxModelLenPresets = VllmOptionsCatalog.MaxModelLenPresets;
+
+    private MemorySnapshot _memory = new(0, 0);
+    private double _reserveGiB;
+
+    private DownloadStatus? _downloadStatus;
+    private RepoInspection? _repoInspection;
+    private string? _inspectError;
+    private string _selectedVariant = "";
+    private CancellationTokenSource? _pollCts;
+    private PeriodicTimer? _pollTimer;
+    private Task? _pollLoop;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Resolved once (MN-132): the live refresh loop runs until DisposeAsync awaits it, and a lookup from a scope that is
+        // being disposed throws ObjectDisposedException.
+        _nodeRegistry = Services.GetService<INodeRegistry>();
+        _nodeCache = Services.GetService<INodeStatusCache>();
+        _moves = Services.GetService<MoveService>();
+        // The composed preview first (MN-233): it carries the agent clients, so a llama.cpp model on a node reporting
+        // gguf.inspect shows the GGUF estimate next to the budget (design-p3p4 §A.1.10).
+        _fitPreview = Services.GetService<PlacementFit>()
+            ?? (_nodeRegistry is null
+                ? null
+                : new PlacementFit(_nodeRegistry, Registry, Services.GetService<INodeTelemetry>(), _nodeCache, Services.GetService<TimeProvider>()));
+        _reserveGiB = SparkOptions.Value.MemoryReserveGiB;
+        _memory = await MemoryProbe.GetAsync();
+
+        if (!IsNew)
+        {
+            var existing = await Registry.GetAsync(Id!);
+            if (existing is null)
+            {
+                _notFound = true;
+                return;
+            }
+
+            _model.LoadFrom(existing);
+            if (existing.Runtime == RuntimeKind.LlamaCpp)
+            {
+                _runtime = RuntimeKind.LlamaCpp;
+                _llama = LlamaCppForm.From(existing.LlamaCpp ?? new LlamaCppSettings { ModelFile = "" }, existing.ModelPath);
+                _budgetTouched = true;
+            }
+            else if (existing.Runtime == RuntimeKind.Mlx)
+            {
+                _runtime = RuntimeKind.Mlx;
+                _mlx = MlxForm.From(existing.Mlx ?? new MlxSettings { ModelFolder = existing.ModelPath });
+                _budgetTouched = true;
+            }
+
+            _tags = [.. existing.Tags ?? []];
+            _tagsTouched = true;
+            _original = existing;
+            try
+            {
+                _pathInspection = await ModelSourcing.InspectAsync(Services, existing.Placement?.NodeId, existing.ModelPath);
+            }
+            catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or UnauthorizedAccessException or NodeUnavailableException)
+            {
+                _pathInspection = null;
+            }
+
+            var status = await Runtime.GetStatusAsync(Id!);
+            _runningState = status.State;
+            _deleteDisabled = status.State is ModelState.Starting or ModelState.Ready or ModelState.Stopping;
+
+            // A running model already holds its saved budget; a restart releases it first, so count it as free.
+            _ownBudgetInUseGiB = _deleteDisabled ? existing.MemoryBudgetGiB : 0;
+        }
+
+        await LoadNodesAsync();
+        _catalog = await ModelSourcing.GetCatalogAsync(Services, SourceNodeId, _model.Image);
+        _maxModelLenPresets = VllmOptionsCatalog.MaxModelLenPresetsFor(null);
+        _maxModelLenCustom = !_maxModelLenPresets.Contains(_model.MaxModelLen);
+        _maxNumSeqsCustom = !VllmOptionsCatalog.MaxNumSeqsPresets.Contains(_model.MaxNumSeqs);
+
+        if (IsNew)
+        {
+            await LoadFoldersAsync();
+            if (string.Equals(SourceQuery, "download", StringComparison.OrdinalIgnoreCase))
+            {
+                _source = SourceMode.Download;
+            }
+
+            await AttachToNodeDownloadAsync();
+        }
+
+        if (!IsNew && IsLlamaCpp && !string.IsNullOrWhiteSpace(_model.ModelPath))
+        {
+            await ReadGgufAsync(); // the header behind the estimate; the stored settings stay as they are
+        }
+
+        RecomputeMlx(); // an existing MLX model: the estimate from its folder's inspection
+
+        if (_multiNode)
+        {
+            await RefreshFitAsync();
+            await RefreshMoveAsync();
+            StartLiveRefresh();
+        }
+    }
+
+    // --- Placement (design §12.2; MN-118) ---
+
+    /// <summary>How often the placement's fit, node states and move are re-read while the page is open (several nodes only).</summary>
+    [Parameter]
+    public TimeSpan LiveRefreshInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    private bool _multiNode;
+    private string? _singleNodeId;
+
+    /// <summary>The fleet's single member as the editor sees it (MN-239 item 3): what the Runtime option is read from.</summary>
+    private PlacementNode? _singleNode;
+
+    private IReadOnlyList<PlacementNode> _nodes = [];
+    private string? _nodeId;
+    private IReadOnlyList<string> _gpus = [];
+    private bool _keepServing;
+    private bool _nodeMissing;
+    private IReadOnlyDictionary<string, NodeFitResult?> _nodeFits = new Dictionary<string, NodeFitResult?>();
+    private NodeFitResult? _fit;
+    private MoveStatusView? _move;
+    private MoveModelDialog? _moveDialog;
+    private UnplaceModelDialog? _unplace;
+    private IHuggingFaceDownloader? _activeDownloader;
+    private CancellationTokenSource? _liveCts;
+    private Task? _liveLoop;
+    private INodeRegistry? _nodeRegistry;
+    private INodeStatusCache? _nodeCache;
+    private MoveService? _moves;
+    private PlacementFit? _fitPreview;
+
+    private string BootstrapNodeId =>
+        Services.GetService<Microsoft.Extensions.Options.IOptions<RegistryMigrationOptions>>()?.Value.EffectiveBootstrapNodeId
+        ?? RegistryMigrationOptions.DefaultBootstrapNodeId;
+
+    private bool IsRunning => _runningState is ModelState.Starting or ModelState.Ready;
+
+    /// <summary>The node whose folders, catalog and downloads the page uses: the chosen one (new) or the model's own.</summary>
+    private string? SourceNodeId => IsNew ? (_multiNode ? _nodeId : null) : _original?.Placement?.NodeId;
+
+    /// <summary>A new model on a master with several nodes, before its node is chosen.</summary>
+    private bool NeedsNode => IsNew && _multiNode && _nodeId is null;
+
+    /// <summary>
+    /// What an empty image means on the node the model is placed on (MN-124): that node's default image when it has one
+    /// (<c>NodeRecord.DefaultVllmImage</c>, as <c>LaunchSpecBuilder.DefaultImage</c> launches it), else the master's.
+    /// </summary>
+    private string DefaultImageLabel => SelectedNode?.Record.DefaultVllmImage is { Length: > 0 } nodeDefault
+        ? $"Default image of {SelectedNode.Id} ({nodeDefault})"
+        : $"Default image ({SparkOptions.Value.VllmImage})";
+
+    private PlacementNode? SelectedNode => _nodeId is null ? null : _nodes.FirstOrDefault(n => string.Equals(n.Id, _nodeId, StringComparison.Ordinal));
+
+    private string FolderOptionTitle =>
+        !_multiNode ? "Folder already on the DGX" : _nodeId is null ? "Folder already on the node" : $"Folder already on {_nodeId}";
+
+    /// <summary>The single node's id, shown read-only (the editor looks as before P2 with one node).</summary>
+    private string SingleNodeText => IsNew ? _singleNodeId ?? BootstrapNodeId : _original?.Placement?.NodeId ?? "Unplaced";
+
+    private string? DigestProblem => PlacementEditing.DigestProblem(_model.ImageDigest);
+
+    /// <summary>The nodes (several = the Placement section), and the placement the form starts from.</summary>
+    private async Task LoadNodesAsync()
+    {
+        IReadOnlyList<NodeRecord> all = _nodeRegistry is { } registry ? await registry.ListAsync() : [];
+        // The fleet's single member (a node waiting for approval is not one, W9 review MN-132), else the one registered.
+        _singleNodeId = (NodeFleet.Members(all).FirstOrDefault() ?? all.FirstOrDefault(n => !n.Revoked))?.Id;
+        _multiNode = PlacementEditing.IsMultiNode(all);
+        if (!_multiNode)
+        {
+            // The Placement section stays hidden, but the Runtime option is the node's, not the fleet's (MN-239 item 3,
+            // D131): a fleet of one Windows PC must be able to create a llama.cpp model.
+            var single = _nodeCache;
+            _singleNode = _singleNodeId is null
+                ? null
+                : PlacementEditing.Offered(all, id => single?.GetNode(id), _original?.Placement?.NodeId)
+                    .FirstOrDefault(n => string.Equals(n.Id, _singleNodeId, StringComparison.Ordinal));
+            return;
+        }
+
+        var cache = _nodeCache;
+        _nodes = PlacementEditing.Offered(all, id => cache?.GetNode(id), _original?.Placement?.NodeId);
+        if (IsNew)
+        {
+            _nodeId = _nodes.FirstOrDefault(n => string.Equals(n.Id, NodeQuery, StringComparison.Ordinal)) is { } preselected &&
+                PlacementEditing.PlacementRefusal(preselected, needsServing: false) is null
+                ? preselected.Id
+                : null;
+            _gpus = [];
+            _keepServing = false;
+        }
+        else if (_original is not null)
+        {
+            ResetPlacementFrom(_original);
+            _keepServing = _original.KeepServingDuringJobs;
+        }
+    }
+
+    /// <summary>The node states (the live view), keeping the selection.</summary>
+    private async Task RefreshNodesAsync()
+    {
+        if (!_multiNode || _nodeRegistry is not { } registry)
+        {
+            return;
+        }
+
+        var cache = _nodeCache;
+        _nodes = PlacementEditing.Offered(await registry.ListAsync(), id => cache?.GetNode(id), _original?.Placement?.NodeId);
+    }
+
+    /// <summary>
+    /// The Placement section shows <paramref name="stored"/>'s node and GPUs (after load, a refused save or a move); the
+    /// keep-serving flag is a setting like the others and keeps its edit.
+    /// </summary>
+    private void ResetPlacementFrom(ModelDefinition stored)
+    {
+        _nodeId = stored.Placement?.NodeId;
+        _gpus = [.. stored.Placement?.GpuUuids ?? []];
+    }
+
+    private async Task OnNodeChangedAsync(string? nodeId)
+    {
+        _nodeId = nodeId;
+        _gpus = [];
+        _nodeMissing = false;
+        _selectedFolder = "";
+        _inspection = null;
+        _folderError = null;
+        if (IsLlamaCpp)
+        {
+            ResetGguf();
+            _llama.GpuBudgets = [];
+            if (LlamaCppEditing.Runtime(SelectedNode) is null)
+            {
+                _runtime = RuntimeKind.Vllm; // the new node runs no llama.cpp: the option is gone
+            }
+        }
+        else if (IsMlx && MlxEditing.Runtime(SelectedNode) is null)
+        {
+            _runtime = RuntimeKind.Vllm; // the new node runs no MLX: the option is gone
+            RecomputeMlx();
+        }
+
+        _catalog = await ModelSourcing.GetCatalogAsync(Services, SourceNodeId, _model.Image);
+        await LoadFoldersAsync();
+        if (IsNew)
+        {
+            await StopPollingAsync(); // a download followed on the node just left keeps running there
+            await AttachToNodeDownloadAsync();
+        }
+
+        await RefreshFitAsync();
+    }
+
+    private async Task OnGpusChangedAsync(IReadOnlyList<string> gpus)
+    {
+        _gpus = gpus;
+        if (IsLlamaCpp)
+        {
+            // Budgets belong to a GPU set and order: another set starts from the capacity split, the stored set gets its own back.
+            _llama.GpuBudgets = _original?.Placement?.GpuUuids is { } stored && stored.SequenceEqual(gpus, StringComparer.Ordinal) &&
+                _original.LlamaCpp?.GpuBudgetsGiB is { } budgets
+                    ? [.. budgets.Select(b => (double?)b)]
+                    : [];
+            RecomputeLlama();
+        }
+
+        await RefreshFitAsync();
+    }
+
+    /// <summary>
+    /// The live fit preview (design §6.2, MN-108's <see cref="PlacementFit"/>): per node without a GPU selection (every GPU
+    /// a single-GPU option on discrete nodes), and for the ticked GPUs on the selected node. Never refuses: the agent decides.
+    /// </summary>
+    private async Task RefreshFitAsync()
+    {
+        if (!_multiNode || _fitPreview is not { } fit)
+        {
+            return;
+        }
+
+        var draft = Draft(IsNew ? _model.Id : Id!, _original) with { Placement = null };
+        var fits = new Dictionary<string, NodeFitResult?>(StringComparer.Ordinal);
+        foreach (var node in _nodes)
+        {
+            fits[node.Id] = await TryFitAsync(fit, node.Id, new NodeFitRequest { Definition = draft });
+        }
+
+        _nodeFits = fits;
+        _fit = SelectedNode is not { } selected
+            ? null
+            : selected.Discrete && _gpus.Count > 0
+                ? await TryFitAsync(fit, selected.Id, new NodeFitRequest
+                {
+                    Definition = draft with { Placement = PlacementEditing.Build(selected.Id, _gpus, selected.Gpus, 0) },
+                    GpuUuids = _gpus,
+                })
+                : fits.GetValueOrDefault(selected.Id);
+    }
+
+    private static async Task<NodeFitResult?> TryFitAsync(PlacementFit fit, string nodeId, NodeFitRequest request)
+    {
+        try
+        {
+            return await fit.CheckAsync(nodeId, request);
+        }
+        catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or NotSupportedException)
+        {
+            return null; // no positive budget typed yet, or a node registry that cannot answer: no hint
+        }
+    }
+
+    private async Task RefreshMoveAsync()
+    {
+        _move = !IsNew && _moves is { } moves ? await moves.GetAsync(Id!) : null;
+    }
+
+    private async Task OpenMoveAsync(bool progress)
+    {
+        if (_moveDialog is not null)
+        {
+            await _moveDialog.OpenAsync(progress);
+        }
+    }
+
+    private void OpenUnplace() => _unplace?.Open();
+
+    /// <summary>
+    /// A move started or ended, or the model was unplaced or started: re-read the stored model (its placement and
+    /// generation, which the next save must carry) and its state. The form's unsaved edits are kept.
+    /// </summary>
+    private async Task AfterMoveChangedAsync()
+    {
+        if (IsNew || await Registry.GetAsync(Id!) is not { } current)
+        {
+            return;
+        }
+
+        _original = current;
+        ResetPlacementFrom(current);
+        var status = await Runtime.GetStatusAsync(Id!);
+        _runningState = status.State;
+        _deleteDisabled = status.State is ModelState.Starting or ModelState.Ready or ModelState.Stopping;
+        _ownBudgetInUseGiB = _deleteDisabled ? current.MemoryBudgetGiB : 0;
+        await RefreshNodesAsync();
+        await RefreshFitAsync();
+        await RefreshMoveAsync();
+        StateHasChanged();
+    }
+
+    private void StartLiveRefresh()
+    {
+        _liveCts = new CancellationTokenSource();
+        _liveLoop = LiveRefreshAsync(_liveCts.Token);
+    }
+
+    private async Task LiveRefreshAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(LiveRefreshInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                await InvokeAsync(async () =>
+                {
+                    if (ct.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    bool wasMoving = _move is { Active: true };
+                    await RefreshNodesAsync();
+                    await RefreshFitAsync();
+                    await RefreshMoveAsync();
+                    if (wasMoving && _move is not { Active: true })
+                    {
+                        await AfterMoveChangedAsync(); // the move ended while its dialog was closed
+                    }
+
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // The page went away.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The host is shutting down.
+        }
+    }
+
+    /// <summary>
+    /// The placement edits on top of <paramref name="definition"/> (several nodes only): a new model's node and GPUs; an
+    /// existing model's GPUs on its node when they changed (sent with the stored generation, D75), else the placement as
+    /// re-read; and the keep-serving flag.
+    /// </summary>
+    private ModelDefinition WithPlacementEdits(ModelDefinition definition)
+    {
+        if (!_multiNode)
+        {
+            return definition;
+        }
+
+        definition = definition with { KeepServingDuringJobs = _keepServing };
+        if (IsNew)
+        {
+            return SelectedNode is { } node
+                ? definition with { Placement = PlacementEditing.Build(node.Id, node.Discrete ? _gpus : [], node.Gpus, 0) }
+                : definition;
+        }
+
+        if (_original?.Placement is { } stored && PlacementEditing.GpusChanged(stored, _gpus))
+        {
+            var gpus = SelectedNode?.Gpus ?? [];
+            return definition with { Placement = PlacementEditing.Build(stored.NodeId, _gpus, gpus, stored.Generation) };
+        }
+
+        return definition;
+    }
+
+    private void OnImageChanged()
+    {
+        // The stored digest belongs to the stored image (D85): picking another image drops it unless one is typed.
+        if (_original is not null && !string.Equals(_model.Image, _original.Image, StringComparison.Ordinal) &&
+            string.Equals(_model.ImageDigest, _original.ImageDigest ?? "", StringComparison.Ordinal))
+        {
+            _model.ImageDigest = "";
+        }
+    }
+
+    /// <summary>
+    /// The downloader of the node the new model goes to: the injected one (the bootstrap node's), or one for the chosen
+    /// node when the master composes agent clients (design §12.2: "Download from Hugging Face" acts on the selected node).
+    /// </summary>
+    private IHuggingFaceDownloader NodeDownloader()
+    {
+        if (!_multiNode || _nodeId is not { } node)
+        {
+            return Downloader;
+        }
+
+        if (Downloader is RemoteHuggingFaceDownloader own ? own.NodeId == node : node == BootstrapNodeId)
+        {
+            return Downloader;
+        }
+
+        return Services.GetService<MirbadLLM.Agent.Contracts.IAgentClientFactory>() is { } clients &&
+            Services.GetService<MirbadLLM.Orchestration.Agents.AgentOperationRunner>() is { } runner
+                ? new RemoteHuggingFaceDownloader(node, clients, runner)
+                : Downloader;
+    }
+
+    private double _ownBudgetInUseGiB;
+
+    // --- Tags ---
+
+    /// <summary>The tags as chosen; on a new model they only take over from the suggestions once touched.</summary>
+    private List<string> _tags = [];
+    private bool _tagsTouched;
+    private string _tagInput = "";
+    private string? _tagError;
+
+    /// <summary>Folder the editor's own download went into, so its recorded source is dropped if another folder is picked.</summary>
+    private string? _autoSourceFolder;
+
+    /// <summary>Folders of the node's other running downloads while one found on load is followed.</summary>
+    private IReadOnlyList<string> _otherDownloads = [];
+
+    private IReadOnlyList<string> SuggestedTags =>
+        IsLlamaCpp
+            ? LlamaCppEditing.SuggestTags(_llama)
+            : IsMlx
+            ? MlxEditing.SuggestTags(MemoryInspection)
+            : ModelTags.Suggest(_model.ToDefinition(_model.Id), MemoryInspection?.Architecture, MemoryInspection?.HasVisionConfig ?? false);
+
+    /// <summary>A new model whose tags were not touched shows (and saves) the suggestions; otherwise the chosen tags.</summary>
+    private IReadOnlyList<string> EffectiveTags => IsNew && !_tagsTouched ? SuggestedTags : _tags;
+
+    private List<string> CustomTags => EffectiveTags.Where(t => !ModelTags.IsBuiltIn(t)).ToList();
+
+    private List<string> UnappliedSuggestions => SuggestedTags.Where(t => !EffectiveTags.Contains(t)).ToList();
+
+    private void TouchTags()
+    {
+        if (!_tagsTouched)
+        {
+            _tags = [.. EffectiveTags];
+            _tagsTouched = true;
+        }
+    }
+
+    private void ToggleTag(string tag)
+    {
+        TouchTags();
+        _tagError = null;
+        if (!_tags.Remove(tag))
+        {
+            AddTag(tag);
+        }
+    }
+
+    private void AddTag(string tag)
+    {
+        if (_tags.Contains(tag))
+        {
+            return;
+        }
+
+        if (_tags.Count >= ModelTags.MaxTags)
+        {
+            _tagError = $"A model can have at most {ModelTags.MaxTags} tags. Remove one first.";
+            return;
+        }
+
+        _tags.Add(tag);
+    }
+
+    private void AddCustomTag()
+    {
+        _tagError = null;
+        if (string.IsNullOrWhiteSpace(_tagInput))
+        {
+            return;
+        }
+
+        string? tag = ModelTags.Normalize(_tagInput);
+        if (tag is null)
+        {
+            _tagError = $"\"{_tagInput.Trim()}\" can't be a tag: use 1–{ModelTags.MaxLength} letters, digits or hyphens.";
+            return;
+        }
+
+        TouchTags();
+        AddTag(tag);
+        if (_tagError is null)
+        {
+            _tagInput = "";
+        }
+    }
+
+    private void AddSuggestedTags()
+    {
+        TouchTags();
+        _tagError = null;
+        foreach (string tag in UnappliedSuggestions)
+        {
+            AddTag(tag);
+        }
+    }
+
+    private void RemoveTag(string tag)
+    {
+        TouchTags();
+        _tagError = null;
+        _tags.Remove(tag);
+    }
+
+    private void OnTagKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            AddCustomTag();
+        }
+    }
+
+    /// <summary>The definition as loaded, to tell which settings this edit changed.</summary>
+    private ModelDefinition? _original;
+
+    private ModelState _runningState = ModelState.Stopped;
+
+    private ApplyChangesDialog? _apply;
+
+    private static readonly int[] MaxNumBatchedTokensPresets = [2048, 4096, 8192, 16384, 32768];
+
+    /// <summary>MTP selected without PIECEWISE graphs: the combination that crashed on the GB10.</summary>
+    private bool NeedsPiecewiseAdvice =>
+        _model.SpeculativeEnabled &&
+        string.Equals(_model.SpeculativeMethod, "mtp", StringComparison.OrdinalIgnoreCase) &&
+        !string.Equals(_model.CudaGraphMode, "PIECEWISE", StringComparison.Ordinal);
+
+    private void SetPiecewise() => _model.CudaGraphMode = "PIECEWISE";
+
+    private static readonly string[] MambaCacheModes = ["align", "none"];
+
+    /// <summary>The mamba cache mode choices, plus the current value when it is a custom one.</summary>
+    private IEnumerable<string> MambaCacheModeOptions =>
+        string.IsNullOrEmpty(_model.MambaCacheMode) || MambaCacheModes.Contains(_model.MambaCacheMode, StringComparer.Ordinal)
+            ? MambaCacheModes
+            : MambaCacheModes.Append(_model.MambaCacheMode);
+
+    /// <summary>Hybrid (Mamba / linear-attention) checkpoints, or a definition that already sets the mode.</summary>
+    private bool ShowMambaCacheMode =>
+        !string.IsNullOrEmpty(_model.MambaCacheMode) ||
+        (MemoryInspection?.Architecture is { } arch && HybridArchitectures.Any(h => arch.Contains(h, StringComparison.OrdinalIgnoreCase)));
+
+    private static readonly string[] HybridArchitectures = ["Mamba", "Hybrid", "NemotronH", "Jamba", "Zamba", "FalconH", "Qwen3Next", "Plamo2", "Lfm2"];
+
+    /// <summary>What saving would lift out of the raw extra args (live, as the operator types).</summary>
+    private NormalizedDefinition ExtraArgsPreview =>
+        VllmArgsNormalizer.Normalize(WithPlacementEdits(_model.ToDefinition(string.IsNullOrEmpty(_model.Id) ? "preview" : _model.Id, IsNew ? null : _original)));
+
+    private string MaxNumBatchedTokensSelection
+    {
+        get => _model.MaxNumBatchedTokens?.ToString(CultureInfo.InvariantCulture) ?? "";
+        set => _model.MaxNumBatchedTokens = int.TryParse(value, CultureInfo.InvariantCulture, out int parsed) ? parsed : null;
+    }
+
+    /// <summary>Inspection of the saved checkpoint when editing, so the context-vs-budget check works without re-picking a folder.</summary>
+    private ModelFolderInspection? _pathInspection;
+
+    private ModelFolderInspection? MemoryInspection => _inspection ?? _pathInspection;
+
+    /// <summary>
+    /// True when the vLLM budget is below what one max-length request needs (weights + runtime + KV cache): vLLM refuses
+    /// to start, so no fit line may call it a fit, whatever the node has free.
+    /// </summary>
+    private bool BudgetTooSmall =>
+        !IsLlamaCpp && !IsMlx && MemoryInspection is { } mi && _model.MaxModelLen > 0 && _model.MemoryBudgetGiB < mi.MinimumBudgetGiB(_model.MaxModelLen);
+
+    /// <summary>The fit line while <see cref="BudgetTooSmall"/>: the room is real, the start is not.</summary>
+    private string RoomButTooSmallText(string? node) =>
+        $"{(node is null ? "This node" : node)} has room for {UiFormat.GiB(_model.MemoryBudgetGiB)}, but that budget is below what this context needs, so the model won't start.";
+
+    /// <summary>The header re-reads the state on every refresh: Delete follows it (only a stopped model can be deleted).</summary>
+    private Task OnHeaderStatusAsync(ModelStatus status)
+    {
+        _runningState = status.State;
+        _deleteDisabled = status.State is ModelState.Starting or ModelState.Ready or ModelState.Stopping;
+        return Task.CompletedTask;
+    }
+
+    private double FreeAfterReserve => _memory.AvailableGiB + _ownBudgetInUseGiB - _reserveGiB;
+
+    /// <summary>On Add model, the fit check has nothing honest to say until a checkpoint is chosen: hide it
+    /// until a folder is picked or a model path is typed. Editing an existing model always shows it.</summary>
+    private bool ShowBudgetCheck => !_multiNode && (!IsNew || !string.IsNullOrWhiteSpace(_model.ModelPath));
+
+    /// <summary>"true" for a field the form has validation messages for (plain selects are not InputBase, so
+    /// they don't get aria-invalid on their own); null otherwise so the attribute is left out.</summary>
+    private static string? Invalid<T>(EditContext form, System.Linq.Expressions.Expression<Func<T>> field) =>
+        form.GetValidationMessages(FieldIdentifier.Create(field)).Any() ? "true" : null;
+
+    /// <summary>Space-separated ids for aria-describedby, skipping the ones not rendered.</summary>
+    private static string Described(params string?[] ids) => string.Join(' ', ids.Where(id => id is not null));
+
+    private string? KvCacheDtypeHint => _catalog.KvCacheDtypes.FirstOrDefault(o => o.Value == _model.KvCacheDtype)?.Hint;
+
+    private string? QuantizationHint => _catalog.Quantizations.FirstOrDefault(o => OptionValue(o.Value) == (_model.Quantization ?? ""))?.Hint;
+
+    private string? CudaGraphModeHint => _catalog.CudaGraphModes.FirstOrDefault(o => o.Value == (_model.CudaGraphMode ?? ""))?.Hint;
+
+    private string? SpeculativeMethodHint => _catalog.SpeculativeMethods.FirstOrDefault(o => o.Value == _model.SpeculativeMethod)?.Hint;
+
+    private static double DownloadPercent(DownloadStatus status) =>
+        status.TotalBytes > 0 ? Math.Clamp(100.0 * status.BytesDownloaded / status.TotalBytes, 0, 100) : 0;
+
+    private bool _maxModelLenCustom;
+    private bool _maxNumSeqsCustom;
+
+    private string MaxModelLenSelection
+    {
+        get => _maxModelLenCustom ? "custom" : _model.MaxModelLen.ToString(CultureInfo.InvariantCulture);
+        set
+        {
+            if (value == "custom")
+            {
+                _maxModelLenCustom = true;
+            }
+            else if (int.TryParse(value, CultureInfo.InvariantCulture, out int parsed))
+            {
+                _maxModelLenCustom = false;
+                _model.MaxModelLen = parsed;
+            }
+        }
+    }
+
+    private string MaxNumSeqsSelection
+    {
+        get => _maxNumSeqsCustom ? "custom" : _model.MaxNumSeqs.ToString(CultureInfo.InvariantCulture);
+        set
+        {
+            if (value == "custom")
+            {
+                _maxNumSeqsCustom = true;
+            }
+            else if (int.TryParse(value, CultureInfo.InvariantCulture, out int parsed))
+            {
+                _maxNumSeqsCustom = false;
+                _model.MaxNumSeqs = parsed;
+            }
+        }
+    }
+
+    private static string OptionValue(string catalogValue) => catalogValue == "none" ? "" : catalogValue;
+
+    private void SetSource(SourceMode mode) => _source = mode;
+
+    /// <summary>The node's checkpoint folders; an unreachable node empties the list and says why (W4 review MN-096).</summary>
+    private async Task LoadFoldersAsync()
+    {
+        if (NeedsNode)
+        {
+            _folders = [];
+            _entries = [];
+            _folderError = null;
+            return;
+        }
+
+        try
+        {
+            if (IsLlamaCpp)
+            {
+                // A GGUF folder has no config.json, so llama.cpp lists every finished folder.
+                _entries = await ModelSourcing.ListFolderEntriesAsync(Services, SourceNodeId);
+            }
+            else
+            {
+                _folders = await ModelSourcing.ListFoldersAsync(Services, SourceNodeId);
+            }
+
+            _folderError = null;
+        }
+        catch (NodeUnavailableException ex)
+        {
+            _folders = [];
+            _entries = [];
+            _folderError = ex.Message;
+        }
+    }
+
+    private async Task ApplyFolderAsync(string folder)
+    {
+        if (IsLlamaCpp)
+        {
+            await ApplyGgufFolderAsync(folder, _pendingGgufFile);
+            return;
+        }
+
+        _inspection = null;
+        _suggestionFormula = null;
+        if (string.IsNullOrEmpty(folder))
+        {
+            return;
+        }
+
+        try
+        {
+            _inspection = await ModelSourcing.InspectAsync(Services, SourceNodeId, folder);
+        }
+        catch (NodeUnavailableException ex)
+        {
+            _inspection = null;
+            _folderError = ex.Message;
+            return;
+        }
+
+        if (_inspection is null)
+        {
+            return;
+        }
+
+        if (_autoSourceFolder is not null && !string.Equals(_autoSourceFolder, folder, StringComparison.Ordinal))
+        {
+            // The download's repo describes a different folder than the one picked now.
+            _model.SourceRepoId = "";
+            _model.SourceRevision = "";
+            _model.SourcePatternsText = "";
+            _autoSourceFolder = null;
+        }
+
+        _model.ModelPath = folder;
+        _model.Id = string.IsNullOrWhiteSpace(_model.Id) ? Slugify(folder) : _model.Id;
+        _model.ServedName = string.IsNullOrWhiteSpace(_model.ServedName) ? _inspection.Suggestion.ServedName : _model.ServedName;
+        _model.ToolCallParser = _inspection.Suggestion.ToolCallParser;
+        _model.ReasoningParser = _inspection.Suggestion.ReasoningParser;
+        _model.Quantization = _inspection.Suggestion.Quantization;
+        _model.MemoryBudgetGiB = _inspection.Suggestion.MemoryBudgetGiB;
+        _suggestionFormula = _inspection.Suggestion.MemoryBudgetFormula;
+        _maxModelLenPresets = VllmOptionsCatalog.MaxModelLenPresetsFor(_inspection.MaxPositionEmbeddings);
+        if (_inspection.MaxPositionEmbeddings is { } cap)
+        {
+            _model.MaxModelLen = Math.Min(_model.MaxModelLen, cap);
+        }
+
+        _maxModelLenCustom = !_maxModelLenPresets.Contains(_model.MaxModelLen);
+        if (IsMlx)
+        {
+            // The vLLM suggestions mean nothing to mlx_lm.server: no parsers, and the budget is MLX's own estimate.
+            _model.ToolCallParser = null;
+            _model.ReasoningParser = null;
+            _model.Quantization = null;
+            _suggestionFormula = null;
+            RecomputeMlx();
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private GgufVariant? SelectedVariant => _repoInspection?.Variants.FirstOrDefault(v => v.Name == _selectedVariant);
+
+    private static string FormatLabel(RepoFormat format) => format switch
+    {
+        RepoFormat.Safetensors => "safetensors",
+        RepoFormat.Gguf => "GGUF",
+        RepoFormat.Mixed => "mixed (safetensors + GGUF)",
+        _ => "other",
+    };
+
+    private async Task InspectRepoAsync()
+    {
+        _inspectError = null;
+        _repoInspection = null;
+        _selectedVariant = "";
+        _selectedProjector = "";
+        _pendingGgufFile = null;
+
+        if (string.IsNullOrWhiteSpace(_download.RepoId))
+        {
+            _inspectError = "Repo id is required.";
+            return;
+        }
+
+        try
+        {
+            _repoInspection = await RepoInspector.InspectAsync(
+                _download.RepoId.Trim(),
+                string.IsNullOrWhiteSpace(_download.Revision) ? null : _download.Revision.Trim(),
+                await SelectedTokenAsync());
+
+            if (IsLlamaCpp && _repoInspection.Variants.Count > 0)
+            {
+                SelectLlamaVariant(_repoInspection.Variants[0].Name);
+            }
+            else if (!IsMlx && _repoInspection.Format is RepoFormat.Gguf or RepoFormat.Mixed && _repoInspection.Variants.Count > 0)
+            {
+                SelectVariant(_repoInspection.Variants[0].Name);
+            }
+        }
+        catch (Exception ex) when (ex is HuggingFaceApiException or InvalidOperationException)
+        {
+            _inspectError = ex.Message;
+        }
+    }
+
+    private void SelectVariant(string variantName)
+    {
+        _selectedVariant = variantName;
+        var variant = _repoInspection?.Variants.FirstOrDefault(v => v.Name == variantName);
+        if (_repoInspection is null || variant is null)
+        {
+            return;
+        }
+
+        var patterns = variant.Files.Select(f => f.Name).ToList();
+        if (_repoInspection.OtherFiles.Any(f => f.Name.EndsWith(".json", StringComparison.OrdinalIgnoreCase)))
+        {
+            patterns.Add("*.json");
+        }
+
+        if (_repoInspection.OtherFiles.Any(f => f.Name.StartsWith("tokenizer", StringComparison.OrdinalIgnoreCase)))
+        {
+            patterns.Add("tokenizer*");
+        }
+
+        _download.AllowPatternsText = string.Join(", ", patterns);
+    }
+
+    private async Task StartDownloadAsync()
+    {
+        _downloadError = null;
+        if (string.IsNullOrWhiteSpace(_download.RepoId))
+        {
+            _downloadError = "Repo id is required.";
+            return;
+        }
+
+        var patterns = _download.AllowPatternsText
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        try
+        {
+            var request = new DownloadRequest(
+                RepoId: _download.RepoId.Trim(),
+                Revision: string.IsNullOrWhiteSpace(_download.Revision) ? null : _download.Revision.Trim(),
+                Token: await SelectedTokenAsync(),
+                Folder: string.IsNullOrWhiteSpace(_download.Folder) ? null : _download.Folder.Trim(),
+                AllowPatterns: patterns.Length > 0 ? patterns : null);
+
+            _activeDownloader = NodeDownloader();
+            _downloadStatus = await _activeDownloader.StartAsync(request);
+
+            // Record where the checkpoint came from, so a restore from a backup can fetch it again.
+            _model.SourceRepoId = request.RepoId;
+            _model.SourceRevision = request.Revision ?? "";
+            _model.SourcePatternsText = patterns.SequenceEqual(HuggingFaceDownloader.DefaultAllowPatterns, StringComparer.Ordinal) ? "" : string.Join(", ", patterns);
+            _autoSourceFolder = _downloadStatus.Folder;
+            StartPolling(_downloadStatus.Folder);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or HuggingFaceApiException)
+        {
+            _downloadError = ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// The picked saved token's value, read on the server only as a request goes out, so it is never kept in the form or
+    /// sent to the browser (MN-132). Null when none is picked.
+    /// </summary>
+    private async Task<string?> SelectedTokenAsync()
+    {
+        if (string.IsNullOrEmpty(_download.TokenId))
+        {
+            return null;
+        }
+
+        string? value = Services.GetService<ITokenStore>() is { } store ? await store.GetValueAsync(_download.TokenId) : null;
+        return value ?? throw new InvalidOperationException("The picked access token was deleted. Pick another one, or none.");
+    }
+
+    private async Task CancelDownloadAsync()
+    {
+        if (_downloadStatus is null)
+        {
+            return;
+        }
+
+        await StopPollingAsync();
+        await (_activeDownloader ?? Downloader).CancelAsync(_downloadStatus.Folder);
+        _downloadStatus = null;
+    }
+
+    /// <summary>
+    /// A download already on the selected node (started before this page was refreshed or reopened) is shown and
+    /// followed as if started here, so it completes into the form and starting it again is not refused as in progress.
+    /// A finished one is shown too: a failure stays readable, a completed folder is applied; Dismiss clears it.
+    /// </summary>
+    private async Task AttachToNodeDownloadAsync()
+    {
+        _downloadStatus = null;
+        _otherDownloads = [];
+        if (NeedsNode)
+        {
+            return;
+        }
+
+        var downloader = NodeDownloader();
+        IReadOnlyList<DownloadStatus> downloads;
+        try
+        {
+            downloads = await downloader.ListAsync();
+        }
+        catch (Exception ex) when (ex is NodeUnavailableException or InvalidOperationException or System.Net.Http.HttpRequestException)
+        {
+            return; // the node cannot be asked right now: the form opens as it did before
+        }
+
+        var active = downloads.Where(d => d.State is DownloadState.Downloading or DownloadState.Queued).ToList();
+        var found = active.FirstOrDefault() ?? downloads.FirstOrDefault(d => d.State is DownloadState.Failed or DownloadState.Completed);
+        if (found is null)
+        {
+            return;
+        }
+
+        _source = SourceMode.Download;
+        _activeDownloader = downloader;
+        _downloadStatus = found;
+        _download.RepoId = found.RepoId;
+        _download.Revision = found.Revision ?? "";
+        _download.Folder = found.Folder;
+        _model.SourceRepoId = found.RepoId;
+        _model.SourceRevision = found.Revision ?? "";
+        _autoSourceFolder = found.Folder;
+        _otherDownloads = [.. active.Skip(1).Select(d => d.Folder)];
+        if (found.State == DownloadState.Completed)
+        {
+            await ApplyDownloadedFolderAsync(found.Folder);
+        }
+        else if (found.State is DownloadState.Downloading or DownloadState.Queued)
+        {
+            StartPolling(found.Folder);
+        }
+    }
+
+    /// <summary>The finished download's folder becomes the checkpoint, as if picked from the folder list.</summary>
+    private async Task ApplyDownloadedFolderAsync(string folder)
+    {
+        _selectedFolder = folder;
+        await LoadFoldersAsync();
+        await ApplyFolderAsync(folder);
+    }
+
+    private void StartPolling(string folder)
+    {
+        _pollCts = new CancellationTokenSource();
+        _pollLoop = PollLoopAsync(folder, _pollCts.Token);
+    }
+
+    private async Task PollLoopAsync(string folder, CancellationToken ct)
+    {
+        _pollTimer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        try
+        {
+            while (await _pollTimer.WaitForNextTickAsync(ct))
+            {
+                var status = await (_activeDownloader ?? Downloader).GetAsync(folder, ct);
+                _downloadStatus = status;
+                if (status is null)
+                {
+                    break;
+                }
+
+                if (status.State == DownloadState.Completed)
+                {
+                    await ApplyDownloadedFolderAsync(folder);
+                    await InvokeAsync(StateHasChanged);
+                    break;
+                }
+
+                if (status.State is DownloadState.Failed or DownloadState.Cancelled)
+                {
+                    await InvokeAsync(StateHasChanged);
+                    break;
+                }
+
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected on dispose/cancel.
+        }
+    }
+
+    private async Task StopPollingAsync()
+    {
+        _pollCts?.Cancel();
+        _pollTimer?.Dispose();
+        if (_pollLoop is not null)
+        {
+            try
+            {
+                await _pollLoop;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected.
+            }
+        }
+
+        _pollCts?.Dispose();
+        _pollCts = null;
+    }
+
+    private static string Slugify(string value)
+    {
+        string slug = value.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').Aggregate("", (acc, c) => acc + c);
+        while (slug.Contains("--", StringComparison.Ordinal))
+        {
+            slug = slug.Replace("--", "-", StringComparison.Ordinal);
+        }
+
+        return slug.Trim('-');
+    }
+
+    private async Task SaveAsync()
+    {
+        _saveError = null;
+        _saveErrorDetails = [];
+        _saveNotice = null;
+
+        if (NeedsNode)
+        {
+            _nodeMissing = true;
+            _saveError = "More than one node exists: choose the node this model runs on under Placement.";
+            return;
+        }
+
+        if (DigestProblem is { } digestProblem)
+        {
+            _saveError = "Image digest: " + digestProblem;
+            return;
+        }
+
+        if (SelectedNode is { Discrete: true } discreteNode && _gpus.Count == 0)
+        {
+            _saveError = $"Tick at least one GPU on {discreteNode.Id} under Placement.";
+            return;
+        }
+
+        if (_model.SpeculativeEnabled && string.IsNullOrWhiteSpace(_model.SpeculativeMethod) && string.IsNullOrWhiteSpace(_model.SpeculativeDraftModel))
+        {
+            _saveError = "Speculative decoding needs a method or a draft model path.";
+            return;
+        }
+
+        if (_model.SpeculativeEnabled && !EditModel.IsJsonObjectOrBlank(_model.SpeculativeExtraJson))
+        {
+            _saveError = "Advanced speculative keys must be a JSON object, e.g. {\"moe_backend\":\"triton\"}.";
+            return;
+        }
+
+        if (!EditModel.IsJsonObjectOrBlank(_model.CompilationExtraJson))
+        {
+            _saveError = "Other compilation-config keys must be a JSON object, e.g. {\"mode\":3}.";
+            return;
+        }
+
+        if (_model.ExtraSources.Any(r => !r.IsBlank && (string.IsNullOrWhiteSpace(r.RepoId) || string.IsNullOrWhiteSpace(r.Folder))))
+        {
+            _saveError = "Every extra checkpoint needs both a repo id and a folder (or remove the row).";
+            return;
+        }
+
+        if (IsLlamaCpp && LlamaSaveProblem() is { } llamaProblem)
+        {
+            _saveError = llamaProblem;
+            return;
+        }
+
+        if (IsMlx && MlxSettingsProblem() is { } mlxProblem)
+        {
+            _saveError = mlxProblem;
+            return;
+        }
+
+        // Canonical configuration: owned flags typed into the extra args move into their fields (shown live under
+        // the extra args); the form then shows where they went.
+        // Edit: re-read the stored definition as the baseline so the fields the form does not show (placement, runtime,
+        // keep-serving, …) are kept, including a move or unplace made since the page loaded. Create: §5.6 default
+        // placement (the only node), else the operator must place it through the API.
+        ModelDefinition? baseline = null;
+        if (!IsNew)
+        {
+            baseline = await Registry.GetAsync(Id!) ?? _original;
+        }
+
+        // A llama.cpp or MLX model has no vLLM arguments to lift: its typed flags are refused in its own ExtraArgs instead (D126).
+        var draft = WithPlacementEdits(Draft(IsNew ? _model.Id : Id!, baseline) with { Tags = EffectiveTags.ToList() });
+        var normalized = IsLlamaCpp || IsMlx ? new NormalizedDefinition(draft, [], []) : VllmArgsNormalizer.Normalize(draft);
+        if (normalized.Problems.Count > 0)
+        {
+            _saveError = "Extra args: " + string.Join(" ", normalized.Problems);
+            return;
+        }
+
+        if (IsLlamaCpp && LlamaCppArgsBuilder.Problems(normalized.Definition) is { Count: > 0 } llamaProblems)
+        {
+            _saveError = "Not saved: the llama.cpp settings were refused.";
+            _saveErrorDetails = [.. llamaProblems.Select(p => p.Message)];
+            return;
+        }
+
+        if (IsMlx && MlxArgsBuilder.Problems(normalized.Definition) is { Count: > 0 } mlxProblems)
+        {
+            _saveError = "Not saved: the MLX settings were refused.";
+            _saveErrorDetails = [.. mlxProblems.Select(p => p.Message)];
+            return;
+        }
+
+        var definition = normalized.Definition;
+        if (IsNew && definition.Placement is null)
+        {
+            string bootstrap = Services.GetService<Microsoft.Extensions.Options.IOptions<RegistryMigrationOptions>>()?.Value.EffectiveBootstrapNodeId
+                ?? RegistryMigrationOptions.DefaultBootstrapNodeId;
+            if (await MirbadLLM.Orchestration.Nodes.DefaultPlacement.ApplyAsync(definition, Services.GetService<INodeRegistry>(), bootstrap) is not { } placed)
+            {
+                _saveError = "More than one node exists; place the model on a node.";
+                return;
+            }
+
+            definition = placed;
+        }
+
+        string? liftedNote = null;
+        if (normalized.Lifted.Count > 0)
+        {
+            _model.LoadFrom(definition);
+            liftedNote = "Moved into their fields: " + string.Join(", ", normalized.Lifted.Select(l => l.ToString())) + ".";
+        }
+
+        try
+        {
+            // An edit is written only onto the placement this page showed (D75, W7 review MN-126, MN-118): a move, unplace
+            // or place landing after the page read the model (here: since it opened or last re-read it) is refused
+            // (placement_changed) instead of being reverted, and a GPU change carries the stored generation.
+            using (IsNew ? null : ModelWriteScope.ExpectStoredPlacement(_original?.Placement))
+            {
+                await Registry.UpsertAsync(definition);
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or ModelBusyException or PlacementConflictException or PlacementValidationException)
+        {
+            ModelDefinition? current = null;
+            if (ex is PlacementConflictException && !IsNew)
+            {
+                // Show the placement as it is now, keep the other edits, so a second save goes onto it.
+                current = await Registry.GetAsync(Id!);
+                if (current is not null)
+                {
+                    _original = current;
+                    ResetPlacementFrom(current);
+                    await RefreshNodesAsync();
+                    await RefreshFitAsync();
+                    await RefreshMoveAsync();
+                }
+            }
+
+            var gpus = current?.Placement?.NodeId is { } node ? _nodes.FirstOrDefault(n => n.Id == node)?.Gpus : null;
+            var message = EditorRefusals.Save(ex, definition.Id, current, gpus, placementSection: _multiNode);
+            _saveError = message.Text;
+            _saveErrorDetails = [.. message.Details];
+            return;
+        }
+
+        // The registry stamps the placement generation (a GPU change increments it): the next save from this page carries it.
+        var stored = IsNew ? definition : await Registry.GetAsync(definition.Id) ?? definition;
+
+        if (IsNew)
+        {
+            Nav.NavigateTo($"/?added={Uri.EscapeDataString(definition.Id)}");
+            return;
+        }
+
+        // A benchmark or tuning job on this model holds the router in maintenance mode; a restart now would
+        // fight it for the box. The settings are already saved (above) — stay on the page, explain that the
+        // restart is deferred, and let the operator apply it from the Dashboard once the job finishes.
+        if (Services.GetService<IMaintenanceMode>()?.Active.FirstOrDefault(w => w.ModelId == definition.Id) is { } activeJob)
+        {
+            string jobWord = string.Equals(activeJob.JobKind, "tuning", StringComparison.Ordinal) ? "tuning" : "a benchmark";
+            _saveNotice = $"Saved. The restart is blocked while {jobWord} runs; apply it from the Dashboard when the job finishes." +
+                (liftedNote is null ? "" : " " + liftedNote);
+            _original = stored;
+            ResetPlacementFrom(stored);
+            return;
+        }
+
+        // Only AutoStart (or nothing) changed, or the model isn't running: nothing to apply.
+        bool running = _runningState is ModelState.Starting or ModelState.Ready;
+        if (!running || _original is null || RestartNeeded(_original, definition).Count == 0 || _apply is null)
+        {
+            Nav.NavigateTo("/");
+            return;
+        }
+
+        // List everything the restart applies: against what the container actually runs when it can be read back.
+        var launched = await ReadLaunchedAsync(definition.Id) ?? _original;
+        _original = stored;
+        if (_multiNode)
+        {
+            ResetPlacementFrom(stored);
+        }
+
+        _saveNotice = liftedNote is null ? null : "Saved. " + liftedNote;
+        await _apply.OpenAsync(definition, RestartNeeded(launched, definition), launched.MemoryBudgetGiB);
+    }
+
+    private async Task<ModelDefinition?> ReadLaunchedAsync(string id)
+    {
+        if (Services.GetService<IModelLauncher>() is not { } launcher)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await launcher.GetLaunchedDefinitionAsync(id);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or DockerApiException)
+        {
+            return null;
+        }
+    }
+
+    private Task AfterApplyAsync(bool restarted)
+    {
+        _ = restarted;
+        Nav.NavigateTo("/");
+        return Task.CompletedTask;
+    }
+
+    private async Task DeleteAsync()
+    {
+        if (Id is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await Registry.DeleteAsync(Id);
+        }
+        catch (ModelBusyException ex)
+        {
+            // A job, move or restore holds the model (design §6.7; composed by the W7 review MN-126): say so, don't crash.
+            _saveError = EditorRefusals.Delete(ex, Id).Text;
+            _saveErrorDetails = [];
+            return;
+        }
+
+        Nav.NavigateTo("/");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopPollingAsync();
+        if (_liveCts is not null)
+        {
+            await _liveCts.CancelAsync();
+            try
+            {
+                if (_liveLoop is not null)
+                {
+                    await _liveLoop;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected.
+            }
+
+            _liveCts.Dispose();
+            _liveCts = null;
+        }
+    }
+
+    // --- llama.cpp (design-p3p4 §A.7; MN-226) ---
+
+    private RuntimeKind _runtime = RuntimeKind.Vllm;
+    private LlamaCppForm _llama = new();
+    private MirbadLLM.Agent.Contracts.GgufSummary? _gguf;
+    private string? _ggufError;
+
+    /// <summary>Generation of the GGUF header read in flight (MN-239 item 5): an overtaken answer is dropped.</summary>
+    private int _ggufReadVersion;
+
+    private IReadOnlyList<string> _ggufCandidates = [];
+    private GgufMemoryEstimate? _estimate;
+    private string? _estimateError;
+    private IReadOnlyList<MirbadLLM.Agent.Contracts.ModelFolderEntry> _entries = [];
+    private string _selectedProjector = "";
+
+    /// <summary>The first GGUF of the variant being downloaded, read once the download completes.</summary>
+    private string? _pendingGgufFile;
+
+    /// <summary>True once the budget was typed (or the model existed): a new model's budget follows the estimate until then.</summary>
+    private bool _budgetTouched;
+
+    private bool IsLlamaCpp => _runtime == RuntimeKind.LlamaCpp;
+
+    /// <summary>The model the form describes: the vLLM fields on <paramref name="baseline"/>, plus the llama.cpp settings for a llama.cpp model.</summary>
+    private ModelDefinition Draft(string id, ModelDefinition? baseline)
+    {
+        var definition = _model.ToDefinition(id, baseline);
+        if (IsMlx)
+        {
+            // mlx_lm.server reads none of the vLLM fields: no parsers and no vLLM extra args are stored for it.
+            return definition with
+            {
+                Runtime = RuntimeKind.Mlx, Mlx = MlxDraftSettings(), LlamaCpp = null, ToolCallParser = null, ReasoningParser = null, ExtraArgs = [],
+            };
+        }
+
+        return IsLlamaCpp ? definition with { Runtime = RuntimeKind.LlamaCpp, LlamaCpp = LlamaDraftSettings() } : definition;
+    }
+
+    /// <summary>The node's llama.cpp delivery (a native process on Windows), else the stored one.</summary>
+    private LaunchDelivery LlamaDelivery =>
+        LlamaCppEditing.Runtime(SelectedNode)?.Delivery ?? _llama.Baseline?.Delivery ?? LaunchDelivery.Container;
+
+    private LlamaCppSettings LlamaDraftSettings() => _llama.ToSettings(_model.ModelPath, LlamaDelivery, _gpus.Count);
+
+    /// <summary>
+    /// The node's installed llama-server versions; null when it reports none (or the node is unknown). The node is the
+    /// chosen one on a fleet of several, the fleet's one member otherwise (MN-239 item 3) — without that a single-node
+    /// fleet offered only "Node default (none verified)" however many versions the PC had.
+    /// </summary>
+    private IReadOnlyList<RuntimeVersion>? LlamaVersions => LlamaCppEditing.Runtime(SelectedNode ?? _singleNode)?.Versions;
+
+    /// <summary>The vision projectors of the inspected repo, listed apart from the variants.</summary>
+    private IReadOnlyList<RepoFile> RepoProjectors =>
+        [.. (_repoInspection?.AuxiliaryFiles ?? []).Where(f => Path.GetFileName(f.Name).StartsWith("mmproj", StringComparison.OrdinalIgnoreCase))];
+
+    /// <summary>The room on each GPU of the chosen node, from the fit preview (every GPU as a single-GPU option).</summary>
+    private IReadOnlyList<GgufGpuRoom> GgufRooms
+    {
+        get
+        {
+            if (SelectedNode is not { } node || _nodeFits.GetValueOrDefault(node.Id) is not { } fit)
+            {
+                return [];
+            }
+
+            if (!node.Discrete)
+            {
+                return [new GgufGpuRoom(node.Id, fit.FreeGiB, fit.ReserveGiB)];
+            }
+
+            return
+            [
+                .. node.Gpus.Select(gpu => fit.Gpus.FirstOrDefault(g => string.Equals(g.Uuid, gpu.Uuid, StringComparison.Ordinal)) is { } room
+                    ? new GgufGpuRoom(PlacementEditing.GpuLabel(gpu), room.FreeGiB, room.ReserveGiB)
+                    : new GgufGpuRoom(PlacementEditing.GpuLabel(gpu), null, 0)),
+            ];
+        }
+    }
+
+    /// <summary>The <c>--tensor-split</c> the builder would emit for the ticked GPUs (two or more); null otherwise.</summary>
+    private string? LlamaTensorSplit
+    {
+        get
+        {
+            if (!IsLlamaCpp || _gpus.Count < 2 || SelectedNode is not { } node)
+            {
+                return null;
+            }
+
+            try
+            {
+                var model = Draft(string.IsNullOrEmpty(_model.Id) ? "preview" : _model.Id, _original) with
+                {
+                    Placement = PlacementEditing.Build(node.Id, _gpus, node.Gpus, 0),
+                };
+                return LaunchSpecBuilder.TensorSplitWeights(model, node.Record) is { } weights
+                    ? LlamaCppArgsBuilder.FormatTensorSplit(LlamaCppArgsBuilder.TensorSplit(weights))
+                    : null;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+            {
+                return null; // budgets that do not match yet, or a GPU without memory in the report: no split to show
+            }
+        }
+    }
+
+    private async Task OnRuntimeChangedAsync(RuntimeKind kind)
+    {
+        _runtime = kind;
+        // The vLLM parsers mean nothing to llama-server (its template decides): a new llama.cpp model stores none; back on
+        // vLLM the editor's defaults return.
+        var defaults = new ModelDefinition { Id = "x", ServedName = "x", ModelPath = "x" };
+        _model.ToolCallParser = IsLlamaCpp || IsMlx ? null : defaults.ToolCallParser;
+        _model.ReasoningParser = IsLlamaCpp || IsMlx ? null : defaults.ReasoningParser;
+        _selectedFolder = "";
+        _inspection = null;
+        _suggestionFormula = null;
+        _folderError = null;
+        ResetGguf();
+        if (_repoInspection is { Variants.Count: > 0 } repo)
+        {
+            if (IsLlamaCpp)
+            {
+                SelectLlamaVariant(repo.Variants[0].Name);
+            }
+            else if (IsMlx)
+            {
+                // An MLX download takes the default patterns (safetensors, json, tokenizer), never a GGUF variant.
+                _selectedProjector = "";
+                _selectedVariant = "";
+                _download.AllowPatternsText = string.Join(", ", HuggingFaceDownloader.DefaultAllowPatterns);
+            }
+            else
+            {
+                _selectedProjector = "";
+                SelectVariant(repo.Variants[0].Name);
+            }
+        }
+
+        await LoadFoldersAsync();
+        RecomputeLlama();
+        RecomputeMlx();
+        await RefreshFitAsync();
+    }
+
+    private void ResetGguf()
+    {
+        _ggufReadVersion++; // a header read still out belongs to the folder, file or node just left (MN-239 item 5)
+        _gguf = null;
+        _ggufError = null;
+        _ggufCandidates = [];
+        _estimate = null;
+        _estimateError = null;
+        _pendingGgufFile = null;
+    }
+
+    private async Task OnLlamaChangedAsync()
+    {
+        RecomputeLlama();
+        await RefreshFitAsync();
+    }
+
+    private async Task OnLlamaBudgetChangedAsync(double budget)
+    {
+        _model.MemoryBudgetGiB = budget;
+        _budgetTouched = true;
+        await RefreshFitAsync();
+    }
+
+    private async Task OnGpuBudgetsChangedAsync(IReadOnlyList<double?> budgets)
+    {
+        _llama.GpuBudgets = [.. budgets];
+        RecomputeLlama();
+        await RefreshFitAsync();
+    }
+
+    /// <summary>Recomputes the live estimate; a new model whose budget was not typed takes it as its budget.</summary>
+    private void RecomputeLlama()
+    {
+        if (!IsLlamaCpp)
+        {
+            _estimate = null;
+            _estimateError = null;
+            return;
+        }
+
+        _estimate = LlamaCppEditing.TryEstimate(_gguf, LlamaDraftSettings(), _gpus.Count, out _estimateError);
+        if (IsNew && !_budgetTouched && _estimate is { } estimate)
+        {
+            _model.MemoryBudgetGiB = estimate.BudgetGiB;
+        }
+    }
+
+    /// <summary>A GGUF folder was picked (or a download finished): the model path, the names, then its header.</summary>
+    private async Task ApplyGgufFolderAsync(string folder, string? preferredFile)
+    {
+        ResetGguf();
+        _llama.File = preferredFile ?? "";
+        if (string.IsNullOrEmpty(folder))
+        {
+            RecomputeLlama();
+            return;
+        }
+
+        if (_autoSourceFolder is not null && !string.Equals(_autoSourceFolder, folder, StringComparison.Ordinal))
+        {
+            _model.SourceRepoId = "";
+            _model.SourceRevision = "";
+            _model.SourcePatternsText = "";
+            _autoSourceFolder = null;
+        }
+
+        _model.ModelPath = folder;
+        _model.Id = string.IsNullOrWhiteSpace(_model.Id) ? Slugify(folder) : _model.Id;
+        _model.ServedName = string.IsNullOrWhiteSpace(_model.ServedName) ? folder : _model.ServedName;
+        if (!string.IsNullOrEmpty(_selectedProjector))
+        {
+            _llama.ProjectorFile = _selectedProjector;
+        }
+
+        await ReadGgufAsync();
+    }
+
+    /// <summary>
+    /// Reads the header of the chosen GGUF (the folder's only one when none is chosen) through the node's agent. On a new
+    /// model it pre-fills the settings (D118); on an existing one it only gives the estimate (and the file name, when it was
+    /// left to the agent), so the stored settings stay as they are.
+    /// <para>The read is a remote call with no bound of its own, and the folder, the file and the node can all change
+    /// while it is in flight. Each read takes a generation and an answer that a newer read has overtaken is dropped
+    /// (MN-239 item 5, D131; the same guard as <c>NodeDetail.LoadAgentStatusAsync</c>), so a slow read of folder A can no
+    /// longer overwrite the summary and the pre-fill of the folder the operator has since chosen.</para>
+    /// </summary>
+    private async Task ReadGgufAsync()
+    {
+        int version = ++_ggufReadVersion;
+        _gguf = null;
+        _ggufError = null;
+        if (string.IsNullOrWhiteSpace(_model.ModelPath))
+        {
+            _ggufError = "Choose the folder first.";
+            RecomputeLlama();
+            return;
+        }
+
+        var read = await ModelSourcing.InspectGgufAsync(Services, SourceNodeId, _model.ModelPath.Trim(), _llama.File);
+        if (version != _ggufReadVersion)
+        {
+            return; // another folder, file or node was chosen while this read was out: its own read answers.
+        }
+
+        _gguf = read.Summary;
+        _ggufError = read.Error;
+        if (read.Candidates.Count > 0)
+        {
+            _ggufCandidates = read.Candidates;
+        }
+
+        if (_gguf is { } summary)
+        {
+            if (IsNew)
+            {
+                _llama.ApplyGguf(summary);
+                if (string.Equals(_model.ServedName, _model.ModelPath, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(summary.Name))
+                {
+                    _model.ServedName = summary.Name;
+                }
+            }
+            else if (string.IsNullOrWhiteSpace(_llama.File))
+            {
+                _llama.File = summary.File;
+            }
+        }
+
+        RecomputeLlama();
+        await RefreshFitAsync();
+    }
+
+    /// <summary>A variant of the inspected repo: the download fetches its files (and the chosen projector) only.</summary>
+    private void SelectLlamaVariant(string variantName)
+    {
+        _selectedVariant = variantName;
+        if (_repoInspection?.Variants.FirstOrDefault(v => v.Name == variantName) is not { } variant)
+        {
+            return;
+        }
+
+        var files = variant.Files.Select(f => f.Name).Order(StringComparer.Ordinal).ToList();
+        _pendingGgufFile = files.FirstOrDefault();
+        var patterns = new List<string>(files);
+        if (!string.IsNullOrEmpty(_selectedProjector))
+        {
+            patterns.Add(_selectedProjector);
+        }
+
+        _download.AllowPatternsText = string.Join(", ", patterns);
+    }
+
+    private void SelectProjector(string projector)
+    {
+        _selectedProjector = projector ?? "";
+        SelectLlamaVariant(_selectedVariant);
+    }
+
+    /// <summary>What a llama.cpp save needs that the registry's checks do not say in the editor's words; null when fine.</summary>
+    private string? LlamaSaveProblem()
+    {
+        if (string.IsNullOrWhiteSpace(_llama.File))
+        {
+            return "Choose the GGUF file: pick its folder and read its header, or type the file name.";
+        }
+
+        if (LlamaCppEditing.GpuBudgetProblem(_llama.GpuBudgets, _gpus.Count, _model.MemoryBudgetGiB) is { } budgets)
+        {
+            return "Per-GPU budgets: " + budgets;
+        }
+
+        var refused = LlamaCppEditing.RefusedExtraArgs(_llama.ExtraArgsText);
+        return refused.Count > 0
+            ? $"Extra args: {string.Join(" ", refused)} cannot be set there (use its field, or leave it to MirbadLLM)."
+            : null;
+    }
+
+    /// <summary>Every setting a restart applies: the vLLM list (unchanged for vLLM models) and the llama.cpp settings.</summary>
+    private static IReadOnlyList<SettingChange> RestartNeeded(ModelDefinition before, ModelDefinition after) =>
+        [.. SettingChanges.RestartNeeded(before, after), .. LlamaCppEditing.RestartNeeded(before, after), .. MlxEditing.RestartNeeded(before, after)];
+
+    // --- MLX (docs/macos/implementation-plan.md, Phase 3 "UI") ---
+
+    private MlxForm _mlx = new();
+    private MlxMemoryEstimate? _mlxEstimate;
+
+    private bool IsMlx => _runtime == RuntimeKind.Mlx;
+
+    /// <summary>The MLX settings the form describes; the checkpoint folder is the model's folder.</summary>
+    private MlxSettings MlxDraftSettings() => _mlx.ToSettings(_model.ModelPath);
+
+    /// <summary>The node's installed mlx-lm versions; null when it reports none (or the node is unknown).</summary>
+    private IReadOnlyList<RuntimeVersion>? MlxVersions => MlxEditing.Runtime(SelectedNode ?? _singleNode)?.Versions;
+
+    /// <summary>The node offers MLX (or the model already is one): the runtime texts then name it.</summary>
+    private bool MlxOffered => IsMlx || MlxEditing.Runtime(SelectedNode ?? _singleNode) is not null;
+
+    /// <summary>The node offers llama.cpp (or the model already is one).</summary>
+    private bool LlamaOffered => IsLlamaCpp || LlamaCppEditing.Runtime(SelectedNode ?? _singleNode) is not null;
+
+    /// <summary>"vLLM or llama.cpp" (as before MLX), "vLLM or MLX", "vLLM, llama.cpp or MLX".</summary>
+    private string RuntimeChoiceText =>
+        !MlxOffered ? "vLLM or llama.cpp" : LlamaOffered ? "vLLM, llama.cpp or MLX" : "vLLM or MLX";
+
+    /// <summary>What a checkpoint is per runtime, for the runtime step.</summary>
+    private string RuntimeCheckpointText =>
+        !MlxOffered ? "a folder for vLLM, one GGUF file for llama.cpp"
+        : LlamaOffered ? "a folder for vLLM and MLX, one GGUF file for llama.cpp"
+        : "a folder for vLLM and MLX";
+
+    private async Task OnMlxChangedAsync()
+    {
+        RecomputeMlx();
+        await RefreshFitAsync();
+    }
+
+    /// <summary>Recomputes the MLX estimate; a new model whose budget was not typed takes it as its budget.</summary>
+    private void RecomputeMlx()
+    {
+        if (!IsMlx)
+        {
+            _mlxEstimate = null;
+            return;
+        }
+
+        _mlxEstimate = MlxEditing.TryEstimate(MlxDraftSettings(), MemoryInspection);
+        if (IsNew && !_budgetTouched && _mlxEstimate is { } estimate)
+        {
+            _model.MemoryBudgetGiB = estimate.BudgetGiB;
+        }
+    }
+
+    /// <summary>What an MLX save needs that the registry's checks do not say in the editor's words; null when fine.</summary>
+    private string? MlxSettingsProblem()
+    {
+        var refused = MlxEditing.RefusedExtraArgs(_mlx.ExtraArgsText);
+        if (refused.Count > 0)
+        {
+            return $"Extra args: {string.Join(" ", refused)} cannot be set there (use its field, or leave it to MirbadLLM).";
+        }
+
+        return MlxEditing.ChatTemplateArgsProblem(_mlx.ChatTemplateArgs) is { } template ? "Chat template arguments: " + template : null;
+    }
+
+    private sealed class DownloadFormModel
+    {
+        public string RepoId { get; set; } = "";
+        public string Revision { get; set; } = "";
+        /// <summary>A saved token's id (Access > Tokens), never its value.</summary>
+        public string? TokenId { get; set; }
+        public string Folder { get; set; } = "";
+        public string AllowPatternsText { get; set; } = string.Join(", ", HuggingFaceDownloader.DefaultAllowPatterns);
+    }
+
+    private sealed class EditModel
+    {
+        [Required]
+        [RegularExpression("^[a-z0-9][a-z0-9-]{0,39}$", ErrorMessage = "Id must be lowercase letters/digits/hyphens, start with a letter or digit, max 40 characters.")]
+        public string Id { get; set; } = "";
+
+        [Required]
+        public string ServedName { get; set; } = "";
+
+        [Required]
+        public string ModelPath { get; set; } = "";
+
+        public string? Quantization { get; set; }
+
+        [Required]
+        public string KvCacheDtype { get; set; } = "fp8";
+
+        [Range(1, int.MaxValue)]
+        public int MaxModelLen { get; set; } = 262_144;
+
+        [Range(1, int.MaxValue)]
+        public int MaxNumSeqs { get; set; } = 16;
+
+        public int? MaxNumBatchedTokens { get; set; }
+
+        [Range(0.1, 1000)]
+        public double MemoryBudgetGiB { get; set; } = 36;
+
+        public string? ToolCallParser { get; set; } = "qwen3_coder";
+        public string? ReasoningParser { get; set; } = "qwen3";
+
+        /// <summary>Tri-state: "" = vLLM default, "on", "off".</summary>
+        public string PrefixCaching { get; set; } = "on";
+
+        /// <summary>Tri-state: "" = vLLM default, "on", "off".</summary>
+        public string AsyncScheduling { get; set; } = "";
+
+        public string? MambaCacheMode { get; set; }
+
+        public bool SpeculativeEnabled { get; set; }
+        public string SpeculativeMethod { get; set; } = "";
+
+        [Range(1, int.MaxValue)]
+        public int SpeculativeNumTokens { get; set; } = 1;
+
+        public string SpeculativeDraftModel { get; set; } = "";
+
+        /// <summary>Every other <c>--speculative-config</c> key, as a JSON object.</summary>
+        public string SpeculativeExtraJson { get; set; } = "";
+
+        public string? CudaGraphMode { get; set; }
+
+        /// <summary>Every other <c>--compilation-config</c> key (besides cudagraph_mode), as a JSON object.</summary>
+        public string CompilationExtraJson { get; set; } = "";
+        public string? Image { get; set; }
+
+        /// <summary>The image override's digest (D85); only shown, and only saved, with an image override.</summary>
+        public string ImageDigest { get; set; } = "";
+        public string ExtraArgsText { get; set; } = "";
+        public bool AutoStart { get; set; }
+
+        /// <summary>The primary source: the repo the folder at <see cref="ModelPath"/> comes from.</summary>
+        public string SourceRepoId { get; set; } = "";
+        public string SourceRevision { get; set; } = "";
+        public string SourcePatternsText { get; set; } = "";
+        public List<SourceRow> ExtraSources { get; set; } = [];
+
+        public void LoadFrom(ModelDefinition definition)
+        {
+            Id = definition.Id;
+            ServedName = definition.ServedName;
+            ModelPath = definition.ModelPath;
+            Quantization = definition.Quantization;
+            KvCacheDtype = definition.KvCacheDtype;
+            MaxModelLen = definition.MaxModelLen;
+            MaxNumSeqs = definition.MaxNumSeqs;
+            MaxNumBatchedTokens = definition.MaxNumBatchedTokens;
+            MemoryBudgetGiB = definition.MemoryBudgetGiB;
+            ToolCallParser = definition.ToolCallParser;
+            ReasoningParser = definition.ReasoningParser;
+            PrefixCaching = TriState(definition.EnablePrefixCaching);
+            AsyncScheduling = TriState(definition.AsyncScheduling);
+            MambaCacheMode = definition.MambaCacheMode;
+            SpeculativeEnabled = definition.Speculative is not null;
+            SpeculativeMethod = definition.Speculative?.Method ?? "";
+            SpeculativeNumTokens = definition.Speculative is { NumSpeculativeTokens: > 0 } s ? s.NumSpeculativeTokens : 1;
+            SpeculativeDraftModel = definition.Speculative?.DraftModel ?? "";
+            SpeculativeExtraJson = definition.Speculative is { Extra.IsEmpty: false } withExtra ? withExtra.Extra.ToJson() : "";
+            CudaGraphMode = definition.CudaGraphMode;
+            CompilationExtraJson = definition.CompilationConfig is { IsEmpty: false } cc ? cc.ToJson() : "";
+            Image = definition.Image;
+            ImageDigest = definition.ImageDigest ?? "";
+            ExtraArgsText = string.Join('\n', definition.ExtraArgs);
+            AutoStart = definition.AutoStart;
+
+            var sources = definition.Sources ?? [];
+            var primary = sources.FirstOrDefault(src => string.Equals(src.Folder, definition.ModelPath, StringComparison.Ordinal));
+            SourceRepoId = primary?.RepoId ?? "";
+            SourceRevision = primary?.Revision ?? "";
+            SourcePatternsText = primary?.AllowPatterns is { Count: > 0 } patterns ? string.Join(", ", patterns) : "";
+            ExtraSources = sources.Where(src => !ReferenceEquals(src, primary)).Select(SourceRow.From).ToList();
+        }
+
+        /// <summary>
+        /// The form's fields applied on top of <paramref name="baseline"/> (the stored definition when editing), so every
+        /// member the form does not show — placement, runtime, llama.cpp settings, host-memory budget, keep-serving and
+        /// whatever later phases add — is kept on save (MN-090: a fresh definition here would unplace the model).
+        /// </summary>
+        public ModelDefinition ToDefinition(string id, ModelDefinition? baseline = null) =>
+            (baseline ?? new ModelDefinition { Id = id, ServedName = ServedName, ModelPath = ModelPath }) with
+        {
+            Id = id,
+            ServedName = ServedName,
+            ModelPath = ModelPath,
+            Quantization = string.IsNullOrWhiteSpace(Quantization) ? null : Quantization,
+            KvCacheDtype = KvCacheDtype,
+            MaxModelLen = MaxModelLen,
+            MaxNumSeqs = MaxNumSeqs,
+            MaxNumBatchedTokens = MaxNumBatchedTokens,
+            MemoryBudgetGiB = MemoryBudgetGiB,
+            ToolCallParser = string.IsNullOrWhiteSpace(ToolCallParser) ? null : ToolCallParser,
+            ReasoningParser = string.IsNullOrWhiteSpace(ReasoningParser) ? null : ReasoningParser,
+            EnablePrefixCaching = FromTriState(PrefixCaching),
+            AsyncScheduling = FromTriState(AsyncScheduling),
+            MambaCacheMode = string.IsNullOrWhiteSpace(MambaCacheMode) ? null : MambaCacheMode.Trim(),
+            Speculative = SpeculativeEnabled ? BuildSpeculative() : null,
+            CudaGraphMode = string.IsNullOrWhiteSpace(CudaGraphMode) ? null : CudaGraphMode,
+            CompilationConfig = JsonFields.TryParse(CompilationExtraJson, out var compilation) && !compilation.IsEmpty ? compilation : null,
+            Image = string.IsNullOrWhiteSpace(Image) ? null : Image,
+            ImageDigest = string.IsNullOrWhiteSpace(Image) || string.IsNullOrWhiteSpace(ImageDigest) ? null : ImageDigest.Trim(),
+            ExtraArgs = ExtraArgsText
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+            AutoStart = AutoStart,
+            Sources = BuildSources(),
+        };
+
+        /// <summary>The speculative object: the advanced JSON keys, then the typed fields on top (they win).</summary>
+        private SpeculativeDecoding BuildSpeculative()
+        {
+            var extra = JsonFields.TryParse(SpeculativeExtraJson, out var parsed) ? parsed : JsonFields.Empty;
+            var typed = new SpeculativeDecoding(SpeculativeMethod ?? "", SpeculativeNumTokens)
+            {
+                DraftModel = string.IsNullOrWhiteSpace(SpeculativeDraftModel) ? null : SpeculativeDraftModel.Trim(),
+            };
+            return SpeculativeDecoding.FromFields(extra.MergedWith(typed.ToFields()));
+        }
+
+        public static bool IsJsonObjectOrBlank(string? text) => string.IsNullOrWhiteSpace(text) || JsonFields.TryParse(text, out _);
+
+        private static string TriState(bool? value) => value switch
+        {
+            true => "on",
+            false => "off",
+            null => "",
+        };
+
+        private static bool? FromTriState(string? value) => value switch
+        {
+            "on" => true,
+            "off" => false,
+            _ => null,
+        };
+
+        private List<ModelSource> BuildSources()
+        {
+            var sources = new List<ModelSource>();
+            if (!string.IsNullOrWhiteSpace(SourceRepoId) && !string.IsNullOrWhiteSpace(ModelPath))
+            {
+                sources.Add(new ModelSource(SourceRepoId.Trim(), ModelPath.Trim(), Blank(SourceRevision), Patterns(SourcePatternsText)));
+            }
+
+            sources.AddRange(ExtraSources.Where(r => !r.IsBlank).Select(r => r.ToSource()));
+            return sources;
+        }
+    }
+
+    /// <summary>One extra checkpoint row in the Source section.</summary>
+    private sealed class SourceRow
+    {
+        public string RepoId { get; set; } = "";
+        public string Folder { get; set; } = "";
+        public string Revision { get; set; } = "";
+        public string PatternsText { get; set; } = "";
+
+        public bool IsBlank => string.IsNullOrWhiteSpace(RepoId) && string.IsNullOrWhiteSpace(Folder);
+
+        public ModelSource ToSource() => new(RepoId.Trim(), Folder.Trim(), Blank(Revision), Patterns(PatternsText));
+
+        public static SourceRow From(ModelSource source) => new()
+        {
+            RepoId = source.RepoId,
+            Folder = source.Folder,
+            Revision = source.Revision ?? "",
+            PatternsText = source.AllowPatterns is { Count: > 0 } patterns ? string.Join(", ", patterns) : "",
+        };
+    }
+
+    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static IReadOnlyList<string>? Patterns(string? text)
+    {
+        var patterns = (text ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return patterns.Length == 0 ? null : patterns;
+    }
+}

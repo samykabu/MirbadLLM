@@ -1,0 +1,1784 @@
+@namespace MirbadLLM.Web.Components.Ui
+@implements IAsyncDisposable
+@using MirbadLLM.Web.Components.Pages
+@inject IHostServiceManager DefaultServiceManager
+@inject INodeHostServices NodeHostServices
+@inject IServiceProvider ServiceProvider
+@inject NavigationManager Nav
+@*
+    The daemons, containers and Windows services of one node that share its memory with the models (design §9.1):
+    Managed (the whitelist: start, stop, restart, autostart, protect, bulk actions) and Discovered (everything found,
+    filtered by kind, with "Add to managed" behind admin re-authentication). Node detail renders it for its own node
+    (NodeId set); the /services page renders it with the node selector, opening on a node that can manage services.
+*@
+<div class="node-services" data-testid="@TestId">
+@if (ShowNodeSelector && (_nodes.Count > 1 || _loadedAt is not null))
+{
+    <div class="svc-scope" data-testid="services-scope">
+        @if (_nodes.Count > 1)
+        {
+            <span class="svc-scope-label" id="services-node-label">Node</span>
+            <NodeSelector Nodes="_nodes" SelectedId="@_nodeId" SelectedIdChanged="OnNodeSelectedAsync" Label="Node whose services are shown"
+                          TestId="services-node-selector" />
+            <a class="svc-scope-link" href="@NodeServicesHref(_nodeId)" data-testid="services-node-link">Open @SelectedNodeName <Icon Name="arrow-right" /></a>
+        }
+        <LiveStamp At="_loadedAt" TestId="services-updated" />
+    </div>
+}
+
+@if (_error is not null)
+{
+    <div class="callout callout--failed page-alert" role="alert" data-testid="services-error">
+        <Icon Name="state-failed" />
+        <div class="callout-body">@_error</div>
+    </div>
+}
+
+@if (_notice is not null)
+{
+    <div class="callout callout--ready page-alert" role="status" data-testid="services-notice">
+        <Icon Name="state-ready" />
+        <div class="callout-body">@_notice</div>
+    </div>
+}
+
+@if (ShowHeadroom)
+{
+    <MemoryHeadroom TotalGiB="_memory.TotalGiB" AvailableGiB="_memory.AvailableGiB" ModelsGiB="_modelsGiB" ReserveGiB="_reserveGiB" />
+}
+
+@if (NodeUnsupported)
+{
+    var others = SupportingNodes().Where(r => r.Id != _nodeId).ToList();
+    <div class="callout callout--busy page-alert svc-unsupported" role="status" data-testid="services-unsupported">
+        <Icon Name="info" />
+        <div class="callout-body">
+            <span class="callout-title">@SelectedNodeName can't manage services</span>
+            <p data-testid="services-unsupported-why">@UnsupportedReason(SelectedNode?.Capabilities, SelectedNodeName)</p>
+            @if (others.Count > 0)
+            {
+                <p data-testid="services-unsupported-others">
+                    Services can be managed on
+                    @for (int i = 0; i < others.Count; i++)
+                    {
+                        var other = others[i];
+                        @(i == 0 ? "" : i == others.Count - 1 ? " and " : ", ")
+                        @if (ShowNodeSelector)
+                        {
+                            <button type="button" class="btn-link-inline" data-testid="@($"services-switch-{other.Id}")" @onclick="() => SwitchNodeAsync(other.Id)">@other.Name</button>
+                        }
+                        else
+                        {
+                            <a href="@NodeServicesHref(other.Id)" data-testid="@($"services-switch-{other.Id}")">@other.Name</a>
+                        }
+                    }.
+                </p>
+            }
+        </div>
+    </div>
+}
+else
+{
+@if (_loaded && !_snapshot.HostAgentAvailable && ScmNode)
+{
+    <div class="callout callout--busy page-alert services-agent" role="status" data-testid="scm-unavailable">
+        <Icon Name="warning" />
+        <div class="callout-body">
+            <span class="callout-title">Windows services can't be read right now</span>
+            <p>
+                @SelectedNodeName's agent could not read the Windows Service Control Manager, so its services can't be listed or controlled
+                until it answers again.@(_snapshot.HostAgentError is null ? null : $" Detail: {_snapshot.HostAgentError}")
+            </p>
+        </div>
+    </div>
+}
+else if (_loaded && !_snapshot.HostAgentAvailable && LaunchdNode)
+{
+    <div class="callout callout--busy page-alert services-agent" role="status" data-testid="host-agent-missing-mac">
+        <Icon Name="warning" />
+        <div class="callout-body">
+            <span class="callout-title">Host agent not installed</span>
+            <p>
+                Ollama, LM Studio, ComfyUI and the other launchd jobs on @SelectedNodeName are controlled through
+                <code>mirbadllm-hostd</code>, a small root LaunchDaemon that listens only on
+                <code>/var/run/mirbadllm-hostd/hostd.sock</code> and only touches the jobs in its whitelist. Install it on
+                @SelectedNodeName from the agent's bundle folder:
+            </p>
+            <pre class="code-block" data-testid="host-agent-install-mac"><code>sudo bash install-agent.sh install-hostd</code></pre>
+            @if (_snapshot.HostAgentError is not null)
+            {
+                <p class="muted">Detail: @_snapshot.HostAgentError</p>
+            }
+        </div>
+    </div>
+}
+else if (_loaded && !_snapshot.HostAgentAvailable)
+{
+    <div class="callout callout--busy page-alert services-agent" role="status" data-testid="host-agent-missing">
+        <Icon Name="warning" />
+        <div class="callout-body">
+            <span class="callout-title">Host agent not installed</span>
+            <p>
+                ComfyUI, Ollama, LM Studio and the other systemd services are controlled through <code>mirbadllm-hostd</code>,
+                a small root service that listens only on <code>/run/mirbadllm-hostd/hostd.sock</code> and only touches the
+                units in its whitelist. Install it on @SelectedNodeName from the repo checkout:
+            </p>
+            <pre class="code-block" data-testid="host-agent-install"><code>sudo bash deploy/hostd/install-hostd.sh</code></pre>
+            <p class="muted">Containers below work without it.@(_snapshot.HostAgentError is null ? null : $" Detail: {_snapshot.HostAgentError}")</p>
+        </div>
+    </div>
+}
+
+<Tabs Items="TopTabItems()" SelectedId="@_topTab" SelectedIdChanged="OnTopTabSelectedAsync"
+      QueryKey="@TabQueryKey" AriaLabel="Services" TestId="services-tabs" Variant="TabsVariant">
+    <ChildContent Context="topTab">
+        @if (topTab == "managed")
+        {
+            <section class="section" aria-labelledby="services-title">
+                <div class="section-head">
+                    <h2 id="services-title" class="visually-hidden">Managed</h2>
+                    @if (_snapshot.Services.Count > 0)
+                    {
+                        <span class="section-note num" data-testid="services-summary">
+                            @_snapshot.Services.Count(s => s.State == HostServiceState.Running) running · @FormatBytes(_snapshot.Services.Sum(s => s.TotalMemoryBytes ?? 0)) in use
+                        </span>
+                    }
+                </div>
+
+                @if (!_loaded)
+                {
+                    <p class="muted loading-line" role="status" data-testid="services-loading">
+                        <Icon Name="refresh" Class="icon--spin" /> Reading services…
+                    </p>
+                }
+                else if (_snapshot.Services.Count == 0)
+                {
+                    <EmptyState Title="No services to manage" HeadingLevel="3" Inline="true" TestId="services-empty">
+                        <ChildContent>
+                            @if (LaunchdNode)
+                            {
+                                <p data-testid="services-empty-launchd">
+                                    Nothing is managed yet. Open <strong>Discovered</strong> above and add the LaunchDaemons and LaunchAgents you
+                                    want to control from here. The first whitelist is seeded from the host agent's
+                                    <code>/Library/Application Support/mirbadllm-hostd/hostd.json</code>; models are managed on the Models page.
+                                </p>
+                            }
+                            else if (ScmNode)
+                            {
+                                <p data-testid="services-empty-scm">
+                                    Nothing is managed yet: on Windows the list starts empty. Open <strong>Discovered</strong> above and add the
+                                    Windows services you want to control from here. Models are managed on the Models page; MirbadLLM's own
+                                    agent can never be managed here.
+                                </p>
+                            }
+                            else
+                            {
+                                <p>
+                                    Nothing is managed yet. Open <strong>Discovered</strong> above and add the daemons and containers you want to
+                                    control from here. The first whitelist is seeded from the host agent's <code>/etc/mirbadllm/hostd.json</code>;
+                                    MirbadLLM itself and model containers are managed on the Models page.
+                                </p>
+                            }
+                        </ChildContent>
+                    </EmptyState>
+                }
+                else
+                {
+                    var managedRows = ManagedFiltered().ToList();
+                    var managedPage = Pager.Slice(managedRows, _managedPage, _managedSize);
+                    var eligible = managedPage.Where(x => !x.Protected).ToList();
+                    <div class="table-toolbar">
+                        <div class="field table-filter">
+                            <label class="field-label" for="managed-filter">Filter</label>
+                            <input id="managed-filter" type="search" class="form-control" placeholder="Name, unit or description"
+                                   autocomplete="off" spellcheck="false" data-testid="managed-filter" data-shortcut-filter
+                                   aria-describedby="managed-filter-count"
+                                   value="@_managedFilter" @oninput="e => _managedFilter = e.Value?.ToString() ?? string.Empty" />
+                        </div>
+                        <span class="filter-count num" id="managed-filter-count" role="status" data-testid="managed-filter-count">@ManagedCountText(managedRows.Count)</span>
+                    </div>
+
+                    <div class="bulk-bar" role="group" aria-label="Bulk actions on the selected services" data-testid="bulk-bar">
+                        <span class="bulk-count" data-testid="bulk-count">
+                            @if (_selected.Count == 0)
+                            {
+                                <span class="muted">Tick services to restart, stop or start them together.</span>
+                            }
+                            else
+                            {
+                                <strong class="num">@_selected.Count</strong><span> selected</span>
+                            }
+                        </span>
+                        <div class="bulk-actions">
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="bulk-restart"
+                                    disabled="@(BulkTargets(HostServiceAction.Restart).Count == 0 || _bulkRunning)" @onclick="() => AskBulk(HostServiceAction.Restart)">
+                                <Icon Name="restart" /> Restart
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="bulk-stop"
+                                    disabled="@(BulkTargets(HostServiceAction.Stop).Count == 0 || _bulkRunning)" @onclick="() => AskBulk(HostServiceAction.Stop)">
+                                <Icon Name="stop" /> Stop
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="bulk-start"
+                                    disabled="@(BulkTargets(HostServiceAction.Start).Count == 0 || _bulkRunning)" @onclick="() => AskBulk(HostServiceAction.Start)">
+                                <Icon Name="play" /> Start
+                            </button>
+                            @if (_selected.Count > 0)
+                            {
+                                <button type="button" class="btn btn-sm btn-ghost" data-testid="bulk-clear" @onclick="() => _selected.Clear()">Clear selection</button>
+                            }
+                        </div>
+                        @if (_snapshot.Services.Any(x => x.Protected))
+                        {
+                            <p class="bulk-note" id="bulk-protected-note" data-testid="bulk-protected-note">
+                                <Icon Name="lock" /> Protected services are left out of bulk actions. Stop or restart them from their own row, which asks for the name first.
+                            </p>
+                        }
+                    </div>
+
+                    @if (managedRows.Count == 0)
+                    {
+                        <p class="muted" data-testid="managed-no-match">Nothing matches the filter.</p>
+                    }
+                    else
+                    {
+                    <div class="panel panel--scroll-x">
+                        <table class="data-table data-table--stack data-table--stack-wide services-table" data-testid="services-table">
+                            <caption class="visually-hidden">Managed services</caption>
+                            <thead>
+                                <tr>
+                                    <th scope="col" class="col-check">
+                                        <input type="checkbox" class="form-check-input" data-testid="select-all"
+                                               aria-label="Select every service on this page that bulk actions can control"
+                                               checked="@(eligible.Count > 0 && eligible.All(x => _selected.Contains(x.Name)))"
+                                               disabled="@(eligible.Count == 0)" @onchange="e => SelectAll(eligible, e.Value is true)" />
+                                    </th>
+                                    <th scope="col">Service</th>
+                                    <th scope="col">Kind</th>
+                                    <th scope="col">State</th>
+                                    <th scope="col">Memory</th>
+                                    <th scope="col">Uptime</th>
+                                    <th scope="col">Autostart</th>
+                                    <th scope="col"><span class="visually-hidden">Actions</span></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var s in managedPage)
+                                {
+                                    bool busy = _busy.Contains(s.Name);
+                                    bool up = s.State is HostServiceState.Running or HostServiceState.Starting;
+                                    bool picked = _selected.Contains(s.Name);
+                                    <tr class="@(picked ? "is-selected" : null)" data-testid="service-row-@s.Name" data-kind="@KindSlug(s.Kind)" data-state="@StateSlug(s.State)">
+                                        <td class="col-check" data-label="Select">
+                                            <input type="checkbox" class="form-check-input" data-testid="select-@s.Name"
+                                                   aria-label="@($"Select {s.DisplayName}")" checked="@picked" disabled="@s.Protected"
+                                                   aria-describedby="@(s.Protected ? "bulk-protected-note" : null)"
+                                                   @onchange="e => ToggleSelected(s, e.Value is true)" />
+                                        </td>
+                                        <td class="col-primary">
+                                            <div class="svc-name">
+                                                <span>@s.DisplayName</span>
+                                                @if (s.Protected)
+                                                {
+                                                    <span class="tag-protected" data-testid="protected-@s.Name"><Icon Name="lock" /> Protected</span>
+                                                }
+                                            </div>
+                                            @if (!string.IsNullOrEmpty(s.Description))
+                                            {
+                                                <div class="svc-desc">@s.Description</div>
+                                            }
+                                            @if (s.Error is not null)
+                                            {
+                                                <div class="svc-error" data-testid="service-error-@s.Name"><Icon Name="warning" /> @s.Error</div>
+                                            }
+                                            <div class="svc-manage">
+                                                @if (s.Protected)
+                                                {
+                                                    <button type="button" class="btn btn-sm btn-ghost" disabled="@busy" data-testid="unprotect-@s.Name"
+                                                            aria-label="@($"Unprotect {s.DisplayName}")" @onclick="() => AskUnprotect(s)">
+                                                        <Icon Name="lock" /> Unprotect
+                                                    </button>
+                                                }
+                                                else
+                                                {
+                                                    <button type="button" class="btn btn-sm btn-ghost" disabled="@busy" data-testid="protect-@s.Name"
+                                                            aria-label="@($"Protect {s.DisplayName}")" @onclick="() => ProtectAsync(s)">
+                                                        <Icon Name="lock" /> Protect
+                                                    </button>
+                                                }
+                                                <button type="button" class="btn btn-sm btn-ghost" disabled="@busy" data-testid="remove-@s.Name"
+                                                        aria-label="@($"Stop managing {s.DisplayName}")" @onclick="() => AskRemove(s)">
+                                                    <Icon Name="trash" /> Remove
+                                                </button>
+                                            </div>
+                                        </td>
+                                        <td data-label="Kind">
+                                            <div class="svc-kind">
+                                                <span data-testid="kind-@s.Name">@KindName(s.Kind)</span>
+                                                <code class="svc-unit">@s.Unit</code>
+                                            </div>
+                                        </td>
+                                        <td data-label="State">
+                                            <div class="svc-state">
+                                                <span class="state state--@StateCss(s.State)" data-testid="state-@s.Name">
+                                                    <Icon Name="@StateIcon(s.State)" Class="@(s.State == HostServiceState.Starting ? "icon--spin" : null)" />
+                                                    <span>@StateName(s.State)</span>
+                                                </span>
+                                                @if (!string.IsNullOrEmpty(s.StateDetail))
+                                                {
+                                                    <span class="svc-state-detail">@s.StateDetail</span>
+                                                }
+                                            </div>
+                                        </td>
+                                        <td data-label="Memory">
+                                            <dl class="svc-mem" data-testid="memory-@s.Name">
+                                                <div><dt>RAM</dt><dd class="num">@FormatBytes(s.MemoryBytes)</dd></div>
+                                                <div><dt>GPU</dt><dd class="num">@FormatBytes(s.GpuMemoryBytes)</dd></div>
+                                            </dl>
+                                        </td>
+                                        <td data-label="Uptime"><span class="num svc-uptime" data-testid="uptime-@s.Name">@(s.Since is null ? UiFormat.Missing : Uptime(s.Since.Value, _now))</span></td>
+                                        <td data-label="Autostart">
+                                            <button type="button" class="svc-switch" role="switch" aria-checked="@(s.Autostart == true ? "true" : "false")"
+                                                    aria-label="@($"Start {s.DisplayName} at boot")" data-testid="autostart-@s.Name"
+                                                    disabled="@(busy || s.Autostart is null)" @onclick="() => ToggleAutostartAsync(s)">
+                                                <span class="svc-switch-track" aria-hidden="true"></span>
+                                                <span class="svc-switch-text">@AutostartText(s)</span>
+                                            </button>
+                                        </td>
+                                        <td class="col-actions">
+                                            @if (up)
+                                            {
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@busy" data-testid="restart-@s.Name"
+                                                        aria-label="@($"Restart {s.DisplayName}")" @onclick="() => Ask(s, HostServiceAction.Restart)">
+                                                    <Icon Name="restart" /> Restart
+                                                </button>
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@busy" data-testid="stop-@s.Name"
+                                                        aria-label="@($"Stop {s.DisplayName}")" @onclick="() => Ask(s, HostServiceAction.Stop)">
+                                                    <Icon Name="stop" /> Stop
+                                                </button>
+                                            }
+                                            else
+                                            {
+                                                <button type="button" class="btn btn-sm btn-outline-secondary" disabled="@busy" data-testid="start-@s.Name"
+                                                        aria-label="@($"Start {s.DisplayName}")" @onclick="() => Ask(s, HostServiceAction.Start)">
+                                                    <Icon Name="play" /> Start
+                                                </button>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    }
+                    <Pager Total="managedRows.Count" @bind-Page="_managedPage" @bind-Size="_managedSize" ResetKey="@_managedFilter.Trim()"
+                           QueryPrefix="managed" Noun="services" TestId="managed-pager" />
+                }
+            </section>
+        }
+        else
+        {
+            <section class="section discovered" aria-labelledby="discovered-title" data-testid="discovered-section">
+                <div class="section-head">
+                    <h2 id="discovered-title" class="visually-hidden">Discovered</h2>
+                    @if (_discovery is not null)
+                    {
+                        <span class="section-note num" data-testid="discovered-summary">
+                            @_discovery.Services.Count found · @_discovery.Services.Count(d => d.Managed) managed · @_discovery.Services.Count(d => d.Denied) system
+                        </span>
+                    }
+                </div>
+
+                <div class="discovered-body">
+                @if (ScmNode)
+                {
+                    <p class="muted discovered-intro" data-testid="discovered-intro-scm">
+                        Every Windows service on @SelectedNodeName, biggest memory users first. Add one to <strong>Managed</strong> to start,
+                        stop and restart it here. Core Windows services (Defender, the Event Log, RPC, the DNS client, Remote Desktop, Windows
+                        Update, the NVIDIA display driver services and MirbadLLM's own agent) are listed so you can see what uses memory,
+                        but the agent never lets anyone manage them.
+                    </p>
+                }
+                else if (LaunchdNode)
+                {
+                    <p class="muted discovered-intro" data-testid="discovered-intro-launchd">
+                        Every LaunchDaemon (system) and LaunchAgent (user) on @SelectedNodeName with a plist in the standard folders. Add one
+                        to <strong>Managed</strong> to start, stop and restart it here; stop unloads the job, so launchd does not bring it
+                        straight back. Apple's own jobs, the GitHub Actions runners, Docker, SSH and MirbadLLM's agent and host agent are
+                        listed, but the host agent never lets anyone manage them.
+                    </p>
+                }
+                else
+                {
+                    <p class="muted discovered-intro">
+                        Every systemd service and container on @SelectedNodeName, biggest memory users first. Add one to <strong>Managed</strong> to start,
+                        stop and restart it here. Core system services (sshd, systemd, D-Bus, Docker, networking, the NVIDIA driver daemons…)
+                        are listed so you can see what uses memory, but the host agent never lets anyone manage them.
+                    </p>
+                }
+
+                @if (!_loginEnabled)
+                {
+                    <div class="callout callout--busy" role="status" data-testid="whitelist-login-disabled">
+                        <Icon Name="lock" />
+                        <div class="callout-body">
+                            <span class="callout-title">Admin login is off</span>
+                            <span>Changing what is managed needs admin login. Set <code>MirbadLLM__AdminPassword</code> and restart MirbadLLM first.</span>
+                        </div>
+                    </div>
+                }
+
+                <div class="discovered-toolbar">
+                    <div class="field discovered-filter">
+                        <label class="field-label" for="discovered-filter">Filter</label>
+                        <input id="discovered-filter" type="search" class="form-control" placeholder="Name, unit or description"
+                               autocomplete="off" spellcheck="false" data-testid="discovered-filter" data-shortcut-filter
+                               aria-describedby="discovered-filter-count"
+                               value="@_filter" @oninput="e => _filter = e.Value?.ToString() ?? string.Empty" />
+                    </div>
+                    @if (!ScmNode)
+                    {
+                        <div class="field discovered-kind">
+                            <span class="field-label" id="@($"{_kindGroup}-label")">Kind</span>
+                            <div class="segmented" role="radiogroup" aria-labelledby="@($"{_kindGroup}-label")" data-testid="discovered-kind">
+                                @foreach (var option in KindOptions())
+                                {
+                                    <label class="segmented-option">
+                                        <input type="radio" name="@_kindGroup" value="@option.Id" checked="@(option.Id == _kindTab)"
+                                               data-testid="@($"discovered-kind-{option.Id}")" @onchange="() => OnKindSelected(option.Id)" />
+                                        <span>@option.Label</span>
+                                        <span class="num svc-kind-count" data-testid="@($"discovered-kind-{option.Id}-count")">@option.Count</span>
+                                    </label>
+                                }
+                            </div>
+                        </div>
+                    }
+                    <span class="filter-count num" id="discovered-filter-count" role="status" data-testid="discovered-filter-count">@DiscoveredCountText</span>
+                    <button type="button" class="btn btn-outline-secondary" data-testid="discovered-refresh" disabled="@_discovering"
+                            @onclick="() => LoadDiscoveryAsync(_cts?.Token ?? CancellationToken.None)">
+                        <Icon Name="refresh" Class="@(_discovering ? "icon--spin" : null)" /> Refresh
+                    </button>
+                </div>
+
+                @if (_discovery is null)
+                {
+                    <p class="muted loading-line" role="status" data-testid="discovered-loading">
+                        <Icon Name="refresh" Class="icon--spin" /> Listing every service and container…
+                    </p>
+                }
+                else
+                {
+                    @if (!_discovery.HostAgentAvailable && ScmNode)
+                    {
+                        <p class="muted" data-testid="discovered-scm-missing">
+                            The Windows Service Control Manager did not answer (see above), so no services are listed.
+                        </p>
+                    }
+                    else if (!_discovery.HostAgentAvailable)
+                    {
+                        <p class="muted" data-testid="discovered-agent-missing">
+                            @(LaunchdNode
+                                ? "launchd jobs need the host agent (see above), so none are listed."
+                                : "Systemd services need the host agent (see above); only containers are listed.")
+                        </p>
+                    }
+                    @foreach (string problem in _discovery.Errors)
+                    {
+                        <div class="svc-error" data-testid="discovered-problem"><Icon Name="warning" /> @problem</div>
+                    }
+
+                    string kindId = ScmNode ? "all" : _kindTab;
+                    var rows = Filtered(KindFromTabId(kindId)).ToList();
+                    var shown = Pager.Slice(rows, _discoveredPage, _discoveredSize);
+                    bool showKind = kindId == "all" && !ScmNode;
+                    <div class="discovered-group" data-testid="discovered-group-@kindId">
+                        @if (rows.Count == 0)
+                        {
+                            <p class="muted" data-testid="discovered-empty-@kindId">@(string.IsNullOrWhiteSpace(_filter) ? "None found." : "Nothing matches the filter.")</p>
+                        }
+                        else
+                        {
+                            <div class="panel panel--scroll-x">
+                                <table class="data-table data-table--stack data-table--stack-wide services-table discovered-table">
+                                    <caption class="visually-hidden">@KindOptionLabel(kindId) found on @SelectedNodeName</caption>
+                                    <thead>
+                                        <tr>
+                                            <th scope="col">Service</th>
+                                            @if (showKind)
+                                            {
+                                                <th scope="col">Kind</th>
+                                            }
+                                            <th scope="col">State</th>
+                                            <th scope="col">Memory</th>
+                                            <th scope="col">Autostart</th>
+                                            <th scope="col"><span class="visually-hidden">Actions</span></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var d in shown)
+                                        {
+                                            string slug = KindSlug(d.Kind);
+                                            <tr class="@(d.Denied ? "is-denied" : null)" data-testid="discovered-row-@slug-@d.Name" data-kind="@slug"
+                                                data-denied="@(d.Denied ? "true" : "false")" data-managed="@(d.Managed ? "true" : "false")">
+                                                <td class="col-primary">
+                                                    <div class="svc-name">
+                                                        <span>@DiscoveredTitle(d)</span>
+                                                    </div>
+                                                    <code class="svc-unit">@d.Unit</code>
+                                                    @if (d.Denied)
+                                                    {
+                                                        <div class="svc-denied" data-testid="denied-@slug-@d.Name">
+                                                            <Icon Name="lock" />
+                                                            <span>System — not manageable<span class="svc-denied-why"> · matches <code>@d.DeniedBy</code></span></span>
+                                                        </div>
+                                                    }
+                                                </td>
+                                                @if (showKind)
+                                                {
+                                                    <td data-label="Kind"><span data-testid="discovered-kind-of-@slug-@d.Name">@KindName(d.Kind)</span></td>
+                                                }
+                                                <td data-label="State">
+                                                    <div class="svc-state">
+                                                        <span class="state state--@StateCss(d.State)">
+                                                            <Icon Name="@StateIcon(d.State)" />
+                                                            <span>@StateName(d.State)</span>
+                                                        </span>
+                                                        @if (!string.IsNullOrEmpty(d.StateDetail))
+                                                        {
+                                                            <span class="svc-state-detail">@d.StateDetail</span>
+                                                        }
+                                                    </div>
+                                                </td>
+                                                <td data-label="Memory">
+                                                    <dl class="svc-mem" data-testid="discovered-memory-@slug-@d.Name">
+                                                        <div><dt>RAM</dt><dd class="num">@FormatBytes(d.MemoryBytes)</dd></div>
+                                                        @if (d.Kind != HostServiceKind.Container)
+                                                        {
+                                                            <div><dt>GPU</dt><dd class="num">@FormatBytes(d.GpuMemoryBytes)</dd></div>
+                                                        }
+                                                    </dl>
+                                                </td>
+                                                <td data-label="Autostart"><span class="svc-state-detail">@(string.IsNullOrEmpty(d.AutostartDetail) ? UiFormat.Missing : d.AutostartDetail)</span></td>
+                                                <td class="col-actions">
+                                                    @if (d.Managed)
+                                                    {
+                                                        <span class="tag-managed" data-testid="managed-@slug-@d.Name"><Icon Name="check" /> Managed</span>
+                                                    }
+                                                    else if (!d.Denied)
+                                                    {
+                                                        <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="add-@slug-@d.Name"
+                                                                aria-label="@($"Add {DiscoveredTitle(d)} to managed")" @onclick="() => AskAdd(d)">
+                                                            <Icon Name="plus" /> Add to managed
+                                                        </button>
+                                                    }
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                        <Pager Total="rows.Count" @bind-Page="_discoveredPage" @bind-Size="_discoveredSize" ResetKey="@($"{kindId}|{_filter.Trim()}")"
+                               QueryPrefix="discovered" Noun="services" TestId="discovered-pager" />
+                    </div>
+                }
+                </div>
+            </section>
+        }
+    </ChildContent>
+</Tabs>
+}
+
+<ConfirmDialog @bind-Open="_dialogOpen" Title="@DialogTitle" ConfirmLabel="@DialogConfirmLabel" Destructive="@DialogDestructive"
+               ConfirmDisabled="@(!TypedConfirmationOk)" OnConfirm="ConfirmAsync" OnCancel="ResetDialog" TestId="service-dialog">
+    @if (_target is not null)
+    {
+        <p data-testid="service-dialog-effect">@((MarkupString)EffectHtml)</p>
+        @if (_pendingAutostart is null && _pendingAction == HostServiceAction.Stop && _target.Autostart == true)
+        {
+            <p class="muted">Autostart is on, so it comes back after the next reboot unless you turn autostart off too.</p>
+        }
+        @if (NeedsTypedConfirmation)
+        {
+            <div class="callout callout--failed" data-testid="service-dialog-risk">
+                <Icon Name="lock" />
+                <div class="callout-body">
+                    <span class="callout-title">@_target.DisplayName is protected</span>
+                    <span>@RiskText(_target)</span>
+                </div>
+            </div>
+            <div class="field confirm-field">
+                <label class="field-label" for="service-confirm-input">Type <code>@_target.Name</code> to confirm</label>
+                <input id="service-confirm-input" class="form-control" autocomplete="off" autocapitalize="off" spellcheck="false"
+                       data-testid="service-dialog-input" value="@_typed" @oninput="e => _typed = e.Value?.ToString() ?? string.Empty" />
+            </div>
+        }
+    }
+</ConfirmDialog>
+
+<ConfirmDialog @bind-Open="_bulkOpen" Title="@BulkTitle" ConfirmLabel="@BulkConfirmLabel" Destructive="@(_bulkAction != HostServiceAction.Start)"
+               ConfirmDisabled="@(_bulkTargets.Count == 0)" OnConfirm="ConfirmBulkAsync" TestId="bulk-dialog">
+    <p data-testid="bulk-dialog-effect">@((MarkupString)BulkEffectHtml)</p>
+    <ul class="bulk-list" data-testid="bulk-dialog-list">
+        @foreach (var target in _bulkTargets)
+        {
+            <li>
+                <span>@target.DisplayName</span>
+                <span class="num muted">@(_bulkAction == HostServiceAction.Start ? StateName(target.State) : FormatBytes(target.TotalMemoryBytes))</span>
+            </li>
+        }
+    </ul>
+    @if (_bulkSkipped.Count > 0)
+    {
+        <p class="muted" data-testid="bulk-dialog-skipped">
+            Left out, already @(_bulkAction == HostServiceAction.Start ? "running" : "stopped"): @string.Join(", ", _bulkSkipped.Select(x => x.DisplayName)).
+        </p>
+    }
+    @if (_bulkAction == HostServiceAction.Stop && _bulkTargets.Count(x => x.Autostart == true) is > 0 and var autostarting)
+    {
+        <p class="muted">Autostart is on for <span class="num">@autostarting</span> of them, so they come back after the next reboot unless you turn it off.</p>
+    }
+</ConfirmDialog>
+
+<ConfirmDialog @bind-Open="_wlOpen" Title="@WhitelistTitle" ConfirmLabel="@WhitelistConfirmLabel" Destructive="@(_wlMode == WhitelistMode.Unprotect)"
+               ConfirmDisabled="@(!WhitelistReady)" CloseOnConfirm="false" OnConfirm="ConfirmWhitelistAsync" OnCancel="ResetWhitelist"
+               TestId="whitelist-dialog">
+    @if (_wlMode == WhitelistMode.Add && _wlAdd is not null)
+    {
+        <p data-testid="whitelist-dialog-effect">
+            Anyone signed in here can then start, stop and restart <strong>@DiscoveredTitle(_wlAdd)</strong>
+            @(_wlAdd.Kind == HostServiceKind.Container ? "and change its restart policy" : "and turn its autostart on or off").
+            <span class="wl-unit">@KindName(_wlAdd.Kind): <code>@_wlAdd.Unit</code></span>
+        </p>
+        @if (ScmNode)
+        {
+            <p class="muted" data-testid="whitelist-scm-rights">
+                The agent runs without administrator rights, so Windows lets it control a service only once the installer has granted
+                it that one service. Run this on @SelectedNodeName in Windows PowerShell as administrator, from the agent's folder:
+                <code>.\install-agent.ps1 -AllowService @AllowServiceArgument(_wlAdd.Unit)</code>
+            </p>
+        }
+        <div class="field">
+            <label class="field-label" for="wl-display-name">Display name</label>
+            <input id="wl-display-name" class="form-control" autocomplete="off" data-testid="whitelist-display-name"
+                   value="@_wlDisplayName" @oninput="e => _wlDisplayName = e.Value?.ToString() ?? string.Empty" />
+        </div>
+        <div class="form-check form-switch switch-row wl-protected">
+            <input id="wl-protected" class="form-check-input" aria-describedby="wl-protected-hint" type="checkbox" role="switch" data-testid="whitelist-protected"
+                   checked="@_wlProtected" @onchange="e => _wlProtected = e.Value is true" />
+            <label class="form-check-label" for="wl-protected">Protected</label>
+            <div id="wl-protected-hint" class="field-hint">Stop, restart and turning autostart off then need its name typed first.</div>
+        </div>
+    }
+    else if (_wlMode == WhitelistMode.Unprotect && _wlTarget is not null)
+    {
+        <p data-testid="whitelist-dialog-effect">
+            <strong>@_wlTarget.DisplayName</strong> can then be stopped, restarted and lose its autostart without typing its name.
+        </p>
+        <div class="callout callout--failed">
+            <Icon Name="lock" />
+            <div class="callout-body"><span>@RiskText(_wlTarget)</span></div>
+        </div>
+    }
+    else if (_wlMode == WhitelistMode.Remove && _wlTarget is not null)
+    {
+        <p data-testid="whitelist-dialog-effect">
+            <strong>@_wlTarget.DisplayName</strong> keeps running as it is. It just can't be started, stopped or restarted from this page
+            until you add it again from Discovered.
+        </p>
+    }
+
+    @if (!_loginEnabled)
+    {
+        <div class="callout callout--busy" role="status" data-testid="whitelist-dialog-login-disabled">
+            <Icon Name="lock" />
+            <div class="callout-body"><span>@HostServiceManagerLoginMessage</span></div>
+        </div>
+    }
+    else if (NeedsReauth)
+    {
+        <div class="field confirm-field">
+            <label class="field-label" for="wl-confirm">Type <code>@WhitelistName</code> to confirm</label>
+            <input id="wl-confirm" class="form-control" autocomplete="off" autocapitalize="off" spellcheck="false"
+                   data-testid="whitelist-confirm" value="@_wlTyped" @oninput="e => _wlTyped = e.Value?.ToString() ?? string.Empty" />
+        </div>
+    }
+
+    @if (_wlError is not null)
+    {
+        <div class="callout callout--failed" role="alert" data-testid="whitelist-dialog-error">
+            <Icon Name="state-failed" />
+            <div class="callout-body">@_wlError</div>
+        </div>
+    }
+</ConfirmDialog>
+</div>
+
+@code {
+    private const int DiscoveryRefreshTicks = 6;
+
+    private enum WhitelistMode
+    {
+        Add,
+        Unprotect,
+        Remove,
+    }
+
+    private HostServicesSnapshot _snapshot = new([], true, null);
+    private bool _loaded;
+    private MemorySnapshot _memory = new(0, 0);
+    private double _modelsGiB;
+    private double _reserveGiB = 8;
+    private DateTimeOffset _now = DateTimeOffset.UtcNow;
+    private string? _error;
+    private string? _notice;
+    private readonly HashSet<string> _busy = new(StringComparer.Ordinal);
+
+    private bool _dialogOpen;
+    private HostServiceStatus? _target;
+    private HostServiceAction _pendingAction;
+    private bool? _pendingAutostart;
+    private string _typed = "";
+
+    private string _topTab = "managed";
+    private string _kindTab = "all";
+    private static int _nextKindGroup;
+    private readonly string _kindGroup = $"discovered-kind-{Interlocked.Increment(ref _nextKindGroup)}";
+    private string? _shownNodeId;
+    private bool _nodeChosen;
+    private bool _discovering;
+    private HostServicesDiscovery? _discovery;
+    private string _filter = "";
+    private int _discoveredPage = 1;
+    private int? _discoveredSize;
+    private int _ticks;
+
+    private bool _loginEnabled;
+    private string _clientKey = "unknown";
+    private bool _wlOpen;
+    private WhitelistMode _wlMode;
+    private DiscoveredService? _wlAdd;
+    private HostServiceStatus? _wlTarget;
+    private string _wlDisplayName = "";
+    private bool _wlProtected;
+    private string _wlTyped = "";
+    private string? _wlError;
+
+    private string _managedFilter = "";
+    private int _managedPage = 1;
+    private int? _managedSize;
+    private readonly HashSet<string> _selected = new(StringComparer.Ordinal);
+    private bool _bulkOpen;
+    private bool _bulkRunning;
+    private HostServiceAction _bulkAction;
+    private List<HostServiceStatus> _bulkTargets = [];
+    private List<HostServiceStatus> _bulkSkipped = [];
+
+    private CancellationTokenSource? _cts;
+    private LiveDataService? _live;
+    private bool _ownsLive;
+    private IDisposable? _subscription;
+    private DateTimeOffset? _loadedAt;
+
+    private const LiveNeeds Needs = LiveNeeds.Models | LiveNeeds.Statuses | LiveNeeds.Memory;
+
+    // Node selection (design §9.1, MN-120). With one node (or no node registry) the page drives the registered manager
+    // exactly as before; with several, the selected node's manager (INodeHostServices) and memory.
+    private INodeStatusCache? _nodeCache;
+    private INodeRegistry? _nodeRegistry;
+    private List<Nodes.NodeRow> _nodeRows = [];
+    private List<NodeSelector.Option> _nodes = [];
+    private string _defaultNodeId = MirbadLLM.Orchestration.RegistryMigrationOptions.DefaultBootstrapNodeId;
+    private string _nodeId = MirbadLLM.Orchestration.RegistryMigrationOptions.DefaultBootstrapNodeId;
+    private string? _requestedNodeId;
+    private IHostServiceManager? _nodeManager;
+    private string? _nodeManagerFor;
+    private double _defaultReserveGiB = 8;
+    private LiveSnapshot? _lastLive;
+
+    private bool MultiNode => _nodes.Count > 1;
+
+    private bool OnDefaultNode => !MultiNode || string.Equals(_nodeId, _defaultNodeId, StringComparison.Ordinal);
+
+    private Nodes.NodeRow? SelectedNode => _nodeRows.FirstOrDefault(r => r.Id == _nodeId);
+
+    private string SelectedNodeName => SelectedNode?.Name ?? _nodeId;
+
+    /// <summary>
+    /// A known capability report without host services (design §9.1); never with one node. A Windows node manages services
+    /// only with <c>services.scm</c> (design-p3p4 §A.7, MN-227): an agent from before MN-228, or with the feature off, gets
+    /// the same text.
+    /// </summary>
+    private bool NodeUnsupported => MultiNode && SelectedNode?.Capabilities is { } caps && (caps.HostServices is null || (IsScm(caps) && !ScmOffered(caps)));
+
+    /// <summary>The selected node's services are Windows services (the SCM), shown as <c>HostUnit</c> rows (MN-228's mapping).</summary>
+    private bool ScmNode => MultiNode && !OnDefaultNode && SelectedNode?.Capabilities is { } caps && IsScm(caps);
+
+    /// <summary>The selected node's services are launchd jobs, through the macOS hostd (Phase 4, M10).</summary>
+    private bool LaunchdNode => MultiNode && !OnDefaultNode && SelectedNode?.Capabilities is { } caps && IsLaunchd(caps);
+
+    /// <summary>True when the node's host services are launchd jobs (a Mac with the macOS hostd).</summary>
+    public static bool IsLaunchd(NodeCapabilities caps)
+    {
+        ArgumentNullException.ThrowIfNull(caps);
+        return string.Equals(caps.HostServices?.Manager, MirbadLLM.Agent.Contracts.HostServiceManagers.Launchd, StringComparison.Ordinal);
+    }
+
+    /// <summary>True for a Windows node, or one whose host services are the SCM.</summary>
+    public static bool IsScm(NodeCapabilities caps)
+    {
+        ArgumentNullException.ThrowIfNull(caps);
+        return string.Equals(caps.HostServices?.Manager, MirbadLLM.Agent.Contracts.HostServiceManagers.Scm, StringComparison.Ordinal)
+            || string.Equals(caps.Os.Family?.Trim(), "windows", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The node offers the host-service routes through the SCM (every feature check goes through <c>IsOfferedBy</c>).</summary>
+    public static bool ScmOffered(NodeCapabilities caps)
+    {
+        ArgumentNullException.ThrowIfNull(caps);
+        return MirbadLLM.Agent.Contracts.AgentRoutes.HostServiceStart.IsOfferedBy(caps.Features);
+    }
+
+    /// <summary>The manager the page drives: the selected node's, or the registered one (the bootstrap node).</summary>
+    private IHostServiceManager ServiceManager => OnDefaultNode
+        ? DefaultServiceManager
+        : _nodeManager is not null && string.Equals(_nodeManagerFor, _nodeId, StringComparison.Ordinal) ? _nodeManager : new UnavailableNodeServices(SelectedNodeName);
+
+    /// <summary>The node whose services are shown; null lets the component choose (the /services page with its selector).</summary>
+    [Parameter]
+    public string? NodeId { get; set; }
+
+    /// <summary>Shows the node selector (several nodes) and the freshness stamp above the services.</summary>
+    [Parameter]
+    public bool ShowNodeSelector { get; set; }
+
+    /// <summary>Draws the node's headroom bar above the services (the /services page); Node detail has it on Overview.</summary>
+    [Parameter]
+    public bool ShowHeadroom { get; set; } = true;
+
+    /// <summary>The query key that keeps Managed / Discovered (Node detail already uses <c>tab</c> for its own tabs).</summary>
+    [Parameter]
+    public string TabQueryKey { get; set; } = "tab";
+
+    /// <summary>Line on the /services page; Segmented inside a Node detail tab, so the two levels read apart.</summary>
+    [Parameter]
+    public TabsVariant TabsVariant { get; set; } = TabsVariant.Line;
+
+    [Parameter]
+    public string TestId { get; set; } = "node-services";
+
+    /// <summary>The query key that keeps the Discovered kind filter.</summary>
+    public const string KindQueryKey = "kind";
+
+    /// <summary>True when the node's agent reports host services it can control (systemd/containers, or the Windows SCM).</summary>
+    public static bool SupportsServices(NodeCapabilities? caps) =>
+        caps is not null && caps.HostServices is not null && (!IsScm(caps) || ScmOffered(caps));
+
+    /// <summary>
+    /// The node the /services page opens on: the requested one when it is selectable; otherwise the bootstrap node when its
+    /// agent manages services, else the first node (in list order) whose agent does; with none, the selector's own default.
+    /// Opening on a node that can't manage services left the page blank behind a warning (critique 2026-10-15, P2).
+    /// </summary>
+    public static string ChooseNode(IReadOnlyList<Nodes.NodeRow> rows, IReadOnlyList<NodeSelector.Option> options, string? requested, string defaultId)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        ArgumentNullException.ThrowIfNull(options);
+        if (requested is not null && options.Any(o => o.Id == requested))
+        {
+            return requested;
+        }
+
+        var supporting = options.Where(o => SupportsServices(rows.FirstOrDefault(r => r.Id == o.Id)?.Capabilities)).Select(o => o.Id).ToList();
+        if (supporting.Contains(defaultId, StringComparer.Ordinal))
+        {
+            return defaultId;
+        }
+
+        return supporting.Count > 0 ? supporting[0] : NodeSelector.Resolve(options, null, defaultId);
+    }
+
+    /// <summary>Why a node can't manage services, and what would change that.</summary>
+    public static string UnsupportedReason(NodeCapabilities? caps, string nodeName)
+    {
+        if (caps is not null && IsScm(caps))
+        {
+            return $"{nodeName}'s agent does not offer Windows service control: it is older than that feature or has it turned off. " +
+                "Update the agent on that PC (install-agent.ps1) to start, stop and restart its Windows services from here.";
+        }
+
+        if (caps is not null && string.Equals(caps.Os.Family?.Trim(), "macos", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{nodeName} has no host agent yet, so its launchd jobs (Ollama, LM Studio, ComfyUI) can't be listed or controlled here. " +
+                "Install it on that Mac from the agent's bundle folder with: sudo bash install-agent.sh install-hostd. Its models are still " +
+                "managed from the Models page.";
+        }
+
+        return $"{nodeName}'s agent reports no host-service support, so its daemons and containers can't be listed or controlled here. " +
+            "Its models are still managed from the Models page.";
+    }
+
+    private IEnumerable<Nodes.NodeRow> SupportingNodes() =>
+        _nodeRows.Where(r => _nodes.Any(o => o.Id == r.Id) && SupportsServices(r.Capabilities));
+
+    private static string NodeServicesHref(string nodeId) => $"nodes/{Uri.EscapeDataString(nodeId)}?tab=services";
+
+    private async Task SwitchNodeAsync(string nodeId)
+    {
+        await OnNodeSelectedAsync(nodeId);
+        UrlQuery.For(Nav).Replace(NodeSelector.DefaultQueryKey, nodeId);
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        // Node detail reuses this component when the router shows another /nodes/{id}: show that node's services.
+        if (NodeId is not null && _shownNodeId is not null && !string.Equals(NodeId, _shownNodeId, StringComparison.Ordinal))
+        {
+            await OnNodeSelectedAsync(NodeId);
+        }
+    }
+
+    private static string HostServiceManagerLoginMessage =>
+        "Changing what is managed needs admin login. Set MirbadLLM__AdminPassword and restart MirbadLLM first.";
+
+    private bool NeedsTypedConfirmation =>
+        _target is { Protected: true } && (_pendingAutostart == false || (_pendingAutostart is null && _pendingAction != HostServiceAction.Start));
+
+    private bool TypedConfirmationOk => !NeedsTypedConfirmation || string.Equals(_typed.Trim(), _target?.Name, StringComparison.Ordinal);
+
+    private string DialogTitle => _target is null ? "" : _pendingAutostart is not null
+        ? $"Turn off autostart for {_target.DisplayName}?"
+        : $"{VerbTitle(_pendingAction)} {_target.DisplayName}?";
+
+    private string DialogConfirmLabel => _target is null ? "Confirm" : _pendingAutostart is not null
+        ? "Turn off autostart"
+        : $"{VerbTitle(_pendingAction)} {_target.DisplayName}";
+
+    private bool DialogDestructive => _pendingAutostart is not null || _pendingAction != HostServiceAction.Start;
+
+    private bool NeedsReauth => _wlMode is WhitelistMode.Add or WhitelistMode.Unprotect;
+
+    private string WhitelistName => _wlMode == WhitelistMode.Add ? _wlAdd?.Name ?? "" : _wlTarget?.Name ?? "";
+
+    private bool WhitelistReady => _loginEnabled
+        && (!NeedsReauth || (string.Equals(_wlTyped.Trim(), WhitelistName, StringComparison.Ordinal)));
+
+    private string WhitelistTitle => _wlMode switch
+    {
+        WhitelistMode.Add => $"Manage {(_wlAdd is null ? "" : DiscoveredTitle(_wlAdd))}?",
+        WhitelistMode.Unprotect => $"Unprotect {_wlTarget?.DisplayName}?",
+        _ => $"Stop managing {_wlTarget?.DisplayName}?",
+    };
+
+    private string WhitelistConfirmLabel => _wlMode switch
+    {
+        WhitelistMode.Add => "Add to managed",
+        WhitelistMode.Unprotect => "Unprotect",
+        _ => "Stop managing",
+    };
+
+    private string EffectHtml
+    {
+        get
+        {
+            if (_target is null)
+            {
+                return "";
+            }
+
+            string name = Encode(_target.DisplayName);
+            if (_pendingAutostart is not null)
+            {
+                return $"{name} keeps running now, but it will not start after the next reboot until autostart is turned back on.";
+            }
+
+            string? amount = _target.TotalMemoryBytes is long total ? Encode(FormatBytes(total)) : null;
+            string parts = MemoryParts(_target);
+            return _pendingAction switch
+            {
+                HostServiceAction.Stop => amount is null
+                    ? $"Stopping {name} frees memory, but MirbadLLM has no reading of how much it uses, so the amount is unknown."
+                    : $"Stopping {name} frees about <strong class=\"num\">{amount}</strong>{parts}.",
+                HostServiceAction.Restart => amount is null
+                    ? $"Restarting {name} stops it and starts it again. It is unavailable for a moment while it starts."
+                    : $"Restarting {name} briefly frees about <strong class=\"num\">{amount}</strong>{parts}; it takes memory back as it starts and loads again.",
+                _ => $"Starting {name} takes memory from the <strong class=\"num\">{Encode(FormatGiB(_memory.AvailableGiB))}</strong> free now. How much depends on what it loads.",
+            };
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        _reserveGiB = ServiceProvider.GetService<IOptions<MirbadLLMOptions>>()?.Value.MemoryReserveGiB ?? new MirbadLLMOptions().MemoryReserveGiB;
+        _defaultReserveGiB = _reserveGiB;
+        _defaultNodeId = ServiceProvider.GetService<IOptions<MirbadLLM.Orchestration.RegistryMigrationOptions>>()?.Value.EffectiveBootstrapNodeId
+            ?? _defaultNodeId;
+        _nodeId = _defaultNodeId;
+        _nodeCache = ServiceProvider.GetService<INodeStatusCache>();
+        _nodeRegistry = ServiceProvider.GetService<INodeRegistry>();
+        _requestedNodeId = NodeId ?? NodeSelector.FromQuery(Nav);
+        _kindTab = NodeSelector.FromQuery(Nav, KindQueryKey) is { } kind && KindIds.Contains(kind, StringComparer.Ordinal) ? kind : "all";
+        _loginEnabled = ServiceProvider.GetService<IAdminReauthenticator>()?.LoginEnabled ?? false;
+        _clientKey = (await AdminCallers.ResolveAsync(ServiceProvider)).ClientKey; // sid-keyed budget (W8 review MN-128)
+        _cts = new CancellationTokenSource();
+        _live = LiveDataService.Resolve(ServiceProvider, out _ownsLive);
+        await LoadAsync(_cts.Token, await _live.GetAsync(Needs, _cts.Token));
+
+        // Follows the circuit's shared 5 s refresh (model memory and free memory come from the same snapshot
+        // the status bar shows); the host services list itself is read here on each refresh.
+        var ct = _cts.Token;
+        _subscription = _live.Subscribe(Needs, snapshot => InvokeAsync(async () =>
+        {
+            await LoadAsync(ct, snapshot);
+            // Discovery lists hundreds of units: refresh it less often, and only while its tab is active.
+            if (_topTab == "discovered" && ++_ticks % DiscoveryRefreshTicks == 0)
+            {
+                await LoadDiscoveryAsync(ct, render: false);
+            }
+
+            StateHasChanged();
+        }));
+    }
+
+    private async Task LoadAsync(CancellationToken ct, LiveSnapshot? live = null)
+    {
+        _now = DateTimeOffset.UtcNow;
+        if (live is null && _live is not null)
+        {
+            if (_subscription is not null)
+            {
+                // Publishes to every subscriber, this page's own included, which reloads everything below.
+                await _live.RefreshAsync(ct);
+                return;
+            }
+
+            live = await _live.GetAsync(Needs, ct);
+        }
+
+        try
+        {
+            if (live is not null)
+            {
+                _lastLive = live;
+                await LoadNodesAsync(live, ct);
+            }
+
+            string forNode = _nodeId;
+            _shownNodeId = NodeId ?? _shownNodeId;
+            if (NodeUnsupported)
+            {
+                _snapshot = new HostServicesSnapshot([], true, null);
+            }
+            else
+            {
+                var snapshot = await ServiceManager.ListAsync(ct);
+                if (!string.Equals(forNode, _nodeId, StringComparison.Ordinal))
+                {
+                    return; // the node changed while this list was read; the newer load owns the page
+                }
+
+                _snapshot = snapshot;
+            }
+
+            _loaded = true;
+            if (live is not null)
+            {
+                ApplyMemory(live);
+                _loadedAt = live.At;
+            }
+
+            _error = null;
+            _selected.IntersectWith(_snapshot.Services.Where(x => !x.Protected).Select(x => x.Name));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _loaded = true;
+            _error = $"Could not read services: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// The selectable nodes and the selected node's manager. Throws (the caller reports it) when the node's manager cannot
+    /// be built; the page then drives a manager that refuses every call, never the bootstrap node's by mistake.
+    /// </summary>
+    private async Task LoadNodesAsync(LiveSnapshot live, CancellationToken ct)
+    {
+        if (_nodeCache is null && _nodeRegistry is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _nodeRows = await Nodes.BuildRowsAsync(_nodeCache, _nodeRegistry, live.Models, ct);
+            _nodes = NodeSelector.From(_nodeRows);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Keep the last list; the next refresh retries.
+        }
+
+        _nodeId = NodeId ?? ChooseNode(_nodeRows, _nodes, _requestedNodeId ?? (_nodeChosen ? _nodeId : null), _defaultNodeId);
+        _nodeChosen = true;
+        if (!OnDefaultNode && !string.Equals(_nodeManagerFor, _nodeId, StringComparison.Ordinal))
+        {
+            // A failure to build it leaves _nodeManagerFor unset, so the next refresh tries again.
+            string nodeId = _nodeId;
+            _nodeManager = null;
+            _nodeManagerFor = null;
+            var built = await NodeHostServices.ForNodeAsync(nodeId, ct);
+            if (string.Equals(nodeId, _nodeId, StringComparison.Ordinal))
+            {
+                _nodeManager = built ?? new UnavailableNodeServices(SelectedNodeName);
+                _nodeManagerFor = nodeId;
+            }
+        }
+    }
+
+    /// <summary>The headroom bar for the selected node: its memory, its reserve and the budgets of its running models.</summary>
+    private void ApplyMemory(LiveSnapshot live)
+    {
+        if (!MultiNode)
+        {
+            _memory = live.Memory ?? _memory;
+            _modelsGiB = ModelsGiB(live, null);
+            return;
+        }
+
+        var onNode = MonitoringSeries.ModelsOn(live.Models ?? [], _nodeId, _defaultNodeId);
+        if (OnDefaultNode)
+        {
+            _memory = live.Memory ?? _memory;
+            _reserveGiB = _defaultReserveGiB;
+            _modelsGiB = ModelsGiB(live, onNode);
+            return;
+        }
+
+        var row = SelectedNode;
+        _memory = row?.Memory?.ToHostSnapshot() ?? new MemorySnapshot(0, 0);
+        _reserveGiB = row?.ReserveGiB ?? _defaultReserveGiB;
+        // On a discrete node the models live in VRAM: the bar is host RAM, so no model budget is drawn in it.
+        bool discrete = (row?.Memory?.Model ?? row?.Capabilities?.Memory.Model) == MemoryModel.Discrete;
+        _modelsGiB = discrete ? 0 : ModelsGiB(live, onNode);
+    }
+
+    private async Task OnNodeSelectedAsync(string nodeId)
+    {
+        _requestedNodeId = nodeId;
+        _nodeId = nodeId;
+        _shownNodeId = NodeId is null ? null : nodeId;
+        _snapshot = new HostServicesSnapshot([], true, null);
+        _loaded = false;
+        _discovery = null;
+        _selected.Clear();
+        _busy.Clear();
+        _managedPage = 1;
+        _discoveredPage = 1;
+        _error = null;
+        _notice = null;
+        var ct = _cts?.Token ?? CancellationToken.None;
+        var live = _lastLive ?? (_live is null ? null : await _live.GetAsync(Needs, ct));
+        await LoadAsync(ct, live);
+        if (_topTab == "discovered")
+        {
+            await LoadDiscoveryAsync(ct, render: false);
+        }
+    }
+
+    /// <summary>Stands in for a node whose manager could not be built: every call says so, nothing reaches another node.</summary>
+    private sealed class UnavailableNodeServices(string nodeName) : IHostServiceManager
+    {
+        private HostServiceException Error() => new($"Services on {nodeName} can't be managed from this master right now.");
+
+        public Task<HostServicesSnapshot> ListAsync(CancellationToken ct = default) => Task.FromException<HostServicesSnapshot>(Error());
+
+        public Task<HostServicesDiscovery> DiscoverAsync(CancellationToken ct = default) => Task.FromException<HostServicesDiscovery>(Error());
+
+        public Task<HostServiceStatus> AddToWhitelistAsync(HostServiceWhitelistAdd request, CancellationToken ct = default) => Task.FromException<HostServiceStatus>(Error());
+
+        public Task RemoveFromWhitelistAsync(string name, CancellationToken ct = default) => Task.FromException(Error());
+
+        public Task<HostServiceStatus> UpdateWhitelistAsync(string name, HostServiceWhitelistUpdate request, CancellationToken ct = default) => Task.FromException<HostServiceStatus>(Error());
+
+        public Task<HostServiceStatus> RunAsync(string name, HostServiceAction action, string? confirm = null, CancellationToken ct = default) => Task.FromException<HostServiceStatus>(Error());
+
+        public Task<HostServiceStatus> SetAutostartAsync(string name, bool enabled, string? confirm = null, CancellationToken ct = default) => Task.FromException<HostServiceStatus>(Error());
+    }
+
+    private List<TabItem> TopTabItems() =>
+    [
+        new("managed", "Managed", Count: _snapshot.Services.Count, CountNoun: _snapshot.Services.Count == 1 ? "service" : "services"),
+        new("discovered", "Discovered", Count: _discovery?.Services.Count, CountNoun: "found"),
+    ];
+
+    private async Task OnTopTabSelectedAsync(string tab)
+    {
+        _topTab = tab;
+        if (tab == "discovered" && _discovery is null)
+        {
+            await LoadDiscoveryAsync(_cts?.Token ?? CancellationToken.None);
+        }
+    }
+
+    private static readonly string[] KindIds = ["all", "system", "containers", "user"];
+
+    private sealed record KindOption(string Id, string Label, int Count);
+
+    /// <summary>The Discovered kind filter (one level under Managed | Discovered): All first, each with its count;
+    /// while filtering, each count is its matches, so the kind to pick is obvious.</summary>
+    private List<KindOption> KindOptions() =>
+    [
+        new("all", "All", Filtered(null).Count()),
+        new("system", KindTitle(HostServiceKind.System), Filtered(HostServiceKind.System).Count()),
+        .. LaunchdNode ? Array.Empty<KindOption>() : [new KindOption("containers", KindTitle(HostServiceKind.Container), Filtered(HostServiceKind.Container).Count())],
+        new("user", KindTitle(HostServiceKind.User), Filtered(HostServiceKind.User).Count()),
+    ];
+
+    private void OnKindSelected(string kind)
+    {
+        if (kind == _kindTab)
+        {
+            return;
+        }
+
+        _kindTab = kind;
+        _discoveredPage = 1;
+        UrlQuery.For(Nav).Replace(KindQueryKey, kind == "all" ? null : kind);
+    }
+
+    private static HostServiceKind? KindFromTabId(string id) => id switch
+    {
+        "system" => HostServiceKind.System,
+        "containers" => HostServiceKind.Container,
+        "user" => HostServiceKind.User,
+        _ => null,
+    };
+
+    private string KindOptionLabel(string id) => KindFromTabId(id) is { } kind
+        ? KindTitle(kind)
+        : ScmNode ? "Windows services" : LaunchdNode ? "launchd jobs" : "Services and containers";
+
+    private async Task LoadDiscoveryAsync(CancellationToken ct, bool render = true)
+    {
+        if (_discovering)
+        {
+            return;
+        }
+
+        _discovering = true;
+        if (render)
+        {
+            StateHasChanged();
+        }
+
+        string forNode = _nodeId;
+        try
+        {
+            var discovery = await ServiceManager.DiscoverAsync(ct);
+            if (string.Equals(forNode, _nodeId, StringComparison.Ordinal))
+            {
+                _discovery = discovery;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _discovery = new HostServicesDiscovery([], false, ex.Message, [$"Could not discover services: {ex.Message}"]);
+        }
+        finally
+        {
+            _discovering = false;
+        }
+    }
+
+    private IEnumerable<DiscoveredService> Filtered(HostServiceKind? kind)
+    {
+        var items = (_discovery?.Services ?? []).Where(d => kind is null || d.Kind == kind);
+        string f = _filter.Trim();
+        return f.Length == 0
+            ? items
+            : items.Where(d => d.Name.Contains(f, StringComparison.OrdinalIgnoreCase)
+                || d.Unit.Contains(f, StringComparison.OrdinalIgnoreCase)
+                || d.Description.Contains(f, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string DiscoveredTitle(DiscoveredService d) =>
+        string.IsNullOrWhiteSpace(d.Description) || d.Kind == HostServiceKind.Container || string.Equals(d.Description, d.Unit, StringComparison.Ordinal)
+            ? d.Name
+            : d.Description;
+
+    /// <summary>Budgets of the running models; with <paramref name="onNode"/>, only those placed on the selected node.</summary>
+    private static double ModelsGiB(LiveSnapshot live, IReadOnlySet<string>? onNode)
+    {
+        var running = (live.Statuses?.Values ?? [])
+            .Where(s => s.State is ModelState.Starting or ModelState.Ready or ModelState.Stopping)
+            .Select(s => s.Id)
+            .ToHashSet(StringComparer.Ordinal);
+        return (live.Models ?? []).Where(d => running.Contains(d.Id) && (onNode is null || onNode.Contains(d.Id))).Sum(d => d.MemoryBudgetGiB);
+    }
+
+    // ---- Managed filter and bulk selection ----
+
+    private IEnumerable<HostServiceStatus> ManagedFiltered()
+    {
+        string f = _managedFilter.Trim();
+        return f.Length == 0
+            ? _snapshot.Services
+            : _snapshot.Services.Where(x => x.Name.Contains(f, StringComparison.OrdinalIgnoreCase)
+                || x.DisplayName.Contains(f, StringComparison.OrdinalIgnoreCase)
+                || x.Unit.Contains(f, StringComparison.OrdinalIgnoreCase)
+                || x.Description.Contains(f, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string ManagedCountText(int shown) =>
+        _managedFilter.Trim().Length == 0 ? "" : $"{shown} of {_snapshot.Services.Count} match";
+
+    private string DiscoveredCountText
+    {
+        get
+        {
+            if (_discovery is null || _filter.Trim().Length == 0)
+            {
+                return "";
+            }
+
+            int matches = Filtered(null).Count();
+            return $"{matches} of {_discovery.Services.Count} match";
+        }
+    }
+
+    private void ToggleSelected(HostServiceStatus service, bool on)
+    {
+        if (service.Protected)
+        {
+            return;
+        }
+
+        if (on)
+        {
+            _selected.Add(service.Name);
+        }
+        else
+        {
+            _selected.Remove(service.Name);
+        }
+    }
+
+    private void SelectAll(IReadOnlyList<HostServiceStatus> eligible, bool on)
+    {
+        foreach (var service in eligible)
+        {
+            ToggleSelected(service, on);
+        }
+    }
+
+    private static bool IsUp(HostServiceStatus s) => s.State is HostServiceState.Running or HostServiceState.Starting;
+
+    /// <summary>The selected, unprotected services an action applies to: Restart and Stop take the running
+    /// ones, Start the stopped ones.</summary>
+    private List<HostServiceStatus> BulkTargets(HostServiceAction action) =>
+        _snapshot.Services
+            .Where(x => _selected.Contains(x.Name) && !x.Protected)
+            .Where(x => action == HostServiceAction.Start ? !IsUp(x) : IsUp(x))
+            .ToList();
+
+    private void AskBulk(HostServiceAction action)
+    {
+        _bulkAction = action;
+        _bulkTargets = BulkTargets(action);
+        _bulkSkipped = _snapshot.Services
+            .Where(x => _selected.Contains(x.Name) && !x.Protected && !_bulkTargets.Contains(x))
+            .ToList();
+        _notice = null;
+        _bulkOpen = _bulkTargets.Count > 0;
+    }
+
+    private string BulkNoun => _bulkTargets.Count == 1 ? "service" : "services";
+
+    private string BulkTitle => $"{VerbTitle(_bulkAction)} {_bulkTargets.Count} {BulkNoun}?";
+
+    private string BulkConfirmLabel => $"{VerbTitle(_bulkAction)} {_bulkTargets.Count} {BulkNoun}";
+
+    /// <summary>The combined memory effect, in the same words as the single-service dialog.</summary>
+    internal static string BulkEffect(HostServiceAction action, IReadOnlyList<HostServiceStatus> targets, double availableGiB)
+    {
+        if (action == HostServiceAction.Start)
+        {
+            return $"Starting them takes memory from the <strong class=\"num\">{Encode(FormatGiB(availableGiB))}</strong> free now. How much depends on what each one loads.";
+        }
+
+        var measured = targets.Where(x => x.TotalMemoryBytes is not null).ToList();
+        var unknown = targets.Where(x => x.TotalMemoryBytes is null).Select(x => Encode(x.DisplayName)).ToList();
+        long ram = measured.Sum(x => x.MemoryBytes ?? 0);
+        long gpu = measured.Sum(x => x.GpuMemoryBytes ?? 0);
+        long total = measured.Sum(x => x.TotalMemoryBytes ?? 0);
+        string parts = gpu > 0 ? $" ({Encode(FormatBytes(ram))} RAM + {Encode(FormatBytes(gpu))} GPU)" : " of RAM";
+        string amount = $"<strong class=\"num\">{Encode(FormatBytes(total))}</strong>{parts}";
+        string unknownNote = unknown.Count == 0 ? "" : $" No reading for {string.Join(", ", unknown)}, so the real total is higher.";
+        if (measured.Count == 0)
+        {
+            return action == HostServiceAction.Stop
+                ? "Stopping them frees memory, but MirbadLLM has no reading of how much they use, so the amount is unknown."
+                : "Restarting them stops each one and starts it again. They are unavailable for a moment while they start.";
+        }
+
+        return action == HostServiceAction.Stop
+            ? $"Stopping them frees about {amount} in total.{unknownNote}"
+            : $"Restarting them briefly frees about {amount} in total; they take it back as they start and load again.{unknownNote}";
+    }
+
+    private string BulkEffectHtml => BulkEffect(_bulkAction, _bulkTargets, _memory.AvailableGiB);
+
+    private async Task ConfirmBulkAsync()
+    {
+        var targets = _bulkTargets.ToList();
+        var action = _bulkAction;
+        var ct = _cts?.Token ?? CancellationToken.None;
+        var failures = new List<string>();
+        _bulkRunning = true;
+        _error = null;
+        foreach (var target in targets)
+        {
+            _busy.Add(target.Name);
+        }
+
+        try
+        {
+            foreach (var target in targets)
+            {
+                try
+                {
+                    await ServiceManager.RunAsync(target.Name, action, null, ct);
+                }
+                catch (HostServiceException ex)
+                {
+                    failures.Add($"{target.DisplayName}: {ex.Message}");
+                }
+                finally
+                {
+                    _busy.Remove(target.Name);
+                }
+            }
+        }
+        finally
+        {
+            _bulkRunning = false;
+        }
+
+        int ok = targets.Count - failures.Count;
+        _notice = ok == 0 ? null : $"{VerbTitle(action)} requested for {ok} {(ok == 1 ? "service" : "services")}. Their states update below as it happens.";
+        _error = failures.Count == 0 ? null : $"Couldn't {VerbTitle(action).ToLowerInvariant()} {string.Join("; ", failures)}";
+        _selected.Clear();
+        _bulkTargets = [];
+        _bulkSkipped = [];
+        await LoadAsync(ct);
+    }
+
+    private void Ask(HostServiceStatus service, HostServiceAction action)
+    {
+        _target = service;
+        _pendingAction = action;
+        _pendingAutostart = null;
+        _typed = "";
+        _notice = null;
+        _dialogOpen = true;
+    }
+
+    private void AskAdd(DiscoveredService service)
+    {
+        ResetWhitelist();
+        _wlMode = WhitelistMode.Add;
+        _wlAdd = service;
+        _wlDisplayName = DiscoveredTitle(service);
+        _notice = null;
+        _wlOpen = true;
+    }
+
+    private void AskUnprotect(HostServiceStatus service)
+    {
+        ResetWhitelist();
+        _wlMode = WhitelistMode.Unprotect;
+        _wlTarget = service;
+        _notice = null;
+        _wlOpen = true;
+    }
+
+    private void AskRemove(HostServiceStatus service)
+    {
+        ResetWhitelist();
+        _wlMode = WhitelistMode.Remove;
+        _wlTarget = service;
+        _notice = null;
+        _wlOpen = true;
+    }
+
+    private async Task ProtectAsync(HostServiceStatus service)
+    {
+        _notice = null;
+        await RunGuardedAsync(service,
+            () => ServiceManager.UpdateWhitelistAsync(service.Name, new HostServiceWhitelistUpdate(null, true, null, null, _clientKey), _cts?.Token ?? CancellationToken.None),
+            $"{service.DisplayName} is now protected.");
+    }
+
+    private async Task ConfirmWhitelistAsync()
+    {
+        if (!WhitelistReady)
+        {
+            return;
+        }
+
+        var ct = _cts?.Token ?? CancellationToken.None;
+        var caller = await AdminCallers.ResolveAsync(ServiceProvider);
+        _wlError = null;
+        try
+        {
+            switch (_wlMode)
+            {
+                case WhitelistMode.Add when _wlAdd is not null:
+                    var added = await ServiceManager.AddToWhitelistAsync(
+                        new HostServiceWhitelistAdd(_wlAdd.Kind, _wlAdd.Unit, _wlDisplayName, _wlProtected, _wlTyped.Trim(), null, _clientKey) { User = caller.User }, ct);
+                    _notice = $"{added.DisplayName} is now managed.";
+                    break;
+                case WhitelistMode.Unprotect when _wlTarget is not null:
+                    await ServiceManager.UpdateWhitelistAsync(_wlTarget.Name,
+                        new HostServiceWhitelistUpdate(null, false, _wlTyped.Trim(), null, _clientKey) { User = caller.User }, ct);
+                    _notice = $"{_wlTarget.DisplayName} is no longer protected.";
+                    break;
+                case WhitelistMode.Remove when _wlTarget is not null:
+                    await ServiceManager.RemoveFromWhitelistAsync(_wlTarget.Name, ct);
+                    _notice = $"{_wlTarget.DisplayName} is no longer managed here.";
+                    break;
+                default:
+                    return;
+            }
+        }
+        catch (HostServiceException ex)
+        {
+            // Keep the refusal visible so the operator can correct the name or sign in again.
+            _wlError = ex.Message;
+
+            return;
+        }
+
+        _wlOpen = false;
+        ResetWhitelist();
+        await LoadAsync(ct);
+        if (_topTab == "discovered")
+        {
+            await LoadDiscoveryAsync(ct, render: false);
+        }
+    }
+
+    private void ResetWhitelist()
+    {
+        _wlTyped = "";
+
+        _wlError = null;
+        _wlProtected = false;
+    }
+
+    private async Task ToggleAutostartAsync(HostServiceStatus service)
+    {
+        bool enable = service.Autostart != true;
+        _notice = null;
+        if (!enable && service.Protected)
+        {
+            _target = service;
+            _pendingAutostart = false;
+            _typed = "";
+            _dialogOpen = true;
+            return;
+        }
+
+        await RunGuardedAsync(service, () => ServiceManager.SetAutostartAsync(service.Name, enable, null, _cts?.Token ?? CancellationToken.None),
+            $"Autostart for {service.DisplayName} is now {(enable ? "on" : "off")}.");
+    }
+
+    private async Task ConfirmAsync()
+    {
+        var target = _target;
+        if (target is null || !TypedConfirmationOk)
+        {
+            return;
+        }
+
+        string? confirm = NeedsTypedConfirmation ? _typed.Trim() : null;
+        var ct = _cts?.Token ?? CancellationToken.None;
+        if (_pendingAutostart is bool enabled)
+        {
+            await RunGuardedAsync(target, () => ServiceManager.SetAutostartAsync(target.Name, enabled, confirm, ct),
+                $"Autostart for {target.DisplayName} is now off.");
+        }
+        else
+        {
+            var action = _pendingAction;
+            await RunGuardedAsync(target, () => ServiceManager.RunAsync(target.Name, action, confirm, ct),
+                $"{VerbTitle(action)} of {target.DisplayName} requested. Its state updates below as it happens.");
+        }
+
+        ResetDialog();
+    }
+
+    private async Task RunGuardedAsync(HostServiceStatus service, Func<Task<HostServiceStatus>> run, string success)
+    {
+        _busy.Add(service.Name);
+        _error = null;
+        try
+        {
+            await run();
+            _notice = success;
+        }
+        catch (HostServiceException ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy.Remove(service.Name);
+        }
+
+        await LoadAsync(_cts?.Token ?? CancellationToken.None);
+    }
+
+    private void ResetDialog()
+    {
+        _typed = "";
+        _pendingAutostart = null;
+    }
+
+    private static string VerbTitle(HostServiceAction action) => action switch
+    {
+        HostServiceAction.Start => "Start",
+        HostServiceAction.Stop => "Stop",
+        _ => "Restart",
+    };
+
+    private static string MemoryParts(HostServiceStatus s) =>
+        s.MemoryBytes is long ram && s.GpuMemoryBytes is long gpu && gpu > 0
+            ? $" ({Encode(FormatBytes(ram))} RAM + {Encode(FormatBytes(gpu))} GPU)"
+            : s.GpuMemoryBytes is null or 0 && s.MemoryBytes is not null ? " of RAM" : "";
+
+    private static string RiskText(HostServiceStatus s) =>
+        s.Risk ?? $"{s.DisplayName} is marked protected because other things on this box depend on it.";
+
+    private static string Encode(string text) => System.Net.WebUtility.HtmlEncode(text);
+
+    /// <summary>
+    /// A service name as a PowerShell argument for the installer line: single-quoted, since real Windows service names
+    /// hold spaces and parentheses ("Intel(R) Capability Licensing Service"), and a name the operator must not paste
+    /// unquoted into an administrator shell (MN-230). A name with control characters is shown as plain text.
+    /// </summary>
+    private static string AllowServiceArgument(string unit)
+    {
+        try
+        {
+            return MirbadLLM.Web.Api.WindowsInstallerLine.Quoted(unit);
+        }
+        catch (ArgumentException)
+        {
+            return unit;
+        }
+    }
+
+    private static string KindName(HostServiceKind kind) => kind switch
+    {
+        HostServiceKind.System => "System service",
+        HostServiceKind.User => "User service",
+        _ => "Container",
+    };
+
+    private static string KindSlug(HostServiceKind kind) => kind switch
+    {
+        HostServiceKind.Container => "containers",
+        HostServiceKind.System => "system",
+        _ => "user",
+    };
+
+    /// <summary>Plural group title, matching the Discovered sub-tab labels ("System services", "Containers",
+    /// "User services") — distinct from <see cref="KindName"/>, which is singular for the Managed table's
+    /// "Kind" column.</summary>
+    private static string KindTitle(HostServiceKind kind) => kind switch
+    {
+        HostServiceKind.System => "System services",
+        HostServiceKind.User => "User services",
+        _ => "Containers",
+    };
+
+    private static string StateSlug(HostServiceState state) => state.ToString().ToLowerInvariant();
+
+    private static string StateName(HostServiceState state) => state switch
+    {
+        HostServiceState.Running => "Running",
+        HostServiceState.Starting => "Starting",
+        HostServiceState.Stopping => "Stopping",
+        HostServiceState.Stopped => "Stopped",
+        HostServiceState.Failed => "Failed",
+        _ => "Unknown",
+    };
+
+    // Reuses the model state palette: Running = ready, Starting/Stopping = busy, Stopped/Unknown = idle.
+    private static string StateCss(HostServiceState state) => state switch
+    {
+        HostServiceState.Running => "ready",
+        HostServiceState.Starting => "starting",
+        HostServiceState.Stopping => "stopping",
+        HostServiceState.Failed => "failed",
+        _ => "stopped",
+    };
+
+    private static string StateIcon(HostServiceState state) => state switch
+    {
+        HostServiceState.Running => "state-ready",
+        HostServiceState.Starting => "state-starting",
+        HostServiceState.Stopping => "state-stopping",
+        HostServiceState.Failed => "state-failed",
+        HostServiceState.Unknown => "warning",
+        _ => "state-stopped",
+    };
+
+    private static string AutostartText(HostServiceStatus s) => s.Autostart switch
+    {
+        true => s.Kind == HostServiceKind.Container ? $"On · {s.AutostartDetail}" : "On",
+        false => "Off",
+        null => $"Fixed · {s.AutostartDetail}",
+    };
+
+    /// <summary>"1.6 GiB" at or above 1 GiB, "170 MiB" below it, "—" when not measured.</summary>
+    internal static string FormatBytes(long? bytes)
+    {
+        if (bytes is not long b)
+        {
+            return UiFormat.Missing;
+        }
+
+        const double GiB = 1024d * 1024 * 1024;
+        const double MiB = 1024d * 1024;
+        return b >= GiB
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{b / GiB:0.0} GiB")
+            : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{b / MiB:0} MiB");
+    }
+
+    private static string FormatGiB(double gib) => UiFormat.GiB(gib);
+
+    /// <summary>"3d 04h" past a day, else the shared elapsed format ("2h 05m", "4m 10s").</summary>
+    internal static string Uptime(DateTimeOffset since, DateTimeOffset now)
+    {
+        var elapsed = now - since;
+        return elapsed.TotalDays >= 1
+            ? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{(int)elapsed.TotalDays}d {elapsed.Hours:00}h")
+            : UiFormat.Elapsed(since, now);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _subscription?.Dispose();
+        if (_cts is not null)
+        {
+            await _cts.CancelAsync();
+        }
+
+        if (_ownsLive && _live is not null)
+        {
+            await _live.DisposeAsync();
+        }
+
+        _cts?.Dispose();
+    }
+}

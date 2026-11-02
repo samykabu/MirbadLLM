@@ -1,0 +1,90 @@
+@implements IAsyncDisposable
+@inject IServiceProvider ServiceProvider
+@* The rail's node list: every fleet member with a state dot and its state in words, linking to its Node page.
+   An interactive island fed by the circuit's LiveDataService tick; the states come from the master's status cache,
+   which never calls an agent. *@
+@if (_nodes.Count > 0)
+{
+    <div class="rail-nodes" data-testid="rail-nodes" data-tour="rail-nodes">
+        <ul class="nav-list" aria-label="Fleet nodes">
+            @foreach (var node in _nodes)
+            {
+                <li>
+                    <NavLink class="rail-node" href="@($"nodes/{Uri.EscapeDataString(node.NodeId)}")" Match="NavLinkMatch.All"
+                             title="@NodeTitle(node)" data-testid="@($"rail-node-{node.NodeId}")">
+                        <span class="@($"state-dot state-dot--{DotKind(node.State)}")" aria-hidden="true"></span>
+                        <span class="rail-node-id">@node.NodeId</span>
+                        <span class="rail-node-memory @(MemoryPercent(node) is null ? "rail-node-memory--missing" : null)" aria-hidden="true">
+                            @if (MemoryPercent(node) is { } percent)
+                            {
+                                <span style="@($"width:{percent.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)}%")"></span>
+                            }
+                        </span>
+                    </NavLink>
+                </li>
+            }
+        </ul>
+    </div>
+}
+
+@code {
+    private LiveDataService? _live;
+    private bool _ownsLive;
+    private IDisposable? _subscription;
+    private INodeStatusCache? _cache;
+    private IReadOnlyList<NodeLiveStatus> _nodes = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _cache = ServiceProvider.GetService<INodeStatusCache>();
+        _live = LiveDataService.Resolve(ServiceProvider, out _ownsLive);
+        Refresh();
+        _subscription = _live.Subscribe(LiveNeeds.Models, _ => InvokeAsync(() =>
+        {
+            Refresh();
+            StateHasChanged();
+        }));
+        await Task.CompletedTask;
+    }
+
+    private void Refresh()
+    {
+        try
+        {
+            _nodes = [.. (_cache?.ListNodes() ?? [])
+                .Where(n => n.State is not (NodeState.Revoked or NodeState.PendingApproval))
+                .OrderBy(n => n.NodeId, StringComparer.Ordinal)];
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+        {
+            _nodes = []; // the rail never fails over the node view; the Nodes page reports it
+        }
+    }
+
+    private static string DotKind(NodeState? state) => state switch
+    {
+        NodeState.Online => "ready",
+        NodeState.Degraded => "busy",
+        NodeState.Offline or NodeState.Incompatible or NodeState.PendingTakeover => "failed",
+        _ => "idle",
+    };
+
+    private static double? MemoryPercent(NodeLiveStatus node) =>
+        node.State is NodeState.Online or NodeState.Degraded
+        && node.Memory is { HostTotalGiB: > 0 } memory
+        && double.IsFinite(memory.HostTotalGiB) && double.IsFinite(memory.HostAvailableGiB)
+            ? Math.Clamp(100 * (1 - memory.HostAvailableGiB / memory.HostTotalGiB), 0, 100) : null;
+
+    private static string NodeTitle(NodeLiveStatus node) =>
+        $"{node.NodeId} · {PlacementEditing.StateText(node.State, node.Draining)}"
+        + (MemoryPercent(node) is { } percent ? $" · memory {UiFormat.Number(percent)}% used" : " · memory not reported");
+
+    public async ValueTask DisposeAsync()
+    {
+        _subscription?.Dispose();
+        if (_ownsLive && _live is not null)
+        {
+            await _live.DisposeAsync();
+        }
+    }
+}

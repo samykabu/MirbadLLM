@@ -1,0 +1,50 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using MirbadLLM.Pki
+@using MirbadLLM.Web.Components.Pages
+@* What an operator checks before approving an enrolled node (design §3.2, §12.1): where the request came from, what the
+   agent reported about the machine, and the fingerprint of the key it enrolled with. The fingerprint is what the
+   approval pins (NodeApproveRequest.ExpectedSpkiSha256), so a node that enrolls again with another key is refused. *@
+<dl class="kv kv--wide" data-testid="@TestId">
+    <dt>Node</dt>
+    <dd><span>@(Record.DisplayName ?? Record.Id)</span> <code class="num">@Record.Id</code></dd>
+    <dt>Request from</dt>
+    <dd><span class="num" data-testid="@($"{TestId}-from")">@(Record.EnrolledFrom ?? UiFormat.Missing)</span></dd>
+    <dt>Agent address</dt>
+    <dd><span class="num" data-testid="@($"{TestId}-address")">@(string.IsNullOrWhiteSpace(Record.Address) ? UiFormat.Missing : Record.Address)</span></dd>
+    <dt>OS · arch</dt>
+    <dd data-testid="@($"{TestId}-os")">@Nodes.OsText(Capabilities)</dd>
+    <dt>GPUs</dt>
+    <dd data-testid="@($"{TestId}-gpus")">@Nodes.GpuText(Capabilities)</dd>
+    <dt>Agent version</dt>
+    <dd><span class="num">@(Capabilities?.AgentVersion ?? UiFormat.Missing)</span></dd>
+    <dt>Enrolled</dt>
+    <dd><span class="num" data-testid="@($"{TestId}-at")">@(Record.EnrolledAt is { } at ? UiFormat.IsoUtc(at) : UiFormat.Missing)</span></dd>
+    <dt>Key fingerprint</dt>
+    <dd><code class="num pending-fingerprint" data-testid="@($"{TestId}-fingerprint")">@Fingerprint(Record.PendingCertSpkiSha256)</code></dd>
+</dl>
+
+@code {
+    /// <summary>The pending node record (with its pending pin).</summary>
+    [Parameter, EditorRequired]
+    public NodeRecord Record { get; set; } = null!;
+
+    /// <summary>Live capabilities when the monitor has them; else the ones the agent sent with its enrollment.</summary>
+    [Parameter]
+    public NodeCapabilities? LiveCapabilities { get; set; }
+
+    [Parameter]
+    public string TestId { get; set; } = "pending-node";
+
+    private NodeCapabilities? Capabilities => LiveCapabilities ?? Record.LastCapabilities;
+
+    /// <summary>The colon-separated SHA-256 fingerprint of an SPKI pin, or "—".</summary>
+    public static string Fingerprint(string? pin)
+    {
+        if (pin is null || !Spki.IsValidPin(pin))
+        {
+            return UiFormat.Missing;
+        }
+
+        return Spki.ToDisplayFingerprint(pin);
+    }
+}

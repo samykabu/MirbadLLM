@@ -1,0 +1,104 @@
+/* Model overview: state and live numbers lead (full width), then configuration, the last benchmark and placement as
+   tiled panels split by the grid gap. No card sits inside another. */
+.overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+    gap: var(--ss-sp-4);
+    align-items: start;
+}
+
+.overview-panel {
+    display: grid;
+    gap: var(--ss-sp-3);
+    padding: var(--ss-sp-4);
+    min-width: 0;
+}
+
+.overview-state { grid-column: 1 / -1; }
+
+.overview-state-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ss-sp-2) var(--ss-sp-3);
+}
+
+.overview-kpis {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, max-content));
+    gap: var(--ss-sp-3) var(--ss-sp-7);
+    margin: 0;
+}
+
+.overview-kpis dt {
+    font-family: var(--ss-font-mono);
+    font-size: var(--ss-fs-100);
+    font-weight: 500;
+    color: var(--ss-text-muted);
+}
+
+.overview-kpis dd {
+    margin: 2px 0 0;
+    font-family: var(--ss-font-mono);
+    font-size: var(--ss-fs-400);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+}
+
+.overview-unit {
+    font-size: var(--ss-fs-100);
+    color: var(--ss-text-muted);
+}
+
+.overview-foot { font-size: var(--ss-fs-100); }
+
+.overview-facts {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--ss-sp-2) var(--ss-sp-4);
+    margin: 0;
+    align-items: baseline;
+}
+
+.overview-facts dt {
+    font-family: var(--ss-font-mono);
+    font-size: var(--ss-fs-100);
+    font-weight: 500;
+    color: var(--ss-text-muted);
+}
+
+.overview-facts dd {
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.overview-copy {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: var(--ss-sp-2);
+}
+
+.overview-link {
+    justify-self: start;
+    font-family: var(--ss-font-mono);
+    font-size: 0.8125rem;
+}
+
+.overview-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-2);
+}
+
+@media (max-width: 639.98px) {
+    .overview-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--ss-sp-3); }
+}
+
+@media (pointer: coarse) {
+    .overview-link { display: inline-flex; align-items: center; min-height: 44px; }
+}
+
+.overview-copy code { min-width: 0; overflow-wrap: anywhere; }
+.overview-copy .btn { flex: none; }

@@ -1,0 +1,63 @@
+@page "/login"
+@attribute [AllowAnonymous]
+@layout EmptyLayout
+@inject IAntiforgery Antiforgery
+
+<PageTitle>Sign in · MirbadLLM</PageTitle>
+
+<div class="login">
+    <span class="brand login-brand"><BrandLogo /></span>
+
+    <div class="panel auth-panel login-panel">
+        <div class="login-head">
+            <h1 tabindex="-1">Sign in</h1>
+            <p class="login-lede">Admin access to the MirbadLLM console: models, nodes, monitoring and API keys.</p>
+        </div>
+
+        @if (_error)
+        {
+            <div class="callout callout--failed" role="alert" id="login-error" data-testid="login-error">
+                <Icon Name="state-failed" />
+                <div class="callout-body">Wrong password, or too many attempts. Wait a minute and try again.</div>
+            </div>
+        }
+
+        <form method="post" action="login/submit" class="auth-form">
+            <input type="hidden" name="__RequestVerificationToken" value="@_antiforgeryToken" />
+            <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+            <div class="field">
+                <label class="field-label" for="password">Admin password</label>
+                <input type="password" class="form-control" id="password" name="password" autocomplete="current-password"
+                       data-testid="login-password" required autofocus
+                       aria-invalid="@(_error ? "true" : null)" aria-describedby="@(_error ? "login-error" : null)" />
+            </div>
+            <button type="submit" class="btn btn-primary login-submit" data-testid="login-submit">Sign in</button>
+        </form>
+    </div>
+
+    <p class="login-foot">API clients never sign in here: they call <code>/v1</code> with an API key.</p>
+</div>
+
+@code {
+    [SupplyParameterFromQuery]
+    public string? ReturnUrl { get; set; }
+
+    [SupplyParameterFromQuery]
+    public string? Error { get; set; }
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private bool _error;
+    private string _antiforgeryToken = "";
+
+    protected override void OnInitialized()
+    {
+        _error = Error == "1";
+        if (HttpContext is not null)
+        {
+            var tokens = Antiforgery.GetAndStoreTokens(HttpContext);
+            _antiforgeryToken = tokens.RequestToken ?? "";
+        }
+    }
+}

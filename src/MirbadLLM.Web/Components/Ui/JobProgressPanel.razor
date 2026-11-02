@@ -1,0 +1,66 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using System.Globalization
+@using MirbadLLM.Orchestration.Benchmarking
+@* Live progress of the running benchmark or tuning job: what it is doing now, how far through it is, how long
+   it has run and roughly how long is left, with a Cancel that stops it (tuning then restores the saved settings). *@
+<section class="panel job-progress" aria-labelledby="job-progress-title" aria-live="polite" data-testid="job-progress">
+    <div class="job-progress-head">
+        <h2 id="job-progress-title">
+            <Icon Name="state-starting" Class="icon--spin" />
+            @(Job.Kind == JobKind.Tuning ? "Tuning" : "Benchmarking") @Job.ModelId
+        </h2>
+        <button type="button" class="btn btn-sm btn-outline-danger" disabled="@Job.Cancelling" data-testid="job-cancel" @onclick="() => OnCancel.InvokeAsync()">
+            <Icon Name="stop" /> @(Job.Cancelling ? "Cancelling…" : Job.Kind == JobKind.Tuning ? "Cancel tuning" : "Cancel benchmark")
+        </button>
+    </div>
+    <p class="job-phase" data-testid="job-phase">@Job.Phase</p>
+    @if (Job.Kind == JobKind.Tuning && Job.CandidateCount > 0)
+    {
+        <p class="job-candidate num" data-testid="job-candidate">
+            Candidate @Job.CandidateNumber of about @Job.CandidateCount@(Job.CandidateLabel is null ? "" : $": {Job.CandidateLabel}")
+        </p>
+        @if (Job.CandidateDescription is { } why)
+        {
+            <p class="muted job-candidate-why" data-testid="job-candidate-description">@why</p>
+        }
+    }
+    @if (Job.TotalSteps > 0)
+    {
+        var pct = Math.Clamp(100.0 * Math.Max(0, Job.Step - 1) / Job.TotalSteps, 0, 100);
+        <div class="progress-track" role="progressbar" aria-label="Benchmark steps"
+             aria-valuemin="0" aria-valuemax="@Job.TotalSteps" aria-valuenow="@Math.Max(0, Job.Step - 1)"
+             aria-valuetext="@($"Step {Job.Step} of {Job.TotalSteps}")">
+            <div class="progress-fill" style="width:@pct.ToString("0.#", CultureInfo.InvariantCulture)%"></div>
+        </div>
+    }
+    <dl class="job-times">
+        <div><dt>Elapsed</dt><dd class="num" data-testid="job-elapsed">@UiFormat.Elapsed(Job.StartedAt, Now)</dd></div>
+        <div>
+            <dt>Left</dt>
+            <dd class="num" data-testid="job-left">
+                @if (Left <= TimeSpan.Zero)
+                {
+                    @:finishing, longer than estimated
+                }
+                else
+                {
+                    @UiFormat.About(Left)<text> (until ~</text><time datetime="@UiFormat.IsoUtc(Job.EstimatedEnd)" data-fmt="hm" data-testid="job-left-time">@UiFormat.ClockTimeUtc(Job.EstimatedEnd)</time><text>)</text>
+                }
+            </dd>
+        </div>
+        <div><dt>API</dt><dd>Paused (503) until it finishes</dd></div>
+    </dl>
+</section>
+
+@code {
+    [Parameter, EditorRequired]
+    public JobSnapshot Job { get; set; } = null!;
+
+    [Parameter]
+    public DateTimeOffset Now { get; set; } = DateTimeOffset.UtcNow;
+
+    [Parameter]
+    public EventCallback OnCancel { get; set; }
+
+    private TimeSpan Left => Job.EstimatedEnd - Now;
+}

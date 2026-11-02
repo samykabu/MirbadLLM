@@ -1,0 +1,87 @@
+{
+  "node": {
+    "id": "pc-office",
+    "uid": "7d1e5b0c9a2f4e3d8c6b5a4f3e2d1c0b",
+    "displayName": "Office PC",
+    "address": "https://192.0.2.50:9443",
+    "altAddresses": [],
+    "approved": true,
+    "draining": false,
+    "revoked": false,
+    "certSpkiSha256": "q3vYc2ZpeHR1cmUtc3BraS1oYXNoLW5vdC1yZWFsMDE=",
+    "pendingCertSpkiSha256": null,
+    "certNotAfter": "2027-01-04T09:00:00+00:00",
+    "memoryReserveGiB": 4,
+    "gpuReserveGiB": {
+      "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f601": 1
+    },
+    "maxConcurrentStarts": 2,
+    "defaultVllmImage": "vllm/vllm-openai:v0.11.0",
+    "defaultVllmImageDigest": "sha256:5b0c9a2f4e3d8c6b5a4f3e2d1c0b7d1e5b0c9a2f4e3d8c6b5a4f3e2d1c0b7d1e",
+    "labels": [
+      "amd64",
+      "rtx4060ti"
+    ],
+    "lastCapabilities": null,
+    "lastContact": "2026-10-06T09:00:00+00:00",
+    "createdAt": "2026-10-05T09:00:00+00:00",
+    "enrolledAt": "2026-10-05T09:00:00+00:00",
+    "enrolledFrom": "192.0.2.50",
+    "approvedAt": "2026-10-05T09:00:00+00:00",
+    "revokedAt": null,
+    "rotation": null
+  },
+  "live": {
+    "nodeId": "pc-office",
+    "nodeUid": "7d1e5b0c9a2f4e3d8c6b5a4f3e2d1c0b",
+    "displayName": "Office PC",
+    "address": "https://192.0.2.50:9443",
+    "state": "Online",
+    "draining": false,
+    "reasons": [],
+    "lastContact": "2026-10-06T09:00:00+00:00",
+    "bootId": "boot-1",
+    "seq": 42,
+    "agentVersion": "1.1.0+fixture",
+    "agentProtocol": {
+      "min": 1,
+      "current": 1
+    },
+    "selectedProtocol": 1,
+    "acceptedMaster": {
+      "instanceId": "master-1",
+      "epoch": 7,
+      "bootId": "mboot-1"
+    },
+    "memory": {
+      "model": "discrete",
+      "hostTotalGiB": 62.7,
+      "hostAvailableGiB": 48.1,
+      "gpus": [
+        {
+          "index": 0,
+          "uuid": "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f601",
+          "totalGiB": 16,
+          "usedGiB": 1.1,
+          "freeGiB": 14.9
+        },
+        {
+          "index": 1,
+          "uuid": "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f602",
+          "totalGiB": 16,
+          "usedGiB": 13.2,
+          "freeGiB": 2.8
+        }
+      ]
+    },
+    "capabilities": null,
+    "runtimes": [],
+    "openOperations": [],
+    "certNotAfter": "2027-01-04T09:00:00+00:00",
+    "rotationStage": null,
+    "updatedAt": "2026-10-06T09:00:00+00:00"
+  },
+  "placedModels": 2,
+  "readyModels": 1,
+  "job": null
+}

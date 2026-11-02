@@ -1,0 +1,854 @@
+@namespace MirbadLLM.Web.Components.ModelEditor
+@implements IAsyncDisposable
+@using MirbadLLM.Orchestration
+@using MirbadLLM.Orchestration.Multinode
+@inject IJSRuntime JS
+@inject IServiceProvider Services
+@inject IModelRuntime Runtime
+@* "Move to another node" (design §6.4, §6.7, §12.2; MN-118) over the master's MoveService. Setup: the target node
+   (online, not draining) with its fit hint, its GPUs on a discrete node, an optional Hugging Face token for a gated or
+   private repo; moving a running model stops it here, authorized by the signed-in session. Progress: the stages, the
+   target's downloads with bytes, the move's last note, Cancel while the source stop is not confirmed, and the
+   force-commit when the source node is gone, stating its consequence exactly as the master words it. A move that
+   ended "done" with an error (its start on the target was refused, D94) offers the start, and a memory refusal of that
+   start moves to "Start anyway?" with the agent's numbers (D96).
+   Secrets: the token lives only in this component's fields while the dialog is open; it is cleared as
+   soon as they are sent and whenever the dialog closes, are never put in the URL, logged or stored, and the body (with
+   its inputs) is not rendered while the dialog is closed. *@
+<dialog @ref="_dialog" class="ss-dialog move-dialog" aria-labelledby="@TitleId" @oncancel="OnNativeCancelAsync"
+        data-testid="move-dialog" data-open="@(_open ? "true" : "false")" data-phase="@_phase.ToString().ToLowerInvariant()">
+    @if (_open)
+    {
+        <div class="ss-dialog-inner">
+            <h2 id="@TitleId" data-testid="move-dialog-title">@ConfirmDialog.TidyTitle(Title)</h2>
+            <div class="ss-dialog-body">
+                @switch (_phase)
+                {
+                    case Phase.Setup:
+                        @SetupBody
+                        break;
+                    case Phase.Progress:
+                        @ProgressBody
+                        break;
+                    default:
+                        @StartAnywayBody
+                        break;
+                }
+
+                @if (_error is not null)
+                {
+                    <div class="callout callout--failed" role="alert" data-testid="move-dialog-error">
+                        <Icon Name="state-failed" />
+                        <div class="callout-body">
+                            <span>@_error.Text</span>
+                            @if (_error.Details.Count > 0)
+                            {
+                                <ul class="plain-list">
+                                    @foreach (string detail in _error.Details)
+                                    {
+                                        <li>@detail</li>
+                                    }
+                                </ul>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+            <div class="ss-dialog-actions">
+                @switch (_phase)
+                {
+                    case Phase.Setup:
+                        <button type="button" class="btn btn-outline-secondary" autofocus data-testid="move-dialog-close" @onclick="CloseAsync">Cancel</button>
+                        <button type="button" class="btn btn-primary" data-testid="move-confirm" disabled="@(_busy || !CanSubmit)" @onclick="StartMoveAsync">
+                            @(_targetId is null ? "Move" : $"Move to {_targetId}")
+                        </button>
+                        break;
+                    case Phase.Progress:
+                        @if (_view is { Active: true } active && active.Record.Stage is MoveStages.Downloading or MoveStages.StoppingSource)
+                        {
+                            <button type="button" class="btn btn-outline-danger" data-testid="move-cancel" disabled="@_busy" @onclick="CancelMoveAsync">Cancel move</button>
+                        }
+                        @if (_view is { } view && MoveProgress.DoneWithError(view.Record))
+                        {
+                            <button type="button" class="btn btn-primary" data-testid="move-start" disabled="@_busy" @onclick="() => StartModelAsync(force: false)">
+                                Start @Model.ServedName
+                            </button>
+                        }
+                        <button type="button" class="btn btn-outline-secondary" autofocus data-testid="move-dialog-close" @onclick="CloseAsync">Close</button>
+                        break;
+                    default:
+                        <button type="button" class="btn btn-outline-secondary" autofocus data-testid="move-dialog-close" @onclick="CloseAsync">Cancel</button>
+                        <button type="button" class="btn btn-danger" data-testid="move-start-anyway" disabled="@_busy" @onclick="() => StartModelAsync(force: true)">Start anyway</button>
+                        break;
+                }
+            </div>
+        </div>
+    }
+</dialog>
+
+@code {
+    private enum Phase { Setup, Progress, StartAnyway }
+
+    private static int _nextId;
+    private readonly int _id = Interlocked.Increment(ref _nextId);
+    private ElementReference _dialog;
+    private IJSObjectReference? _module;
+    private bool _shown;
+
+    private bool _open;
+    private Phase _phase;
+    private bool _busy;
+    private EditorMessage? _error;
+
+    private string? _targetId;
+    private IReadOnlyList<string> _targetGpus = [];
+    private NodeFitResult? _targetFit;
+    private Dictionary<string, NodeFitResult?> _targetFits = new(StringComparer.Ordinal);
+
+    // The picked saved token's id (not a secret: the value is read on the server only as the move starts).
+    private string? _hfTokenId;
+
+    private string _forceConfirm = "";
+
+    private MoveStatusView? _view;
+    private string? _lastActiveStage;
+    private bool _wasActive;
+    private AdmissionNumbers? _numbers;
+
+    private CancellationTokenSource? _pollCts;
+    private Task? _pollLoop;
+
+    /// <summary>The model as stored.</summary>
+    [Parameter, EditorRequired]
+    public ModelDefinition Model { get; set; } = default!;
+
+    /// <summary>The nodes the editor offers (<see cref="PlacementEditing.Offered"/>).</summary>
+    [Parameter]
+    public IReadOnlyList<PlacementNode> Nodes { get; set; } = [];
+
+    /// <summary>True when the model is Starting or Ready (a move then stops it here and requires a signed-in session).</summary>
+    [Parameter]
+    public bool Running { get; set; }
+
+    /// <summary>Raised when a move started, ended, or the model was started after one (the page re-reads the model).</summary>
+    [Parameter]
+    public EventCallback OnChanged { get; set; }
+
+    /// <summary>How often the progress is read while the dialog is open (tests shorten it).</summary>
+    [Parameter]
+    public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(1);
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationState { get; set; }
+
+    private string TitleId => $"move-dialog-{_id}-title";
+
+    // Resolved once (MN-132): the poll loop runs until DisposeAsync awaits it, and a lookup from a scope that is being
+    // disposed throws ObjectDisposedException.
+    private MoveService? _moves;
+    private INodeRegistry? _nodeRegistry;
+    private IOwnershipStore? _ownership;
+    private PlacementFit? _fit;
+
+    private MoveService? Moves => _moves;
+
+    protected override void OnInitialized()
+    {
+        _moves = Services.GetService<MoveService>();
+        _nodeRegistry = Services.GetService<INodeRegistry>();
+        _ownership = Services.GetService<IOwnershipStore>();
+        // The composed preview first (MN-233): it carries the agent clients, so the target's GGUF estimate is shown.
+        _fit = Services.GetService<PlacementFit>();
+        if (_fit is null && _nodeRegistry is not null && Services.GetService<IModelRegistry>() is { } models)
+        {
+            _fit = new PlacementFit(_nodeRegistry, models, Services.GetService<INodeTelemetry>(), Services.GetService<INodeStatusCache>(),
+                Services.GetService<TimeProvider>());
+        }
+    }
+
+    private string? SourceId => Model.Placement?.NodeId;
+
+    private IEnumerable<PlacementNode> Targets => Nodes.Where(n => !string.Equals(n.Id, SourceId, StringComparison.Ordinal));
+
+    private PlacementNode? Target => _targetId is null ? null : Nodes.FirstOrDefault(n => string.Equals(n.Id, _targetId, StringComparison.Ordinal));
+
+    private bool CanSubmit =>
+        Target is { } target && PlacementEditing.PlacementRefusal(target, needsServing: true, Model.Runtime) is null &&
+        (!target.Discrete || _targetGpus.Count > 0);
+
+    private string Title
+    {
+        get
+        {
+            if (_phase == Phase.Setup)
+            {
+                return SourceId is null ? $"Place {Model.ServedName} on a node" : $"Move {Model.ServedName} to another node";
+            }
+
+            if (_phase == Phase.StartAnyway)
+            {
+                return $"Start {Model.ServedName} anyway?";
+            }
+
+            if (_view?.Record is not { Move: { } m } record)
+            {
+                return $"Move {Model.ServedName}";
+            }
+
+            if (_view.Active)
+            {
+                return $"Moving {Model.ServedName} to {m.TargetNodeId}";
+            }
+
+            if (MoveProgress.DoneWithError(record))
+            {
+                return $"Moved {Model.ServedName} to {m.TargetNodeId}, not started";
+            }
+
+            return record.Stage == MoveStages.Done
+                ? $"Moved {Model.ServedName} to {m.TargetNodeId}"
+                : $"Move of {Model.ServedName} to {m.TargetNodeId} stopped";
+        }
+    }
+
+    /// <summary>
+    /// Opens the dialog: on the progress of the model's move when one is running (or, with <paramref name="progress"/>,
+    /// the last finished one), else on a new move.
+    /// </summary>
+    public async Task OpenAsync(bool progress = false)
+    {
+        ClearSecrets();
+        _error = null;
+        _numbers = null;
+        _busy = false;
+        _view = Moves is { } moves ? await moves.GetAsync(Model.Id) : null;
+        _wasActive = _view?.Active == true;
+        _lastActiveStage = _view?.Active == true ? _view.Record.Stage : null;
+        if (_view is { Active: true } || (progress && _view is not null))
+        {
+            _phase = Phase.Progress;
+            StartPolling();
+        }
+        else
+        {
+            _phase = Phase.Setup;
+            _targetId = null;
+            _targetGpus = [];
+            _targetFit = null;
+            await RefreshTargetFitsAsync();
+            if (Moves is null)
+            {
+                _error = EditorMessage.Of("Moves are not available on this master.");
+            }
+        }
+
+        _open = true;
+        StateHasChanged();
+    }
+
+    // ---------------------------------------------------------------- setup
+
+    private RenderFragment SetupBody => __builder =>
+    {
+        <p data-testid="move-consequence">
+            @if (SourceId is null)
+            {
+                <span>MirbadLLM downloads the checkpoint on the node you pick from the model's Hugging Face sources, then places
+                    @Model.ServedName there. It is not started.</span>
+            }
+            else
+            {
+                <span>MirbadLLM downloads the checkpoint again on the node you pick, from the model's Hugging Face sources, while
+                    @Model.ServedName keeps serving on @SourceId.</span>
+                @if (Running)
+                {
+                    <span> Then it stops it on @SourceId, switches the placement and starts it there: clients get 503 until it is Ready
+                        again.</span>
+                }
+                else
+                {
+                    <span> Then it switches the placement; the model stays stopped.</span>
+                }
+                <span> The folder on @SourceId stays on disk.</span>
+            }
+        </p>
+        <div class="field">
+            <FieldHelp Label="Target node" For="move-target" Help="@ModelFieldHelp.MoveTarget" />
+            <select class="form-select" id="move-target" data-testid="move-target" value="@(_targetId ?? "")" aria-describedby="move-target-hint"
+                    @onchange="OnTargetChangedAsync">
+                <option value="">Choose a node</option>
+                @foreach (var node in Targets)
+                {
+                    string? refusal = PlacementEditing.PlacementRefusal(node, needsServing: true, Model.Runtime);
+                    <option value="@node.Id" disabled="@(refusal is not null)" data-testid="@($"move-target-{node.Id}")">
+                        @node.Label — @PlacementEditing.StateText(node.State, node.Draining)@(refusal is null ? " · " + PlacementEditing.FitWord(TargetFit(node.Id)) : " · " + PlacementEditing.ShortRefusal(node, needsServing: true, Model.Runtime))
+                    </option>
+                }
+            </select>
+            <div class="field-hint" id="move-target-hint" data-testid="move-target-hint">
+                @if (!Targets.Any())
+                {
+                    <span>There is no other node to move to.</span>
+                }
+                else if (Target is { } target)
+                {
+                    @if (PlacementEditing.PlacementRefusal(target, needsServing: true, Model.Runtime) is { } refusal)
+                    {
+                        <span>@refusal</span>
+                    }
+                    else if (TargetFit(target.Id) is { } fit)
+                    {
+                        <span>@fit.Message</span>
+                    }
+                }
+                else
+                {
+                    <span>Only online nodes that are not draining and can run @LlamaCppEditing.RuntimeName(Model.Runtime) can take it.</span>
+                    @foreach (var node in Targets)
+                    {
+                        @if (PlacementEditing.PlacementRefusal(node, needsServing: true, Model.Runtime) is { } why)
+                        {
+                            <span class="d-block" data-testid="@($"move-target-why-{node.Id}")">@why</span>
+                        }
+                    }
+                }
+            </div>
+        </div>
+        if (Target is { Discrete: true } discrete)
+        {
+            <GpuPicker Gpus="discrete.Gpus" Selected="_targetGpus" SelectedChanged="OnTargetGpusChangedAsync" Candidates="TargetFit(discrete.Id)"
+                       Node="@discrete.Id" TestId="move-gpus" />
+            if (_targetGpus.Count > 0 && _targetFit is { } selection)
+            {
+                <div class="budget-check @(selection.Fits == false ? "budget-check--over" : selection.Fits == true ? "budget-check--ok" : null)" data-testid="move-fit">
+                    <Icon Name="@(selection.Fits == true ? "check" : "warning")" />
+                    <span>@selection.Message</span>
+                </div>
+            }
+        }
+        <div class="field">
+            <FieldHelp Label="Hugging Face token (optional)" For="move-token" Help="@ModelFieldHelp.MoveToken" />
+            <TokenPicker Id="move-token" TestId="move-token" DescribedBy="move-token-hint" @bind-Value="_hfTokenId" />
+            <div class="field-hint" id="move-token-hint">Only for a gated or private repo. Its value goes to this move's download only.</div>
+        </div>
+
+    };
+
+    private NodeFitResult? TargetFit(string nodeId) => _targetFits.TryGetValue(nodeId, out var fit) ? fit : null;
+
+    private async Task OnTargetChangedAsync(ChangeEventArgs e)
+    {
+        _targetId = e.Value is string { Length: > 0 } id ? id : null;
+        _targetGpus = [];
+        _targetFit = null;
+        _error = null;
+        await RefreshSelectionFitAsync();
+    }
+
+    private async Task OnTargetGpusChangedAsync(IReadOnlyList<string> gpus)
+    {
+        _targetGpus = gpus;
+        await RefreshSelectionFitAsync();
+    }
+
+    private async Task RefreshTargetFitsAsync()
+    {
+        _targetFits = new Dictionary<string, NodeFitResult?>(StringComparer.Ordinal);
+        if (_fit is not { } fit)
+        {
+            return;
+        }
+
+        foreach (var node in Targets)
+        {
+            _targetFits[node.Id] = await TryFitAsync(fit, node.Id, new NodeFitRequest { Definition = Model with { Placement = null } });
+        }
+    }
+
+    private async Task RefreshSelectionFitAsync()
+    {
+        if (Target is not { Discrete: true } target || _targetGpus.Count == 0 || _fit is not { } fit)
+        {
+            _targetFit = null;
+            return;
+        }
+
+        _targetFit = await TryFitAsync(fit, target.Id, new NodeFitRequest
+        {
+            Definition = Model with { Placement = PlacementEditing.Build(target.Id, _targetGpus, target.Gpus, 0) },
+            GpuUuids = _targetGpus,
+        });
+    }
+
+    private static async Task<NodeFitResult?> TryFitAsync(PlacementFit fit, string nodeId, NodeFitRequest request)
+    {
+        try
+        {
+            return await fit.CheckAsync(nodeId, request);
+        }
+        catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException)
+        {
+            return null; // no budget yet, or the model is gone: no hint
+        }
+    }
+
+    private async Task<MoveCaller> CallerAsync()
+    {
+        var caller = await AdminCallers.ResolveAsync(Services, AuthenticationState);
+        return new MoveCaller(caller.Actor, caller.ClientKey) { User = caller.User };
+    }
+
+    private async Task StartMoveAsync()
+    {
+        if (Moves is not { } moves || Target is not { } target)
+        {
+            return;
+        }
+
+        _error = null;
+        if (target.Discrete && _targetGpus.Count == 0)
+        {
+            _error = EditorMessage.Of($"Tick at least one GPU on {target.Id}.");
+            return;
+        }
+
+        string? hfToken = null;
+        if (!string.IsNullOrEmpty(_hfTokenId))
+        {
+            try
+            {
+                hfToken = Services.GetService<ITokenStore>() is { } store ? await store.GetValueAsync(_hfTokenId) : null;
+            }
+            catch (InvalidOperationException ex)
+            {
+                _error = EditorMessage.Of(ex.Message);
+                return;
+            }
+
+            if (hfToken is null)
+            {
+                _error = EditorMessage.Of("The picked Hugging Face token was deleted. Pick another one, or none.");
+                return;
+            }
+        }
+
+        _busy = true;
+        var request = new ModelMoveRequest
+        {
+            TargetNodeId = target.Id,
+            GpuUuids = target.Discrete ? [.. _targetGpus] : null,
+            HfToken = hfToken,
+        };
+        try
+        {
+            var record = await moves.StartMoveAsync(Model.Id, request, await CallerAsync());
+            _view = new MoveStatusView { Record = record, Active = true, TargetServing = true };
+            _lastActiveStage = record.Stage;
+            _wasActive = true;
+            _phase = Phase.Progress;
+            StartPolling();
+            await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is MoveRefusedException or ModelBusyException or PlacementValidationException or PlacementConflictException
+            or KeyNotFoundException or ArgumentException or NodeUnavailableException)
+        {
+            _error = EditorRefusals.Move(ex, Model.Id);
+        }
+        finally
+        {
+            // Sent once (MN-132): the force confirmation is cleared whatever the answer; a retry picks the token again.
+            ClearSecrets();
+            _busy = false;
+        }
+    }
+
+    // ---------------------------------------------------------------- progress
+
+    private RenderFragment ProgressBody => __builder =>
+    {
+        if (_view?.Record is not { Move: { } move } record)
+        {
+            <p class="muted">No move of @Model.ServedName is recorded.</p>
+            return;
+        }
+
+        <ol class="move-steps" aria-label="Move progress" data-testid="move-steps">
+            @foreach (var step in MoveProgress.Steps(record, _lastActiveStage))
+            {
+                <li class="move-step move-step--@step.State.ToString().ToLowerInvariant()" data-testid="@($"move-step-{step.Stage}")"
+                    data-state="@step.State.ToString().ToLowerInvariant()" aria-current="@(step.State == MoveStepState.Current ? "step" : null)">
+                    <Icon Name="@StepIcon(step.State)" Class="@(step.State == MoveStepState.Current ? "icon--spin" : null)" />
+                    <span>@step.Label</span>
+                    <span class="visually-hidden">(@StepWord(step.State))</span>
+                </li>
+            }
+        </ol>
+
+        if (_view.Downloads.Count > 0)
+        {
+            <ul class="move-downloads" aria-live="polite" data-testid="move-downloads">
+                @foreach (var download in _view.Downloads)
+                {
+                    double pct = MoveProgress.Percent(download);
+                    <li class="download" data-testid="@($"move-download-{download.Folder}")">
+                        <div class="download-head">
+                            <span><code>@download.RepoId</code> → <code>@download.Folder</code></span>
+                            <span class="num muted" data-testid="move-download-bytes">
+                                @UiFormat.Bytes(download.BytesDownloaded) of @(download.TotalBytes > 0 ? UiFormat.Bytes(download.TotalBytes) : "unknown size")
+                            </span>
+                        </div>
+                        <div class="progress-track" role="progressbar" aria-label="@($"Download of {download.Folder}")" aria-valuemin="0" aria-valuemax="100"
+                             aria-valuenow="@pct.ToString("F0", System.Globalization.CultureInfo.InvariantCulture)">
+                            <div class="progress-fill" style="width:@(pct.ToString("F1", System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                        </div>
+                        <span class="muted">@(download.State?.ToString() ?? "Waiting for the node")@(download.Error is { Length: > 0 } err ? ": " + err : "")</span>
+                    </li>
+                }
+            </ul>
+        }
+
+        if (_view.Active)
+        {
+            if (record.Error is { Length: > 0 } note)
+            {
+                <div class="callout callout--busy" role="status" data-testid="move-note">
+                    <Icon Name="warning" /><div class="callout-body">@note</div>
+                </div>
+            }
+
+            if (_view.CanForceCommit)
+            {
+                <div class="callout callout--failed move-force" role="alert" data-testid="move-paused">
+                    <Icon Name="pause" />
+                    <div class="callout-body">
+                        <span>Paused: @move.SourceNodeId is not reachable, so @Model.ServedName can't be confirmed stopped there. The move waits and
+                            continues by itself when it comes back. If @move.SourceNodeId is gone for good, force-commit the move.</span>
+                        <p class="move-consequence" data-testid="move-force-consequence">@_view.ForceCommitConsequence</p>
+                        <div class="move-force-fields">
+                            <div class="field">
+                                <label class="field-label" for="move-force-confirm">Type <code>@move.SourceNodeId</code> to confirm</label>
+                                <input class="form-control num" id="move-force-confirm" data-testid="move-force-confirm" autocomplete="off" spellcheck="false"
+                                       @bind="_forceConfirm" @bind:event="oninput" />
+                            </div>
+                        </div>
+                        <div>
+                            <button type="button" class="btn btn-danger" data-testid="move-force-commit" @onclick="ForceCommitAsync"
+                                    disabled="@(_busy || !string.Equals(_forceConfirm.Trim(), move.SourceNodeId, StringComparison.Ordinal))">
+                                Force-commit to @move.TargetNodeId
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+            else if (record.Stage == MoveStages.StoppingSource && !_view.SourceServing)
+            {
+                <p class="muted" data-testid="move-waiting-source">Waiting for @move.SourceNodeId to answer.</p>
+            }
+
+            <p class="muted">The move continues if you close this dialog; Placement on the editor shows where it is.</p>
+        }
+        else if (MoveProgress.DoneWithError(record))
+        {
+            <div class="callout callout--failed" role="alert" data-testid="move-done-error">
+                <Icon Name="state-failed" />
+                <div class="callout-body">
+                    <span>@Model.ServedName is now placed on @move.TargetNodeId, but starting it there was refused: @record.Error</span>
+                    <span>Start it now, or change its settings first (a smaller memory budget, other GPUs).</span>
+                </div>
+            </div>
+        }
+        else if (record.Stage == MoveStages.Done)
+        {
+            <div class="callout callout--ready" role="status" data-testid="move-done">
+                <Icon Name="state-ready" />
+                <div class="callout-body">
+                    @Model.ServedName is placed on @move.TargetNodeId@(move.WasRunning ? " and started there" : "").
+                    @if (move.ForceCommittedAt is not null)
+                    {
+                        <span> It was force-committed: if @move.SourceNodeId comes back, MirbadLLM stops the old instance there.</span>
+                    }
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="callout callout--failed" role="alert" data-testid="move-failed">
+                <Icon Name="state-failed" />
+                <div class="callout-body">
+                    <span>@(record.Error ?? "The move stopped.")</span>
+                    <span>Nothing changed: @Model.ServedName stays @(move.SourceNodeId.Length == 0 ? "unplaced" : $"on {move.SourceNodeId}")@(move.WasRunning ? " and is started there again" : "").</span>
+                </div>
+            </div>
+        }
+    };
+
+    private static string StepIcon(MoveStepState state) => state switch
+    {
+        MoveStepState.Done => "state-ready",
+        MoveStepState.Current => "state-starting",
+        MoveStepState.Failed => "state-failed",
+        _ => "state-stopped",
+    };
+
+    private static string StepWord(MoveStepState state) => state switch
+    {
+        MoveStepState.Done => "done",
+        MoveStepState.Current => "in progress",
+        MoveStepState.Failed => "failed",
+        _ => "to do",
+    };
+
+    private void StartPolling()
+    {
+        StopPolling();
+        _pollCts = new CancellationTokenSource();
+        _pollLoop = PollAsync(_pollCts.Token);
+    }
+
+    private void StopPolling()
+    {
+        _pollCts?.Cancel();
+        _pollCts?.Dispose();
+        _pollCts = null;
+    }
+
+    private async Task PollAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(PollInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                if (Moves is not { } moves)
+                {
+                    return;
+                }
+
+                var view = await moves.GetAsync(Model.Id, ct);
+                await InvokeAsync(async () =>
+                {
+                    if (ct.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    _view = view ?? _view;
+                    if (view is { Active: true })
+                    {
+                        _lastActiveStage = view.Record.Stage;
+                    }
+
+                    StateHasChanged();
+                    if (view is not { Active: true } && _wasActive)
+                    {
+                        _wasActive = false;
+                        await OnChanged.InvokeAsync();
+                    }
+                });
+                if (view is not { Active: true })
+                {
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // The dialog closed or the page went away.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The master is shutting down.
+        }
+    }
+
+    private async Task RefreshViewAsync()
+    {
+        if (Moves is { } moves)
+        {
+            _view = await moves.GetAsync(Model.Id) ?? _view;
+        }
+    }
+
+    private async Task ForceCommitAsync()
+    {
+        if (Moves is not { } moves || _view?.Record.Move is null)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        var request = new ModelMoveForceCommitRequest { Confirm = _forceConfirm.Trim() };
+
+        try
+        {
+            await moves.ForceCommitAsync(Model.Id, request, await CallerAsync());
+            _forceConfirm = "";
+            await RefreshViewAsync();
+            StartPolling();
+        }
+        catch (Exception ex) when (ex is MoveRefusedException or KeyNotFoundException or InvalidOperationException)
+        {
+            _error = EditorRefusals.MoveAction(ex, "force-committed");
+            await RefreshViewAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task CancelMoveAsync()
+    {
+        if (Moves is not { } moves)
+        {
+            return;
+        }
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var record = await moves.CancelAsync(Model.Id, await CallerAsync());
+            _lastActiveStage = _view?.Record.Stage ?? _lastActiveStage;
+            await RefreshViewAsync();
+            _view ??= new MoveStatusView { Record = record };
+            StartPolling();
+        }
+        catch (Exception ex) when (ex is MoveRefusedException or KeyNotFoundException or InvalidOperationException)
+        {
+            _error = EditorRefusals.MoveAction(ex, "cancelled");
+            await RefreshViewAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // ---------------------------------------------------------------- start after a move that ended with an error
+
+    private RenderFragment StartAnywayBody => __builder =>
+    {
+        if (_numbers is { } n)
+        {
+            <p data-testid="move-start-numbers">
+                @Model.ServedName needs <strong class="num">@UiFormat.GiB(n.NeedGiB)</strong>@(n.Where is { } where ? $" on {where}" : ""), but only
+                <strong class="num">@UiFormat.GiB(n.FreeAfterReserveGiB)</strong> is free after the <span class="num">@UiFormat.GiB(n.ReserveGiB)</span> reserve
+                (<span class="num">@UiFormat.GiB(n.AvailableGiB)</span> available@(n.HeldByOthersGiB > 0 ? $", {UiFormat.GiB(n.HeldByOthersGiB)} held by other starts" : "")).
+            </p>
+        }
+        else
+        {
+            <p data-testid="move-start-numbers">There isn't enough free memory for @Model.ServedName on @(Model.Placement?.NodeId ?? "its node") right now.</p>
+        }
+
+        <p class="muted">Starting anyway can push other models or programs on that node out of memory, or leave this model failing while it loads.</p>
+    };
+
+    private async Task StartModelAsync(bool force)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            await HeldModelGuard.EnsureNotHeldAsync(_ownership, Model.Id); // design §6.7, D101: an operator start
+            await (Services.GetService<ModelStartService>()?.StartAsync(Model.Id, force) ?? Runtime.StartAsync(Model.Id, force));
+            await OnChanged.InvokeAsync();
+            await CloseAsync();
+        }
+        catch (ModelBusyException ex)
+        {
+            _error = EditorMessage.Of(EditorRefusals.Runtime(ex, Model.ServedName, "start"));
+        }
+        catch (OperationCanceledException) { }
+        catch (ModelMemoryAdmissionException ex) when (!force)
+        {
+            string? node = _view?.Record.Move?.TargetNodeId ?? Model.Placement?.NodeId;
+            var gpus = Nodes.FirstOrDefault(n => string.Equals(n.Id, node, StringComparison.Ordinal))?.Gpus;
+            _numbers = AdmissionNumbers.FromRefusal(ex, node, gpus);
+            _phase = Phase.StartAnyway;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _error = EditorMessage.Of($"Couldn't start {Model.ServedName}: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // ---------------------------------------------------------------- dialog shell
+
+    private void ClearSecrets()
+    {
+        _hfTokenId = null;
+
+        _forceConfirm = "";
+    }
+
+    private async Task CloseAsync()
+    {
+        StopPolling();
+        ClearSecrets();
+        _open = false;
+        _error = null;
+        StateHasChanged();
+        await Task.CompletedTask;
+    }
+
+    private Task OnNativeCancelAsync()
+    {
+        _shown = false;
+        return CloseAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_open == _shown)
+        {
+            return;
+        }
+
+        _shown = _open;
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./interop.js");
+            await _module.InvokeVoidAsync(_open ? "showDialog" : "closeDialog", _dialog);
+        }
+        catch (JSDisconnectedException)
+        {
+            // Circuit gone; nothing to show.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        StopPolling();
+        ClearSecrets();
+        if (_pollLoop is not null)
+        {
+            try
+            {
+                await _pollLoop;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected.
+            }
+        }
+
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+                // Expected when the circuit is already gone.
+            }
+        }
+    }
+}

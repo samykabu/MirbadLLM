@@ -1,0 +1,42 @@
+/* The join / rekey command inside a dialog: long lines wrap at any character (Copy still copies the exact text), so
+   neither the dialog nor the page ever scrolls sideways, at 390px included. */
+.join-command {
+    display: grid;
+    gap: var(--ss-sp-3);
+    min-width: 0;
+}
+
+.join-command .segmented {
+    flex-wrap: wrap;
+    max-width: 100%;
+    justify-self: start;
+}
+
+.join-block {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--ss-sp-2);
+    align-items: start;
+    min-width: 0;
+}
+
+.join-code {
+    border-radius: var(--ss-radius-sm);
+    padding: var(--ss-sp-2) var(--ss-sp-3);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow-x: hidden;
+    font-family: var(--ss-font-mono);
+    font-size: var(--ss-fs-100);
+}
+
+.join-token-row {
+    display: grid;
+    gap: var(--ss-sp-1);
+    min-width: 0;
+}
+
+.join-facts code,
+.join-hash {
+    overflow-wrap: anywhere;
+}

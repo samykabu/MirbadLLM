@@ -1,0 +1,49 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* Running and waiting requests as pips (amber running, orange waiting, at most 16, eight slots minimum), always
+   followed by the two numbers, so the pips only add a glance and never carry the value alone. *@
+<span class="load" data-testid="@TestId">
+    <span class="pips" aria-hidden="true">
+        @for (int i = 0; i < _run; i++)
+        {
+            <i class="pip pip--run"></i>
+        }
+        @for (int i = 0; i < _wait; i++)
+        {
+            <i class="pip pip--wait"></i>
+        }
+        @for (int i = _run + _wait; i < MinSlots; i++)
+        {
+            <i class="pip"></i>
+        }
+    </span>
+    <span class="num">@UiFormat.Whole(Running) · @UiFormat.Whole(Waiting)</span>
+</span>
+
+@code {
+    /// <summary>Most pips drawn; the numbers carry anything above it.</summary>
+    public const int MaxPips = 16;
+
+    private const int MinSlots = 8;
+
+    /// <summary>Requests running now; NaN when not known.</summary>
+    [Parameter]
+    public double Running { get; set; }
+
+    /// <summary>Requests waiting now; NaN when not known.</summary>
+    [Parameter]
+    public double Waiting { get; set; }
+
+    [Parameter]
+    public string? TestId { get; set; }
+
+    private int _run;
+    private int _wait;
+
+    protected override void OnParametersSet()
+    {
+        _run = Pips(Running, MaxPips);
+        _wait = Pips(Waiting, MaxPips - _run);
+    }
+
+    private static int Pips(double value, int room) => UiFormat.HasValue(value) ? (int)Math.Clamp(Math.Round(value), 0, room) : 0;
+}

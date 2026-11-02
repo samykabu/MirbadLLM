@@ -1,0 +1,138 @@
+.scope {
+    display: grid;
+    gap: var(--ss-sp-2);
+    min-width: 0;
+}
+
+.scope-cap {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--ss-sp-2);
+    padding: 0 2px;
+    color: var(--ss-text-muted);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.scope-cap .num { letter-spacing: normal; text-transform: none; }
+
+/* One row of cards that scrolls sideways and snaps to a card; the scrollbar is hidden because the dots below say where
+   you are (and the rail still scrolls by touch, wheel, keyboard focus and the dots). */
+.scope-track {
+    display: flex;
+    gap: var(--ss-sp-3);
+    padding: 2px 2px var(--ss-sp-1);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x mandatory;
+    scroll-padding-inline: 2px;
+    scrollbar-width: none;
+}
+
+.scope-track::-webkit-scrollbar { display: none; }
+
+.nd-all,
+.scope-track ::deep .nd {
+    flex: 0 0 236px;
+    width: 236px;
+    min-height: 44px;
+    scroll-snap-align: start;
+}
+
+.nd-all {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    gap: 4px 12px;
+    align-items: center;
+    padding: 10px 12px;
+    color: var(--ss-text);
+    text-align: left;
+    background: var(--ss-panel);
+    border: 1px solid var(--ss-panel-edge);
+    border-radius: var(--ss-radius-lg);
+    box-shadow: var(--ss-panel-shadow);
+    cursor: pointer;
+}
+
+.nd-all:hover { box-shadow: var(--ss-shadow-2); }
+.nd-all:focus-visible { outline: 2px solid var(--ss-focus); outline-offset: 2px; }
+
+.nd-all[aria-pressed=true] {
+    border-color: var(--ss-accent-text);
+    box-shadow: 0 0 0 1px var(--ss-accent-text), var(--ss-shadow-2);
+}
+
+.nd-all-text {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.nd-all-text .muted {
+    overflow: hidden;
+    font-size: 11px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.nd-all-name {
+    font-family: var(--ss-font-mono);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* Phone-style page dots: 44px tall targets, the current dot stretched with a transform (no layout animation). */
+.scope-dots {
+    display: flex;
+    justify-content: center;
+    gap: 2px;
+    min-height: 0;
+}
+
+.scope-dots[hidden] { display: none; }
+
+.scope-dots ::deep .scope-dot {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: none;
+    border: 0;
+    border-radius: var(--ss-radius-sm);
+    cursor: pointer;
+}
+
+.scope-dots ::deep .scope-dot span {
+    display: block;
+    width: 8px;
+    height: 8px;
+    background: var(--ss-border-control);
+    border-radius: 999px;
+}
+
+.scope-dots ::deep .scope-dot.is-current span {
+    background: var(--ss-accent);
+    transform: scaleX(2.4);
+}
+
+.scope-dots ::deep .scope-dot:focus-visible { outline: 2px solid var(--ss-focus); outline-offset: -2px; }
+
+@media (pointer: coarse), (max-width: 639.98px) {
+    .scope-dots ::deep .scope-dot { width: 44px; height: 44px; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .scope-dots ::deep .scope-dot span { transition: transform var(--ss-dur) var(--ss-ease), background-color var(--ss-dur) var(--ss-ease); }
+    .nd-all { transition: box-shadow var(--ss-dur) var(--ss-ease), border-color var(--ss-dur) var(--ss-ease); }
+}
+
+@media (max-width: 639.98px) {
+    .nd-all,
+    .scope-track ::deep .nd {
+        flex-basis: min(236px, calc(100vw - 72px));
+        width: min(236px, calc(100vw - 72px));
+    }
+}

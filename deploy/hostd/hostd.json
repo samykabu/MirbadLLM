@@ -1,0 +1,68 @@
+{
+  "//": "mirbadllm-hostd seed config. Root-owned (0644) at /etc/mirbadllm/hostd.json; the controller cannot change it. On first start these entries seed the admin-managed whitelist in /var/lib/mirbadllm-hostd/whitelist.json (root, 0600); entries added here later are merged into it once. After that the Services page adds/removes units (admin password required). Units matching the compiled-in deny list (sshd, systemd-*, dbus, docker, networking, NVIDIA driver daemons...) or /etc/mirbadllm/hostd-deny.json can never be managed. discoverUsers: whose --user units are discovered. Restart the agent after editing: sudo systemctl restart mirbadllm-hostd",
+  "socket": "/run/mirbadllm-hostd/hostd.sock",
+  "discoverUsers": ["dgxuser"],
+  "services": [
+    {
+      "name": "comfyui",
+      "unit": "comfyui.service",
+      "scope": "system",
+      "displayName": "ComfyUI",
+      "description": "Image and video generation. Holds about 40 GiB of GPU memory while a workflow's models are loaded.",
+      "protected": false
+    },
+    {
+      "name": "ollama",
+      "unit": "ollama.service",
+      "scope": "system",
+      "displayName": "Ollama",
+      "description": "Embeddings for OpenViking and models for Hermes. Stopping it breaks OpenViking's embeddings until it is started again.",
+      "protected": false
+    },
+    {
+      "name": "lmstudio-server",
+      "unit": "lmstudio-server.service",
+      "scope": "user",
+      "user": "dgxuser",
+      "displayName": "LM Studio server",
+      "description": "LM Studio's llmster backend, an OpenAI-compatible API on port 1234.",
+      "protected": false
+    },
+    {
+      "name": "dgx-dashboard",
+      "unit": "dgx-dashboard.service",
+      "scope": "system",
+      "displayName": "DGX Dashboard",
+      "description": "NVIDIA's DGX Spark system dashboard.",
+      "protected": true,
+      "risk": "The DGX Dashboard is NVIDIA's console for this box. Stopping it takes the dashboard offline until someone starts it again from a shell."
+    },
+    {
+      "name": "dgx-dashboard-admin",
+      "unit": "dgx-dashboard-admin.service",
+      "scope": "system",
+      "displayName": "DGX Dashboard admin",
+      "description": "The privileged backend of the DGX Dashboard (updates, system settings).",
+      "protected": true,
+      "risk": "The DGX Dashboard's admin backend runs system updates and settings. Stopping it mid-update can leave the box half-updated."
+    },
+    {
+      "name": "rustdesk",
+      "unit": "rustdesk.service",
+      "scope": "system",
+      "displayName": "RustDesk",
+      "description": "Remote desktop into this box.",
+      "protected": true,
+      "risk": "RustDesk is the remote desktop into this box. Stopping it ends every remote desktop session, possibly including yours."
+    },
+    {
+      "name": "nvidia-dgx-telemetry",
+      "unit": "nvidia-dgx-telemetry.service",
+      "scope": "system",
+      "displayName": "NVIDIA DGX telemetry",
+      "description": "NVIDIA's DGX health and telemetry collector.",
+      "protected": true,
+      "risk": "NVIDIA DGX telemetry reports this box's health. Stopping it leaves NVIDIA's health reporting blind until it is started again."
+    }
+  ]
+}

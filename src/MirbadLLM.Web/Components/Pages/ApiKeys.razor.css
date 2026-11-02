@@ -1,0 +1,17 @@
+/* API keys: a short line on what the two scopes do, then the keys; Add key opens the create dialog. */
+.keys-intro {
+    max-width: 75ch;
+    margin-bottom: var(--ss-sp-4);
+    color: var(--ss-text-muted);
+    text-wrap: pretty;
+}
+
+.keys-add { margin-left: auto; }
+.keys-created { font-size: var(--ss-fs-100); margin-top: var(--ss-sp-1); font-weight: 400; }
+.data-table .state { background: transparent; border: 0; padding: 0; }
+
+.key-dialog h2 { margin: 0; font-size: 17px; font-weight: 600; }
+/* ::deep because EditForm renders the <form> itself, so it never carries this page's scope attribute. */
+.key-dialog ::deep .create-key-form { display: grid; gap: var(--ss-sp-3); grid-template-columns: minmax(0, 1fr); }
+.key-dialog .created-key { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ss-sp-2); margin-top: var(--ss-sp-2); }
+.key-dialog .created-key code { overflow-wrap: anywhere; }

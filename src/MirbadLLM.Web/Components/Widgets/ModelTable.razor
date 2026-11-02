@@ -1,0 +1,282 @@
+@namespace MirbadLLM.Web.Components.Widgets
+@using MirbadLLM.Web.Components.Ui
+@using MirbadLLM.Orchestration
+@* The Overview's leaderboard: one row per Ready model with its live figures and its rank in the current order, models
+   that are not running folded into one row. Rows keep their order between refreshes, so a live number
+   never makes a row jump; they re-sort only when a header is clicked. A row (or its name button, for the keyboard)
+   opens the model's readout; Esc closes it. *@
+<section class="panel models" aria-labelledby="models-title" data-testid="model-table" @onkeydown="OnKeyDown">
+    <div class="models-head">
+        <h2 id="models-title" class="models-cap">@Title</h2>
+        <span class="muted models-note" data-testid="model-table-note">@Note · select a row for the full readout</span>
+        @if (OnClear.HasDelegate)
+        {
+            <button type="button" class="btn btn-ghost btn-sm models-clear" data-testid="model-table-clear" @onclick="OnClear">Show all nodes</button>
+        }
+    </div>
+    <div class="models-scroll">
+        <table class="data-table models-table">
+            <caption class="visually-hidden">Models, @Note</caption>
+            <thead>
+                <tr>
+                    @foreach (var column in Columns)
+                    {
+                        <th scope="col" class="@(column.Right ? "r" : null)" aria-sort="@AriaSort(column.Key)">
+                            <button type="button" data-testid="@($"model-sort-{column.Key}")" @onclick="() => SortBy(column.Key)">
+                                @column.Label@(column.Key == _sortKey ? (_ascending ? " ▲" : " ▼") : "")
+                            </button>
+                        </th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @if (Rows.Count == 0)
+                {
+                    <tr class="models-empty"><td colspan="@Columns.Length" data-testid="monitoring-no-models">@EmptyText</td></tr>
+                }
+                @foreach (var (row, rank) in OrderedRows().Select((r, i) => (r, i + 1)))
+                {
+                    bool selected = row.Id == SelectedId;
+                    <tr class="m @(selected ? "is-selected" : null)" data-testid="@($"model-row-{row.Id}")" @onclick="() => ToggleAsync(row.Id)">
+                        <td class="col-primary">
+                            <div class="mn">
+                                <span class="sw" style="@($"background:{row.Color}")"></span>
+                                <span class="rk num" data-testid="@($"model-rank-{row.Id}")" aria-label="@($"Rank {rank}")">#@rank</span>
+                                <button type="button" class="mn-name" aria-expanded="@(selected ? "true" : "false")" @ref="_rowButtons[row.Id]"
+                                        data-testid="@($"model-row-open-{row.Id}")" @onclick="() => ToggleAsync(row.Id)" @onclick:stopPropagation="true">
+                                    @row.Name
+                                </button>
+                                @if (row.Where is { } where)
+                                {
+                                    <span class="mn-where"><Icon Name="server" /> @where</span>
+                                }
+                            </div>
+                        </td>
+                        <td data-label="State">
+                            <span class="state state--@row.StateTone" data-testid="@($"model-row-state-{row.Id}")"><Icon Name="@row.StateIcon" /> <span>@row.StateText</span></span>
+                        </td>
+                        <td data-label="@(row.Pooling ? "Input tok/s" : "Tok/s")" class="r">
+                            <div class="tk">
+                                <b class="num" data-testid="@($"model-tps-{row.Id}")">
+                                    <span @key="UiFormat.Number(row.TokensPerSecond)" class="tick">@UiFormat.Number(row.TokensPerSecond)</span>@if (row.Pooling)
+                                    {
+                                        <span class="tk-in" title="Input (prompt) tokens: embedding and reranking models generate none">in</span>
+                                    }
+                                </b>
+                                <span class="tk-spark"><Sparkline Values="row.Trend" Color="@row.Color" Label="@($"{row.Name} tok/s")" EmptyText="" /></span>
+                            </div>
+                        </td>
+                        <td data-label="Run · wait"><LoadPips Running="row.Running" Waiting="row.Waiting" TestId="@($"model-load-{row.Id}")" /></td>
+                        <td data-label="KV cache" class="r">
+                            <span class="kvr">
+                                <RingGauge Percent="row.KvPercent" Label="KV cache" Size="22" Stroke="5.7" />
+                                <span class="num" data-testid="@($"model-kv-{row.Id}")">@UiFormat.Percent(row.KvPercent)</span>
+                            </span>
+                        </td>
+                        <td data-label="TTFT p95" class="r num" data-testid="@($"model-ttft-{row.Id}")">@Ms(row.TtftP95Seconds)</td>
+                        <td data-label="Req · err" class="r num rq" data-testid="@($"model-req-{row.Id}")">
+                            <span>
+                                @UiFormat.Whole(row.Requests)
+                                <small>
+                                    @if (row.ErrorPercent > ModelTable.ErrorWarnPercent)
+                                    {
+                                        <span class="warn" title="Error rate above 5%"><Icon Name="warning" /> @UiFormat.Percent(row.ErrorPercent) err</span>
+                                    }
+                                    else if (row.ErrorPercent is not null)
+                                    {
+                                        @($"{UiFormat.Percent(row.ErrorPercent)} err")
+                                    }
+                                    else
+                                    {
+                                        <span title="The router has no requests for this model since controller start">no data</span>
+                                    }
+                                </small>
+                            </span>
+                        </td>
+                    </tr>
+                }
+                @if (NotRunning.Count > 0)
+                {
+                    <tr class="fold @(_showOff ? "is-open" : null)">
+                        <td class="col-primary" colspan="@Columns.Length">
+                            <button type="button" aria-expanded="@(_showOff ? "true" : "false")" data-testid="model-table-fold" @onclick="() => _showOff = !_showOff">
+                                <Icon Name="chevron-right" /> @NotRunning.Count not running
+                            </button>
+                        </td>
+                    </tr>
+                    @if (_showOff)
+                    {
+                        @foreach (var off in NotRunning)
+                        {
+                            <tr class="off" data-testid="@($"model-off-{off.Id}")">
+                                <td class="col-primary">
+                                    <div class="mn">
+                                        <span class="sw sw--off"></span>
+                                        <span class="mn-label">@off.Name</span>
+                                    </div>
+                                </td>
+                                <td data-label="State"><StateBadge State="off.State" /></td>
+                                <td colspan="5" data-label="Where">
+                                    @if (off.Where is { } where)
+                                    {
+                                        <span class="mn-where"><Icon Name="server" /> @where</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+@code {
+    /// <summary>Router error share above which a row's errors turn orange with a warning icon.</summary>
+    public const double ErrorWarnPercent = 5;
+
+    /// <summary>One Ready model's live figures; every value already in its display unit.</summary>
+    /// <param name="Id">Model id.</param>
+    /// <param name="Name">Served name.</param>
+    /// <param name="Color">The model's colour (swatch, sparkline, the river and the node beads).</param>
+    /// <param name="Where">"dgx · vLLM", or the runtime alone on a one-node install.</param>
+    /// <param name="StateText">"Ready", "Busy", "Benchmarking"…</param>
+    /// <param name="StateIcon">Its icon.</param>
+    /// <param name="StateTone">Its <c>.state--*</c> tone.</param>
+    /// <param name="Pooling">Embedding or reranking: the rate is input tokens, marked "in".</param>
+    /// <param name="TokensPerSecond">Generated (or, pooling, input) tokens per second now; NaN when not known.</param>
+    /// <param name="Trend">That rate over the window, null for gaps.</param>
+    /// <param name="Running">Running requests.</param>
+    /// <param name="Waiting">Waiting requests.</param>
+    /// <param name="KvPercent">KV cache use, 0–100.</param>
+    /// <param name="TtftP95Seconds">Time to first token, p95.</param>
+    /// <param name="Requests">Router requests since controller start.</param>
+    /// <param name="ErrorPercent">Their failed share.</param>
+    public sealed record Row(
+        string Id,
+        string Name,
+        string Color,
+        string? Where,
+        string StateText,
+        string StateIcon,
+        string StateTone,
+        bool Pooling,
+        double TokensPerSecond,
+        IReadOnlyList<double?> Trend,
+        double Running,
+        double Waiting,
+        double? KvPercent,
+        double? TtftP95Seconds,
+        double? Requests,
+        double? ErrorPercent);
+
+    /// <summary>A registered model in the scope that is not Ready.</summary>
+    public sealed record Off(string Id, string Name, ModelState State, string? Where);
+
+    private sealed record Column(string Key, string Label, bool Right, Func<Row, IComparable> Value);
+
+    private static readonly Column[] Columns =
+    [
+        new("name", "Model", false, r => r.Name.ToLowerInvariant()),
+        new("state", "State", false, r => r.StateText),
+        new("tps", "Tok/s", true, r => Or(r.TokensPerSecond)),
+        new("load", "Run · wait", false, r => Or(r.Running) + (Or(r.Waiting) / 1000)),
+        new("kv", "KV cache", true, r => Or(r.KvPercent)),
+        new("ttft", "TTFT p95", true, r => Or(r.TtftP95Seconds)),
+        new("req", "Req · err", true, r => Or(r.Requests)),
+    ];
+
+    [Parameter]
+    public IReadOnlyList<Row> Rows { get; set; } = [];
+
+    /// <summary>The panel's caps heading.</summary>
+    [Parameter]
+    public string Title { get; set; } = "Running models";
+
+    [Parameter]
+    public IReadOnlyList<Off> NotRunning { get; set; } = [];
+
+    /// <summary>The model whose readout is open.</summary>
+    [Parameter]
+    public string? SelectedId { get; set; }
+
+    /// <summary>Raised with the model to open, or null to close.</summary>
+    [Parameter]
+    public EventCallback<string?> SelectedIdChanged { get; set; }
+
+    /// <summary>Where the rows come from: "on every node", "on dgx".</summary>
+    [Parameter]
+    public string Note { get; set; } = "";
+
+    [Parameter]
+    public string EmptyText { get; set; } = "No model is Ready";
+
+    /// <summary>When set, a "Show all nodes" button clears the node filter.</summary>
+    [Parameter]
+    public EventCallback OnClear { get; set; }
+
+    private readonly Dictionary<string, ElementReference> _rowButtons = new(StringComparer.Ordinal);
+    private List<string>? _order;
+    private string _sortKey = "tps";
+    private bool _ascending;
+    private bool _showOff;
+
+    /// <summary>Moves focus to a row's name button (after its readout closes).</summary>
+    public async Task FocusRowAsync(string id)
+    {
+        if (_rowButtons.TryGetValue(id, out var button))
+        {
+            await button.FocusAsync(preventScroll: true);
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        var ids = Rows.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+        if (_order is null)
+        {
+            _order = Sorted(Rows);
+            return;
+        }
+
+        // Keep the order; drop rows that left, append new ones (sorted among themselves) at the end.
+        _order.RemoveAll(id => !ids.Contains(id));
+        _order.AddRange(Sorted(Rows.Where(r => !_order.Contains(r.Id))));
+    }
+
+    private IEnumerable<Row> OrderedRows()
+    {
+        var byId = Rows.ToDictionary(r => r.Id, StringComparer.Ordinal);
+        return (_order ?? []).Where(byId.ContainsKey).Select(id => byId[id]);
+    }
+
+    private void SortBy(string key)
+    {
+        _ascending = key == _sortKey ? !_ascending : key is "name" or "state";
+        _sortKey = key;
+        _order = Sorted(Rows);
+    }
+
+    private List<string> Sorted(IEnumerable<Row> rows)
+    {
+        var value = Columns.First(c => c.Key == _sortKey).Value;
+        var sorted = _ascending ? rows.OrderBy(value) : rows.OrderByDescending(value);
+        return [.. sorted.ThenBy(r => r.Id, StringComparer.Ordinal).Select(r => r.Id)];
+    }
+
+    private string? AriaSort(string key) => key != _sortKey ? null : _ascending ? "ascending" : "descending";
+
+    private Task ToggleAsync(string id) => SelectedIdChanged.InvokeAsync(id == SelectedId ? null : id);
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && SelectedId is not null)
+        {
+            await SelectedIdChanged.InvokeAsync(null);
+        }
+    }
+
+    private static double Or(double? value) => UiFormat.HasValue(value) ? value!.Value : -1;
+
+    private static string Ms(double? seconds) => UiFormat.HasValue(seconds) ? $"{UiFormat.Whole(seconds * 1000)} ms" : UiFormat.Missing;
+}

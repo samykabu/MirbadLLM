@@ -1,0 +1,9 @@
+{
+  "scenario": "unknown_model",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "status": 404,
+  "contentType": "application/json; charset=utf-8",
+  "retryAfter": null,
+  "body": "{\u0022error\u0022:{\u0022message\u0022:\u0022Model \u0027nonexistent-model\u0027 is not registered.\u0022,\u0022type\u0022:\u0022invalid_request_error\u0022,\u0022code\u0022:\u0022model_not_found\u0022}}"
+}

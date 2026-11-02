@@ -1,0 +1,506 @@
+@implements IAsyncDisposable
+@using System.Globalization
+@using System.Security.Claims
+@using MirbadLLM.Agent.Contracts
+@using MirbadLLM.Orchestration.Audit
+@using MirbadLLM.Orchestration.Fencing
+@inject IServiceProvider Services
+@* App-wide fencing notices (design §12.1 "Fencing banner", §4.2 step 3; MN-121), from IFencingCoordinator (MN-115):
+   - a failed-state banner while FencingStatus.ActionNeeded: nodes that answer stale_master/competing_master (Take over…)
+     and nodes that returned holding an epoch not below this master's (Continue takeover…, per node);
+   - a red warning while MirbadLLM:Fencing:Takeover is set (TakeoverOptionSet, W1 review MN-090 / D90).
+   Both dialogs require a typed confirmation and the signed-in session, like POST /api/fencing/takeover[/continue].
+   Nodes that are only Pending takeover (unreachable during the takeover) or Unknown (right after a takeover or
+   continuation, until their next /info, D90) need no action and show nothing. With no fencing issue nothing renders. *@
+@if (_status is { TakeoverOptionSet: true } optionStatus)
+{
+    <div class="takeover-banner takeover-banner--option" role="alert" data-testid="takeover-option-warning">
+        <span class="takeover-icon" aria-hidden="true"><Icon Name="warning" /></span>
+        <div class="takeover-text">
+            <strong>MirbadLLM__Fencing__Takeover is still set.</strong>
+            <span data-testid="takeover-option-text">@OptionText(optionStatus)</span>
+        </div>
+    </div>
+}
+
+@if (_status is { ActionNeeded: true } status)
+{
+    var blocked = status.Nodes.Where(n => n.State is NodeFencingState.Stale or NodeFencingState.Competing).ToList();
+    var returning = status.Nodes.Where(n => n.State == NodeFencingState.NeedsContinuation).ToList();
+    <div class="takeover-banner" role="alert" data-testid="takeover-banner">
+        <span class="takeover-icon" aria-hidden="true"><Icon Name="state-failed" /></span>
+        <div class="takeover-text">
+            <strong data-testid="takeover-banner-title">@Headline(blocked.Count, returning.Count)</strong>
+            <span>
+                This master runs epoch <span class="num" data-testid="takeover-banner-epoch">@status.Epoch</span>.
+                @(blocked.Count + returning.Count == 1 ? "That node runs nothing for it and its models stay unreachable" : "Those nodes run nothing for it and their models stay unreachable")
+                until you act.
+            </span>
+            <ul class="takeover-nodes" data-testid="takeover-banner-nodes">
+                @foreach (var node in blocked.Concat(returning))
+                {
+                    <li data-testid="takeover-node" data-node="@node.NodeId">
+                        <span class="takeover-node-name">@NameOf(node.NodeId)</span>
+                        <span class="takeover-node-reason" data-testid="takeover-node-reason">@ReasonOf(node, status)</span>
+                    </li>
+                }
+            </ul>
+        </div>
+        <div class="takeover-actions">
+            @if (blocked.Count > 0)
+            {
+                <button type="button" class="btn btn-sm btn-outline-danger" data-testid="takeover-open" @onclick="OpenTakeover">
+                    Take over…
+                </button>
+            }
+            @foreach (var node in returning)
+            {
+                <button type="button" class="btn btn-sm btn-outline-danger" data-testid="@($"continue-open-{node.NodeId}")"
+                        @onclick="() => OpenContinue(node)">
+                    Continue takeover for @NameOf(node.NodeId)…
+                </button>
+            }
+        </div>
+    </div>
+}
+
+@if (_notice is not null)
+{
+    <div class="takeover-banner takeover-banner--done" role="status" data-testid="takeover-done">
+        <span class="takeover-icon" aria-hidden="true"><Icon Name="state-ready" /></span>
+        <div class="takeover-text"><span>@_notice</span></div>
+        <div class="takeover-actions">
+            <button type="button" class="icon-btn" aria-label="Dismiss" data-testid="takeover-done-dismiss" @onclick="() => _notice = null">
+                <Icon Name="close" />
+            </button>
+        </div>
+    </div>
+}
+
+<ConfirmDialog @bind-Open="_takeoverOpen" Title="Take over the nodes? Only if the previous master is stopped"
+               ConfirmLabel="@(_running ? "Taking over…" : "Take over")" Destructive="true" CloseOnConfirm="false"
+               ConfirmDisabled="@(!CanConfirmTakeover)" OnConfirm="TakeOverAsync" OnCancel="ClearInputs"
+               TestId="takeover-dialog" ConfirmTestId="takeover-confirm">
+    @if (_status is { } s)
+    {
+        <ul class="takeover-plan" data-testid="takeover-plan">
+            <li>
+                This master's epoch moves from <span class="num">@s.Epoch</span> to at least
+                <span class="num" data-testid="takeover-plan-epoch">@TakeoverEpoch(s)</span> (above every agent that answers), saved in
+                master.json before any agent sees it. From then on those agents accept commands only from this master.
+            </li>
+            <li>
+                A master that still runs elsewhere loses these nodes. If it is not stopped, both masters keep taking the nodes
+                from each other and models restart under both.
+            </li>
+            <li>
+                A node that does not answer within <span class="num">@InfoTimeoutText</span> becomes Pending takeover and serves
+                nothing until it returns.
+            </li>
+        </ul>
+    }
+    @if (!_loginEnabled)
+    {
+        <div class="callout callout--failed" data-testid="takeover-login-disabled">
+            <Icon Name="lock" />
+            <div class="callout-body">@LoginDisabledText</div>
+        </div>
+    }
+    else
+    {
+        <div class="field confirm-field">
+            <label class="field-label" for="takeover-confirm-input">Type <code>@TakeoverConfirmations.PreviousMasterStopped</code> to confirm</label>
+            <input id="takeover-confirm-input" class="form-control" autocomplete="off" autocapitalize="off" spellcheck="false"
+                   data-testid="takeover-confirm-input" value="@_typed" @oninput="e => _typed = e.Value?.ToString() ?? string.Empty" />
+        </div>
+    }
+    @if (_error is not null)
+    {
+        <div class="callout callout--failed" role="alert" data-testid="takeover-error">
+            <Icon Name="state-failed" /><div class="callout-body">@_error</div>
+        </div>
+    }
+</ConfirmDialog>
+
+<ConfirmDialog @bind-Open="_continueOpen" Title="@($"Continue the takeover for {NameOf(_continueNode?.NodeId ?? "")}? Only if every other master is stopped")"
+               ConfirmLabel="@(_running ? "Continuing…" : "Continue takeover")" Destructive="true" CloseOnConfirm="false"
+               ConfirmDisabled="@(!CanConfirmContinue)" OnConfirm="ContinueAsync" OnCancel="ClearInputs"
+               TestId="continue-dialog" ConfirmTestId="continue-confirm">
+    @if (_continueNode is { } node && _status is { } cs)
+    {
+        <ul class="takeover-plan" data-testid="continue-plan">
+            <li>
+                @NameOf(node.NodeId) was unreachable during takeover <code>@_continueTakeoverId</code> and returned holding epoch
+                <span class="num" data-testid="continue-agent-epoch">@EpochText(node.AgentEpoch)</span>, not below this master's
+                <span class="num">@cs.Epoch</span>: another master drove it after this master's data was saved.
+            </li>
+            <li>
+                Continuing raises this master's epoch to <span class="num" data-testid="continue-plan-epoch">@EpochText(node.AgentEpoch + 1)</span>;
+                @NameOf(node.NodeId) then accepts commands only from this master. If that other master still runs, it loses
+                @NameOf(node.NodeId) and the two take it from each other.
+            </li>
+        </ul>
+    }
+    @if (!_loginEnabled)
+    {
+        <div class="callout callout--failed" data-testid="continue-login-disabled">
+            <Icon Name="lock" />
+            <div class="callout-body">@LoginDisabledText</div>
+        </div>
+    }
+    else
+    {
+        <div class="field confirm-field">
+            <label class="field-label" for="continue-confirm-input">Type the node id <code>@_continueNode?.NodeId</code> to confirm</label>
+            <input id="continue-confirm-input" class="form-control" autocomplete="off" autocapitalize="off" spellcheck="false"
+                   data-testid="continue-confirm-input" value="@_typed" @oninput="e => _typed = e.Value?.ToString() ?? string.Empty" />
+        </div>
+    }
+    @if (_error is not null)
+    {
+        <div class="callout callout--failed" role="alert" data-testid="continue-error">
+            <Icon Name="state-failed" /><div class="callout-body">@_error</div>
+        </div>
+    }
+</ConfirmDialog>
+
+@code {
+    private const string LoginDisabledText =
+        "Admin login is disabled (no MirbadLLM__AdminPassword), so a signed-in session is required. Set an admin password " +
+        "and restart MirbadLLM, or create the takeover flag file {DataPath}/takeover after confirming the previous master is stopped.";
+
+    private IFencingCoordinator? _coordinator;
+    private INodeStatusCache? _cache;
+    private IAdminReauthenticator? _reauth;
+    private IAuditLog _audit = NullAuditLog.Instance;
+    private TimeProvider _time = TimeProvider.System;
+    private FencingOptions _fencing = new();
+    private TimeSpan _infoTimeout = new TakeoverServiceOptions().InfoTimeout;
+    private bool _loginEnabled;
+    private System.Security.Claims.ClaimsPrincipal? _user;
+    private string _actor = AuditActors.ApiCaller("unknown");
+
+    private FencingStatus? _status;
+    private long _version = -1;
+    private long _cacheVersion = -1;
+    private CancellationTokenSource? _cts;
+    private Task? _loop;
+
+    private bool _takeoverOpen;
+    private bool _continueOpen;
+    private NodeFencingStatus? _continueNode;
+    private string? _continueTakeoverId;
+    private string _typed = "";
+    private string? _error;
+    private bool _running;
+    private string? _notice;
+
+    [CascadingParameter]
+    private Task<AuthenticationState>? AuthenticationState { get; set; }
+
+    /// <summary>How often <see cref="IFencingCoordinator.Version"/> is polled (tests shorten it).</summary>
+    [Parameter]
+    public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
+
+    private bool CanConfirmTakeover =>
+        _loginEnabled && !_running &&
+        string.Equals(_typed.Trim(), TakeoverConfirmations.PreviousMasterStopped, StringComparison.OrdinalIgnoreCase);
+
+    private bool CanConfirmContinue =>
+        _loginEnabled && !_running && _continueNode is { AgentEpoch: not null } &&
+        _continueTakeoverId is not null && string.Equals(_typed.Trim(), _continueNode.NodeId, StringComparison.Ordinal);
+
+    private string InfoTimeoutText => _infoTimeout.TotalSeconds.ToString("0.#", CultureInfo.InvariantCulture) + " s";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _coordinator = Services.GetService<IFencingCoordinator>();
+        if (_coordinator is null)
+        {
+            return; // No fencing on this host: nothing to show.
+        }
+
+        _cache = Services.GetService<INodeStatusCache>();
+        _reauth = Services.GetService<IAdminReauthenticator>();
+        _loginEnabled = _reauth?.LoginEnabled ?? false;
+        _audit = Services.GetService<IAuditLog>() ?? NullAuditLog.Instance;
+        _time = Services.GetService<TimeProvider>() ?? TimeProvider.System;
+        _fencing = Services.GetService<IOptions<FencingOptions>>()?.Value ?? new FencingOptions();
+        _infoTimeout = Services.GetService<TakeoverServiceOptions>()?.InfoTimeout ?? _infoTimeout;
+
+        // One caller rule with the API (AdminCallers, W8 review MN-128): the actor is admin:{hash of the session id}, so UI
+        // and API lines of one session match.
+        AdminCaller caller = await AdminCallers.ResolveAsync(Services, AuthenticationState);
+        _user = caller.User;
+        _actor = caller.Actor;
+
+        Read();
+        _cts = new CancellationTokenSource();
+        _loop = PollAsync(_cts.Token);
+    }
+
+    /// <summary>Re-reads the status when the coordinator's or the cache's version moved; true when it did.</summary>
+    private bool Read()
+    {
+        if (_coordinator is null)
+        {
+            return false;
+        }
+
+        long version = _coordinator.Version;
+        long cacheVersion = _cache?.Version ?? 0;
+        if (version == _version && cacheVersion == _cacheVersion && _status is not null)
+        {
+            return false;
+        }
+
+        _version = version;
+        _cacheVersion = cacheVersion;
+        _status = _coordinator.GetStatus();
+        return true;
+    }
+
+    private async Task PollAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(PollInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct))
+            {
+                if (Read())
+                {
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Circuit gone.
+        }
+    }
+
+    private static string Headline(int blocked, int returning) => (blocked, returning) switch
+    {
+        (1, 0) => "A node follows another master: a takeover is needed",
+        (> 1, 0) => $"{blocked} nodes follow another master: a takeover is needed",
+        (0, 1) => "A node returned holding a higher epoch: continue the takeover for it",
+        (0, _) => $"{returning} nodes returned holding a higher epoch: continue the takeover for each",
+        _ => "Nodes refuse this master: a takeover or continuation is needed",
+    };
+
+    private string NameOf(string nodeId) =>
+        _cache?.GetNode(nodeId)?.DisplayName is { Length: > 0 } name && !string.Equals(name, nodeId, StringComparison.Ordinal)
+            ? $"{name} ({nodeId})"
+            : nodeId;
+
+    /// <summary>The cache's human reason (<see cref="NodeLiveStatus.Reasons"/>[0]); a short fallback when it has none.</summary>
+    private string ReasonOf(NodeFencingStatus node, FencingStatus status)
+    {
+        if (_cache?.GetNode(node.NodeId)?.Reasons is { Count: > 0 } reasons)
+        {
+            return reasons[0];
+        }
+
+        string epoch = EpochText(node.AgentEpoch);
+        return node.State switch
+        {
+            NodeFencingState.Competing => $"Another master drives it at epoch {epoch}.",
+            NodeFencingState.NeedsContinuation => $"Returned holding epoch {epoch}, not below this master's {status.Epoch}.",
+            _ => $"It accepted epoch {epoch} from another master.",
+        };
+    }
+
+    private static string EpochText(long? epoch) => epoch?.ToString(CultureInfo.InvariantCulture) ?? UiFormat.Missing;
+
+    /// <summary><c>max(current, every agent's known epoch) + 1</c>: the least the takeover moves to (TakeoverRules).</summary>
+    private static long TakeoverEpoch(FencingStatus status) =>
+        Math.Max(status.Epoch, status.Nodes.Select(n => n.AgentEpoch ?? 0).DefaultIfEmpty(0).Max()) + 1;
+
+    private string OptionText(FencingStatus status)
+    {
+        string? id = string.IsNullOrWhiteSpace(_fencing.TakeoverId) ? null : _fencing.TakeoverId.Trim();
+        if (id is null)
+        {
+            return "Without MirbadLLM__Fencing__TakeoverId every restart of MirbadLLM takes over the nodes again. If another " +
+                   "master runs on a copy of this data, the two keep taking the nodes from each other. Remove " +
+                   "MirbadLLM__Fencing__Takeover once the takeover is done.";
+        }
+
+        bool used = string.Equals(status.LastTakeover?.TakeoverId, id, StringComparison.Ordinal) || !status.TakeoverRequested;
+        return used
+            ? $"Its takeover {id} already completed, so the option is ignored now. Remove MirbadLLM__Fencing__Takeover and MirbadLLM__Fencing__TakeoverId."
+            : $"It asks for the one-shot takeover {id}, which runs once. Remove MirbadLLM__Fencing__Takeover and MirbadLLM__Fencing__TakeoverId once it completed.";
+    }
+
+    private void OpenTakeover()
+    {
+        ClearInputs();
+        _notice = null;
+        Read();
+        _takeoverOpen = true;
+    }
+
+    private void OpenContinue(NodeFencingStatus node)
+    {
+        ClearInputs();
+        _notice = null;
+        Read();
+        // The id and epoch the operator sees are the ones sent (409 invalid_state if either moved meanwhile).
+        _continueNode = node;
+        _continueTakeoverId = _status?.LastTakeover?.TakeoverId;
+        if (_continueTakeoverId is null)
+        {
+            _error = "No takeover has been performed on this master; there is nothing to continue.";
+        }
+
+        _continueOpen = true;
+    }
+
+    private void ClearInputs()
+    {
+        _typed = "";
+
+        _error = null;
+    }
+
+    private async Task TakeOverAsync()
+    {
+        if (_coordinator is null || _running)
+        {
+            return;
+        }
+
+        _error = null;
+        if (FencingConfirmation.CheckTakeoverConfirmation(_typed) is { } unconfirmed)
+        {
+            _error = unconfirmed.Message;
+            await RefuseAsync(AuditActions.FencingTakeover, null, null, unconfirmed);
+            return;
+        }
+
+        if (await ReauthenticateAsync(AuditActions.FencingTakeover, null, null, "Nothing was taken over.") is { } refused)
+        {
+            _error = refused;
+            return;
+        }
+
+        _running = true;
+        try
+        {
+            TakeoverRecord record = await _coordinator.TakeOverAsync(_actor);
+            _takeoverOpen = false;
+            ClearInputs();
+            _notice = string.Create(CultureInfo.InvariantCulture,
+                $"Takeover {record.TakeoverId} done: this master now runs epoch {record.Epoch}. Nodes reconnect on their next check; ") +
+                (record.Unreachable.Count == 0
+                    ? "nothing else to do."
+                    : $"{string.Join(", ", record.Unreachable.Select(NameOf))} did not answer and show Pending takeover until they return. Nothing to do now.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            _error = ex.Message; // 409 invalid_state; the coordinator wrote the audit line.
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _error = $"The takeover failed: {ex.Message} The epoch is unchanged unless the log says otherwise.";
+        }
+        finally
+        {
+            _running = false;
+            Read();
+        }
+    }
+
+    private async Task ContinueAsync()
+    {
+        if (_coordinator is null || _running || _continueNode is not { } node)
+        {
+            return;
+        }
+
+        _error = null;
+        if (_continueTakeoverId is not { } takeoverId || node.AgentEpoch is not { } agentEpoch)
+        {
+            _error = "This node has nothing to continue. Reload the page.";
+            return;
+        }
+
+        if (FencingConfirmation.CheckContinueConfirmation(_typed, node.NodeId) is { } unconfirmed)
+        {
+            _error = unconfirmed.Message;
+            await RefuseAsync(AuditActions.FencingContinue, node.NodeId, takeoverId, unconfirmed);
+            return;
+        }
+
+        if (await ReauthenticateAsync(AuditActions.FencingContinue, node.NodeId, takeoverId, "Nothing was continued.") is { } refused)
+        {
+            _error = refused;
+            return;
+        }
+
+        _running = true;
+        try
+        {
+            TakeoverRecord record = await _coordinator.ContinueAsync(node.NodeId, takeoverId, agentEpoch, _actor);
+            _continueOpen = false;
+            ClearInputs();
+            // The record keeps the takeover's own epoch; the continuation raised the master's (agentEpoch + 1 or more).
+            long epoch = _coordinator.GetStatus().Epoch;
+            _notice = string.Create(CultureInfo.InvariantCulture,
+                $"Takeover {record.TakeoverId} continued for {NameOf(node.NodeId)}: this master now runs epoch {epoch}. ") +
+                "It may show Pending takeover for a few seconds until its next check; nothing else to do.";
+        }
+        catch (InvalidOperationException ex)
+        {
+            _error = ex.Message; // 409 invalid_state (moved epoch, not the latest takeover, no longer blocked); audited.
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _error = $"The continuation failed: {ex.Message}";
+        }
+        finally
+        {
+            _running = false;
+            Read();
+        }
+    }
+
+    /// <summary>
+    /// The API's session check (<see cref="FencingConfirmation.Reauthenticate"/>) with its refused audit line;
+    /// the text shown, or null when authorized.
+    /// </summary>
+    private async Task<string?> ReauthenticateAsync(string action, string? nodeId, string? target, string nothingDone)
+    {
+        FencingRefusal? refusal = FencingConfirmation.Reauthenticate(_reauth, _user);
+
+        if (refusal is null)
+        {
+            return null;
+        }
+
+        await RefuseAsync(action, nodeId, target, refusal);
+        return refusal.Outcome == AdminReauthOutcome.LoginDisabled ? LoginDisabledText : $"{refusal.Message} {nothingDone}";
+    }
+
+    /// <summary>The refused line the fencing API writes for the same refusal (the coordinator writes the others).</summary>
+    private Task RefuseAsync(string action, string? nodeId, string? target, FencingRefusal refusal) =>
+        FencingConfirmation.AuditRefusedAsync(_audit, _time, _actor, action, nodeId, target, refusal);
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts?.Cancel();
+        if (_loop is not null)
+        {
+            try
+            {
+                await _loop;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected.
+            }
+        }
+
+        _cts?.Dispose();
+    }
+}

@@ -1,0 +1,29 @@
+{
+  "//": "mirbadllm-agent on the DGX Spark (P1, topology a; MN-041). Baked into the agent image as /etc/mirbadllm-agent/agent.json. Paths are as the agent CONTAINER sees them, except *HostPath (bind sources Docker uses for model and download containers). deploy/compose.multinode.yaml overrides the host-specific values with MIRBADLLM_AGENT_Agent__* variables (ModelsHostPath, CacheHostPath, MemoryReserveGiB, DownloadHelperImage). Keeps today's controller settings 1:1 (plan §3.6 W4 notes). MemoryModel Unified (P2, D102): the GB10's admission, /status and capability flags stay P1 whatever nvidia-smi reports.",
+  "Agent": {
+    "NodeId": "dgx",
+    "StateDirectory": "/var/lib/mirbadllm-agent",
+    "Port": 9443,
+    "ModelsRoot": "/models",
+    "ModelsHostPath": "/srv/mirbadllm/models",
+    "CacheRoot": "/cache",
+    "CacheHostPath": "/srv/mirbadllm/cache",
+    "DockerEndpoint": "unix:///var/run/docker.sock",
+    "DockerNetwork": "mirbadllm",
+    "UseContainerNetwork": true,
+    "PortRangeStart": 8101,
+    "MemoryReserveGiB": 8,
+    "MemoryModel": "Unified",
+    "AllowTagPulls": true,
+    "HostdSocket": "/run/mirbadllm-hostd/hostd.sock",
+    "HostdExpected": true,
+    "ManageSystemdUnits": true,
+    "ManageContainers": true,
+    "ManageBackupMount": true,
+    "MasterContainerName": "mirbadllm",
+    "AgentContainerName": "mirbadllm-agent",
+    "BootstrapDirectory": "/run/mirbadllm-bootstrap",
+    "Addresses": [ "mirbadllm-agent" ],
+    "ShutdownTimeout": "00:00:30"
+  }
+}

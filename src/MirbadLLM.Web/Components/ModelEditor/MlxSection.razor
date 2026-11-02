@@ -1,0 +1,322 @@
+@namespace MirbadLLM.Web.Components.ModelEditor
+@using System.Globalization
+@using MirbadLLM.Orchestration.Multinode
+@* The MLX settings of the model editor (docs/macos/implementation-plan.md, Phase 3 "UI"), shown instead of the vLLM
+   sections when the model's runtime is MLX: context the budget covers, parallel requests, prompt cache, answer length,
+   KV cache bits, chat template arguments, trust remote code, draft model, adapter; the memory budget with the estimate
+   from the checkpoint folder (MlxArgsBuilder.Estimate, recomputed on every change); the mlx-lm version (node default or a
+   pinned one, RuntimeCapability.Versions) and the extra args with the flags a save refuses (MlxFlags). Laid out like
+   LlamaCppSection, with the same design-system classes. *@
+
+<section class="panel form-section" aria-labelledby="sec-mlx" data-testid="mlx-section">
+    <div class="form-section-intro">
+        <h2 id="sec-mlx">MLX settings</h2>
+        <p>Each setting is an mlx_lm.server argument: a running model picks changes up when it restarts.</p>
+    </div>
+    <div class="field-grid">
+        <div class="field">
+            <FieldHelp Label="Context size" For="mlx-context" Help="@MlxFieldHelp.ContextSize" />
+            <input type="number" class="form-control num" id="mlx-context" data-testid="mlx-context" min="1"
+                   aria-describedby="mlx-context-hint" value="@Form.ContextSize.ToString(CultureInfo.InvariantCulture)"
+                   @onchange="e => SetIntAsync(e, v => Form.ContextSize = v)" />
+            <div class="field-hint" id="mlx-context-hint">
+                Tokens per request the budget covers@(Inspection?.MaxPositionEmbeddings is { } trained ? $" (the checkpoint's maximum is {trained.ToString("N0", CultureInfo.InvariantCulture)})" : ""). mlx_lm.server does not enforce it: a longer request is still served.
+            </div>
+        </div>
+        <div class="field">
+            <FieldHelp Label="Parallel requests" For="mlx-parallel" Help="@MlxFieldHelp.Parallel" />
+            <input type="number" class="form-control num" id="mlx-parallel" data-testid="mlx-parallel" min="1" max="@MlxArgsBuilder.MaxParallel"
+                   value="@Form.Parallel.ToString(CultureInfo.InvariantCulture)" @onchange="e => SetIntAsync(e, v => Form.Parallel = v)" />
+        </div>
+        <div class="field">
+            <FieldHelp Label="Prompt cache (GiB)" For="mlx-prompt-cache" Help="@MlxFieldHelp.PromptCache" />
+            <input type="number" class="form-control num" id="mlx-prompt-cache" data-testid="mlx-prompt-cache" min="0" step="0.1"
+                   value="@Form.PromptCacheGiB.ToString("0.##", CultureInfo.InvariantCulture)" @onchange="SetPromptCacheAsync" />
+        </div>
+        <div class="field">
+            <FieldHelp Label="Default answer length" For="mlx-max-tokens" Help="@MlxFieldHelp.MaxTokens" />
+            <input type="number" class="form-control num" id="mlx-max-tokens" data-testid="mlx-max-tokens" min="1" placeholder="Default (512)"
+                   value="@(Form.MaxTokens?.ToString(CultureInfo.InvariantCulture) ?? "")" @onchange="e => SetOptionalIntAsync(e, v => Form.MaxTokens = v)" />
+        </div>
+        <div class="field">
+            <FieldHelp Label="KV cache bits" For="mlx-kv-bits" Help="@MlxFieldHelp.KvBits" />
+            <select class="form-select num" id="mlx-kv-bits" data-testid="mlx-kv-bits" @bind="Form.KvBits" @bind:after="ChangedAsync"
+                    aria-describedby="mlx-kv-bits-hint">
+                <option value="">Full precision</option>
+                <option value="8">8-bit</option>
+                <option value="4">4-bit</option>
+            </select>
+            <div class="field-hint" id="mlx-kv-bits-hint" data-testid="mlx-kv-bits-hint">
+                @(Form.KvBits.Length > 0 ? "A quantized cache serves one request at a time: Parallel requests no longer apply." : "4 or 8 bits shrink the cache, but serve one request at a time.")
+            </div>
+        </div>
+        <div class="field field--wide">
+            <FieldHelp Label="Chat template arguments (JSON object)" For="mlx-chat-template-args" Help="@MlxFieldHelp.ChatTemplateArgs" />
+            <input class="form-control num" id="mlx-chat-template-args" data-testid="mlx-chat-template-args" placeholder="{&quot;enable_thinking&quot;: false}"
+                   autocomplete="off" spellcheck="false" aria-invalid="@(TemplateArgsProblem is null ? null : "true")"
+                   aria-describedby="@(TemplateArgsProblem is null ? null : "mlx-chat-template-args-error")"
+                   @bind="Form.ChatTemplateArgs" @bind:event="oninput" @bind:after="ChangedAsync" />
+            @if (TemplateArgsProblem is { } problem)
+            {
+                <div class="validation-message" id="mlx-chat-template-args-error" data-testid="mlx-chat-template-args-error">@problem</div>
+            }
+        </div>
+        <div class="field field--wide">
+            <FieldHelp Label="Trust remote code" For="mlx-trust-remote-code" ShowLabel="false" Help="@MlxFieldHelp.TrustRemoteCode">
+                <Leading>
+                    <div class="form-check form-switch switch-row">
+                        <input type="checkbox" class="form-check-input" role="switch" id="mlx-trust-remote-code" data-testid="mlx-trust-remote-code"
+                               aria-describedby="mlx-trust-remote-code-hint" checked="@Form.TrustRemoteCode" @onchange="e => SetTrustAsync(e.Value is true)" />
+                        <label class="form-check-label" for="mlx-trust-remote-code">Trust remote code (<code>--trust-remote-code</code>)</label>
+                    </div>
+                </Leading>
+            </FieldHelp>
+            @if (Form.TrustRemoteCode)
+            {
+                <div class="callout callout--busy" id="mlx-trust-remote-code-hint" data-testid="mlx-trust-remote-code-warning">
+                    <Icon Name="warning" />
+                    <div class="callout-body">The tokenizer runs Python code from the checkpoint folder as the agent's account on the node. Turn it on only for a checkpoint you trust.</div>
+                </div>
+            }
+            else
+            {
+                <div class="field-hint" id="mlx-trust-remote-code-hint">Off: Python code shipped in the checkpoint folder never runs.</div>
+            }
+        </div>
+        <div class="field">
+            <FieldHelp Label="Draft model folder" For="mlx-draft-model" Help="@MlxFieldHelp.DraftModel" />
+            <input class="form-control num" id="mlx-draft-model" data-testid="mlx-draft-model" placeholder="None" autocomplete="off" spellcheck="false"
+                   @bind="Form.DraftModelFolder" @bind:after="ChangedAsync" />
+        </div>
+        <div class="field">
+            <FieldHelp Label="Draft tokens" For="mlx-draft-tokens" Help="@MlxFieldHelp.DraftModel" />
+            <input type="number" class="form-control num" id="mlx-draft-tokens" data-testid="mlx-draft-tokens" min="1" placeholder="Default (3)"
+                   disabled="@string.IsNullOrWhiteSpace(Form.DraftModelFolder)"
+                   value="@(Form.NumDraftTokens?.ToString(CultureInfo.InvariantCulture) ?? "")" @onchange="e => SetOptionalIntAsync(e, v => Form.NumDraftTokens = v)" />
+        </div>
+        <div class="field field--wide">
+            <FieldHelp Label="Adapter folder" For="mlx-adapter" Help="@MlxFieldHelp.Adapter" />
+            <input class="form-control num" id="mlx-adapter" data-testid="mlx-adapter" placeholder="None" autocomplete="off" spellcheck="false"
+                   @bind="Form.AdapterFolder" @bind:after="ChangedAsync" />
+        </div>
+    </div>
+</section>
+
+<section class="panel form-section" aria-labelledby="sec-mlx-memory" data-testid="mlx-memory">
+    <div class="form-section-intro">
+        <h2 id="sec-mlx-memory">Memory</h2>
+        <p>The budget is checked against the node's free unified memory before the model starts. The estimate from the checkpoint folder updates with every field.</p>
+    </div>
+    <div class="field-grid">
+        <div class="field">
+            <FieldHelp Label="Memory budget (GiB)" For="field-memory-budget" Help="@ModelFieldHelp.MemoryBudgetGiB" />
+            <input type="number" class="form-control num" id="field-memory-budget" data-testid="field-memory-budget" min="0.1" step="0.1"
+                   aria-describedby="memory-budget-hint" value="@MemoryBudgetGiB.ToString("0.##", CultureInfo.InvariantCulture)"
+                   @onchange="SetBudgetAsync" />
+            <div class="field-hint" id="memory-budget-hint" data-testid="memory-budget-hint">
+                @if (Estimate is { } est && Math.Abs(est.BudgetGiB - MemoryBudgetGiB) > 0.005)
+                {
+                    <div class="budget-check @(MemoryBudgetGiB < est.BudgetGiB ? "budget-check--over" : null)" data-testid="memory-budget-vs-estimate">
+                        <Icon Name="@(MemoryBudgetGiB < est.BudgetGiB ? "warning" : "info")" />
+                        <span>@(MemoryBudgetGiB < est.BudgetGiB ? "Below" : "Above") the estimate of <span class="num">@UiFormat.GiB(est.BudgetGiB)</span>.</span>
+                        <button type="button" class="btn btn-sm btn-ghost" data-testid="mlx-use-estimate" @onclick="UseEstimateAsync">Use estimate</button>
+                    </div>
+                }
+                @if (Fit is { } fit)
+                {
+                    <div class="budget-check @(fit.Fits == false ? "budget-check--over" : fit.Fits == true ? "budget-check--ok" : null)" data-testid="memory-budget-fit">
+                        <Icon Name="@(fit.Fits == true ? "check" : "warning")" />
+                        <span>@fit.Message</span>
+                    </div>
+                }
+            </div>
+        </div>
+        <div class="field field--wide" aria-live="polite">
+            <span class="field-label" id="mlx-estimate-label">Estimate</span>
+            @if (Estimate is { } e)
+            {
+                <dl class="kv" aria-labelledby="mlx-estimate-label" data-testid="mlx-estimate">
+                    <dt>Weights</dt><dd data-testid="mlx-estimate-weights">@UiFormat.GiB(e.WeightsGiB)</dd>
+                    <dt>KV cache (<span class="num">@KvRequests.ToString(CultureInfo.InvariantCulture)</span> × <span class="num">@Form.ContextSize.ToString("N0", CultureInfo.InvariantCulture)</span> tokens)</dt><dd data-testid="mlx-estimate-kv">@UiFormat.GiB(e.KvGiB)</dd>
+                    <dt>Prompt cache</dt><dd data-testid="mlx-estimate-prompt-cache">@UiFormat.GiB(e.PromptCacheGiB)</dd>
+                    <dt>Overhead (Python, mlx-lm, Metal)</dt><dd data-testid="mlx-estimate-overhead">@UiFormat.GiB(e.OverheadGiB)</dd>
+                    <dt><strong>Budget</strong></dt><dd data-testid="mlx-estimate-budget"><strong>@UiFormat.GiB(e.BudgetGiB)</strong></dd>
+                </dl>
+                <div class="field-hint num" data-testid="mlx-estimate-formula">@MlxEditing.Formula(e)</div>
+                @if (Inspection is { KvBytesPerToken: <= 0 })
+                {
+                    <div class="field-hint" data-testid="mlx-estimate-no-kv">The checkpoint's config.json does not say its attention shape, so the KV cache is not counted: add room for it.</div>
+                }
+            }
+            else
+            {
+                <div class="field-hint" data-testid="mlx-estimate-none">Pick the checkpoint folder (or download it) to see the estimate.</div>
+            }
+        </div>
+    </div>
+</section>
+
+<section class="panel form-section" aria-labelledby="sec-mlx-server" data-testid="mlx-server">
+    <div class="form-section-intro">
+        <h2 id="sec-mlx-server">mlx_lm.server</h2>
+        <p>The mlx-lm release the model runs with, raw extra arguments, and whether it starts with the controller.</p>
+    </div>
+    <div class="field-grid">
+        <div class="field field--wide">
+            <FieldHelp Label="mlx-lm version" For="mlx-version" Help="@MlxFieldHelp.Version" />
+            <select class="form-select num" id="mlx-version" data-testid="mlx-version" @bind="Form.ExecutableVersion" @bind:after="ChangedAsync"
+                    aria-describedby="@(VersionHint is null ? null : "mlx-version-hint")">
+                <option value="">@LlamaCppEditing.DefaultVersionLabel(Versions)</option>
+                @foreach (var version in Versions ?? [])
+                {
+                    <option value="@version.Version" disabled="@(!version.Verified && version.Version != Form.ExecutableVersion)">@LlamaCppEditing.VersionLabel(version)</option>
+                }
+                @if (Form.ExecutableVersion.Length > 0 && !(Versions ?? []).Any(v => v.Version == Form.ExecutableVersion))
+                {
+                    <option value="@Form.ExecutableVersion">@Form.ExecutableVersion · not on the node</option>
+                }
+            </select>
+            @if (VersionHint is not null)
+            {
+                <div class="field-hint" id="mlx-version-hint" data-testid="mlx-version-hint">@VersionHint</div>
+            }
+        </div>
+        <div class="field field--wide">
+            <FieldHelp Label="Extra args (one flag per line)" For="mlx-extra-args" Help="@MlxFieldHelp.ExtraArgs" />
+            <textarea class="form-control num" id="mlx-extra-args" data-testid="mlx-extra-args" rows="3" spellcheck="false"
+                      aria-describedby="@(Refused.Count > 0 ? "mlx-extra-args-hint mlx-extra-args-error" : "mlx-extra-args-hint")"
+                      aria-invalid="@(Refused.Count > 0 ? "true" : null)" @bind="Form.ExtraArgsText" @bind:event="oninput" @bind:after="ChangedAsync"></textarea>
+            @if (Refused.Count > 0)
+            {
+                <div class="callout callout--failed" role="alert" id="mlx-extra-args-error" data-testid="mlx-extra-args-refused">
+                    <Icon Name="state-failed" />
+                    <div class="callout-body">
+                        <span>A save refuses <span class="num">@string.Join(" ", Refused)</span>: use its field above, or leave it to MirbadLLM.</span>
+                    </div>
+                </div>
+            }
+            <div class="field-hint" id="mlx-extra-args-hint" data-testid="mlx-extra-args-hint">
+                <span>Appended last, each line split at spaces. Only these flags are allowed, spelled out in full:</span>
+                <ul class="plain-list">
+                    <li><code>@string.Join(", ", MlxFlags.AllowedInExtraArgs)</code></li>
+                </ul>
+                <span>Every other flag is refused: the fields above, the flags MirbadLLM sets itself (<code>--host</code>, <code>--port</code>, <code>--model</code>), abbreviations and paths.</span>
+            </div>
+        </div>
+        <div class="field">
+            <FieldHelp Label="Auto-start on boot" For="autoStartMlx" ShowLabel="false" Help="@ModelFieldHelp.AutoStart">
+                <Leading>
+                    <div class="form-check form-switch switch-row">
+                        <input type="checkbox" class="form-check-input" role="switch" id="autoStartMlx" data-testid="mlx-autostart"
+                               checked="@AutoStart" @onchange="e => AutoStartChanged.InvokeAsync(e.Value is true)" />
+                        <label class="form-check-label" for="autoStartMlx">Start when the controller boots</label>
+                    </div>
+                </Leading>
+            </FieldHelp>
+        </div>
+    </div>
+</section>
+
+@code {
+    /// <summary>The settings being edited (changed in place; <see cref="OnChanged"/> follows every change).</summary>
+    [Parameter, EditorRequired]
+    public MlxForm Form { get; set; } = new();
+
+    /// <summary>Raised after any field changed, so the page recomputes the estimate and the fit.</summary>
+    [Parameter]
+    public EventCallback OnChanged { get; set; }
+
+    /// <summary>The checkpoint folder's inspection, when read.</summary>
+    [Parameter]
+    public ModelFolderInspection? Inspection { get; set; }
+
+    /// <summary>The live estimate of the current settings.</summary>
+    [Parameter]
+    public MlxMemoryEstimate? Estimate { get; set; }
+
+    [Parameter]
+    public double MemoryBudgetGiB { get; set; }
+
+    [Parameter]
+    public EventCallback<double> MemoryBudgetGiBChanged { get; set; }
+
+    /// <summary>The fit preview of the placement (several nodes).</summary>
+    [Parameter]
+    public NodeFitResult? Fit { get; set; }
+
+    /// <summary>The node's installed mlx-lm versions; null when unknown.</summary>
+    [Parameter]
+    public IReadOnlyList<RuntimeVersion>? Versions { get; set; }
+
+    [Parameter]
+    public bool AutoStart { get; set; }
+
+    [Parameter]
+    public EventCallback<bool> AutoStartChanged { get; set; }
+
+    private IReadOnlyList<string> Refused => MlxEditing.RefusedExtraArgs(Form.ExtraArgsText);
+
+    private string? TemplateArgsProblem => MlxEditing.ChatTemplateArgsProblem(Form.ChatTemplateArgs);
+
+    /// <summary>Requests the KV cache is counted for: one with a quantized cache.</summary>
+    private int KvRequests => Form.KvBits.Length > 0 ? 1 : Form.Parallel;
+
+    private string? VersionHint =>
+        Versions is null ? "The node has not reported its mlx-lm versions; the node's default is used."
+        : Versions.Count == 0 ? "The node reports no installed mlx-lm version."
+        : Versions.FirstOrDefault(v => v.Version == Form.ExecutableVersion) is { Verified: false }
+            ? "This version no longer matches its install manifest: the model will not start until it is repaired or another version is chosen."
+            : null;
+
+    private Task ChangedAsync() => OnChanged.InvokeAsync();
+
+    private async Task SetIntAsync(ChangeEventArgs e, Action<int> set)
+    {
+        if (int.TryParse(e.Value as string, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
+        {
+            set(value);
+        }
+
+        await ChangedAsync();
+    }
+
+    private async Task SetOptionalIntAsync(ChangeEventArgs e, Action<int?> set)
+    {
+        set(int.TryParse(e.Value as string, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value) ? value : null);
+        await ChangedAsync();
+    }
+
+    private async Task SetPromptCacheAsync(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value as string, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) && double.IsFinite(value))
+        {
+            Form.PromptCacheGiB = value;
+        }
+
+        await ChangedAsync();
+    }
+
+    private async Task SetTrustAsync(bool on)
+    {
+        Form.TrustRemoteCode = on;
+        await ChangedAsync();
+    }
+
+    private async Task SetBudgetAsync(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value as string, NumberStyles.Float, CultureInfo.InvariantCulture, out double value) && double.IsFinite(value))
+        {
+            MemoryBudgetGiB = value;
+            await MemoryBudgetGiBChanged.InvokeAsync(value);
+        }
+    }
+
+    private async Task UseEstimateAsync()
+    {
+        if (Estimate is { } estimate)
+        {
+            MemoryBudgetGiB = estimate.BudgetGiB;
+            await MemoryBudgetGiBChanged.InvokeAsync(estimate.BudgetGiB);
+        }
+    }
+}

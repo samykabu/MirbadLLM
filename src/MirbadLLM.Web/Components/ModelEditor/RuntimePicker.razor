@@ -1,0 +1,152 @@
+@namespace MirbadLLM.Web.Components.ModelEditor
+@using MirbadLLM.Orchestration.Multinode
+@* The model's Runtime option (MN-226), lifted out of PlacementSection so the single-node editor can render it too
+   (MN-239 item 3). It was gated on the fleet having more than one node, which meant a fleet of one Windows PC could
+   not create a llama.cpp model at all; the question is per node — "does this node run llama.cpp?" — so the gate is
+   LlamaCppEditing.Runtime(node). An existing model keeps its runtime (its settings belong to it); a new one picks it.
+   The ids, data-testids and DOM are the ones PlacementSection rendered, so nothing a test or the markup fixtures pin
+   has moved. *@
+@if (Node is null && ShowWithoutNode)
+{
+    @* Add model before a node is chosen: both runtimes are named, neither can be picked yet. *@
+    <div class="field">
+        <FieldHelp Label="Runtime" For="placement-runtime-pending" ShowLabel="false" Help="@LlamaCppFieldHelp.Runtime">
+            <Leading><span class="field-label" id="placement-runtime-label">Runtime</span></Leading>
+        </FieldHelp>
+        <div class="segmented" role="radiogroup" aria-labelledby="placement-runtime-label" aria-describedby="placement-runtime-hint"
+             data-testid="placement-runtime-pending">
+            <label class="segmented-option segmented-option--disabled">
+                <input type="radio" name="placement-runtime" id="placement-runtime-pending" value="vllm" checked disabled />
+                vLLM
+            </label>
+            <label class="segmented-option segmented-option--disabled">
+                <input type="radio" name="placement-runtime" value="llamacpp" disabled />
+                llama.cpp
+            </label>
+        </div>
+        <div class="field-hint" id="placement-runtime-hint">Choose the node first: vLLM runs on every node, llama.cpp only on nodes that report it.</div>
+    </div>
+}
+else if (Node is not null)
+{
+    var llamaCpp = LlamaCppEditing.Runtime(Node);
+    var mlx = MlxEditing.Runtime(Node);
+    bool offerLlamaCpp = llamaCpp is not null || IsLlamaCpp;
+    @* MLX (docs/macos/implementation-plan.md, Phase 3) is offered only by a node that reports it (an Apple Silicon node),
+       or kept by a model that already is one; every other node renders exactly as before. *@
+    bool offerMlx = mlx is not null || IsMlx;
+    bool offerChoice = offerLlamaCpp || offerMlx;
+    <div class="field">
+        <FieldHelp Label="Runtime" For="placement-runtime" ShowLabel="false" Help="@(offerMlx ? MlxFieldHelp.Runtime : offerLlamaCpp ? LlamaCppFieldHelp.Runtime : ModelFieldHelp.Runtime)">
+            <Leading><span class="field-label" id="placement-runtime-label">Runtime</span></Leading>
+        </FieldHelp>
+        <div class="segmented" role="radiogroup" aria-labelledby="placement-runtime-label" data-testid="placement-runtime"
+             aria-describedby="@(offerChoice ? "placement-runtime-hint" : null)">
+            @if (!offerChoice)
+            {
+                <label class="segmented-option">
+                    <input type="radio" name="placement-runtime" id="placement-runtime" checked value="vllm" />
+                    vLLM
+                </label>
+            }
+            else
+            {
+                <label class="segmented-option @(RuntimeLocked && Runtime != RuntimeKind.Vllm ? "segmented-option--disabled" : null)">
+                    <input type="radio" name="placement-runtime" id="placement-runtime" value="vllm" data-testid="placement-runtime-vllm"
+                           checked="@(Runtime == RuntimeKind.Vllm)" disabled="@(RuntimeLocked && Runtime != RuntimeKind.Vllm)" @onchange="() => SetRuntimeAsync(RuntimeKind.Vllm)" />
+                    vLLM
+                </label>
+                @if (offerLlamaCpp)
+                {
+                    <label class="segmented-option @(RuntimeLocked && !IsLlamaCpp ? "segmented-option--disabled" : null)">
+                        <input type="radio" name="placement-runtime" value="llamacpp" data-testid="placement-runtime-llamacpp"
+                               checked="@IsLlamaCpp" disabled="@(RuntimeLocked && !IsLlamaCpp)" @onchange="() => SetRuntimeAsync(RuntimeKind.LlamaCpp)" />
+                        llama.cpp
+                    </label>
+                }
+                @if (offerMlx)
+                {
+                    <label class="segmented-option @(RuntimeLocked && !IsMlx ? "segmented-option--disabled" : null)">
+                        <input type="radio" name="placement-runtime" value="mlx" data-testid="placement-runtime-mlx"
+                               checked="@IsMlx" disabled="@(RuntimeLocked && !IsMlx)" @onchange="() => SetRuntimeAsync(RuntimeKind.Mlx)" />
+                        MLX
+                    </label>
+                }
+            }
+        </div>
+        @if (offerChoice)
+        {
+            <div class="field-hint" id="placement-runtime-hint" data-testid="placement-runtime-hint">
+                @if (IsLlamaCpp)
+                {
+                    <span>llama-server serves one GGUF file@(llamaCpp?.Delivery == LaunchDelivery.Process ? $", as a native process on {Node.Id}" : llamaCpp is null ? "" : $", in a container on {Node.Id}").</span>
+                }
+                else if (IsMlx)
+                {
+                    <span>mlx_lm.server serves an MLX checkpoint folder, as a native process on @Node.Id.</span>
+                }
+                else if (!offerMlx)
+                {
+                    <span>@Node.Id also runs llama.cpp@(llamaCpp?.Delivery == LaunchDelivery.Process ? " (native process)" : "").</span>
+                }
+                else
+                {
+                    <span>@Node.Id also runs @(offerLlamaCpp ? $"llama.cpp{(llamaCpp?.Delivery == LaunchDelivery.Process ? " (native process)" : "")} and " : "")MLX (native process).</span>
+                }
+                @if (RuntimeLocked)
+                {
+                    <span> The runtime is chosen when a model is added.</span>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>The node the model runs on; null renders nothing.</summary>
+    [Parameter]
+    public PlacementNode? Node { get; set; }
+
+    /// <summary>With no node: render the runtime choice disabled, with a hint to pick the node first (Add model).</summary>
+    [Parameter]
+    public bool ShowWithoutNode { get; set; }
+
+    /// <summary>True while adding a model: only then may the runtime be picked.</summary>
+    [Parameter]
+    public bool IsNew { get; set; }
+
+    /// <summary>The model's runtime (MN-226): vLLM, or llama.cpp or MLX on a node that reports it.</summary>
+    [Parameter]
+    public RuntimeKind Runtime { get; set; } = RuntimeKind.Vllm;
+
+    /// <summary>Raised when another runtime is picked (new models only).</summary>
+    [Parameter]
+    public EventCallback<RuntimeKind> RuntimeChanged { get; set; }
+
+    /// <summary>
+    /// True when this picker would render anything useful for <paramref name="node"/>: the node runs llama.cpp or MLX, or
+    /// the model already does. The single-node editor asks before rendering it, so a fleet of one DGX looks exactly as it
+    /// did (the Placement section it used to live in is not shown there).
+    /// </summary>
+    public static bool Offers(PlacementNode? node, RuntimeKind runtime) =>
+        node is not null && (LlamaCppEditing.Runtime(node) is not null || MlxEditing.Runtime(node) is not null ||
+            runtime is RuntimeKind.LlamaCpp or RuntimeKind.Mlx);
+
+    private bool IsLlamaCpp => Runtime == RuntimeKind.LlamaCpp;
+
+    private bool IsMlx => Runtime == RuntimeKind.Mlx;
+
+    /// <summary>An existing model keeps its runtime (its settings belong to it); a new one picks it.</summary>
+    private bool RuntimeLocked => !IsNew;
+
+    private async Task SetRuntimeAsync(RuntimeKind kind)
+    {
+        if (RuntimeLocked || kind == Runtime)
+        {
+            return;
+        }
+
+        Runtime = kind;
+        await RuntimeChanged.InvokeAsync(kind);
+    }
+}

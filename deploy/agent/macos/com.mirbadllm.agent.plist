@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  mirbadllm-agent on an Apple Silicon Mac (Phase 1; plan docs/macos/implementation-plan.md M1, M2). Installed by
+  install-agent.sh as /Library/LaunchDaemons/com.mirbadllm.agent.plist (root:wheel 0644), only once the node is
+  enrolled (agent.crt and node-uid in the state directory): an unenrolled agent exits at start and launchd would
+  restart it every 10 s. README.md next to this file has the walk-through.
+  Runs as the hidden system user _mirbadllm (no shell, home /var/empty). Configuration:
+  "/Library/Application Support/mirbadllm-agent/agent.json" (root:_mirbadllm 0640); identity, fencing state and the
+  operation log: "/Library/Application Support/mirbadllm-agent/state" (0700). stdout and stderr go to
+  /Library/Logs/mirbadllm-agent/agent.log. Listens on TCP 9443 (mTLS, HTTP/2) for the master.
+  AbandonProcessGroup: model processes are detached children of the agent; launchd must not kill them when the agent
+  stops or restarts (they are re-adopted at the next start). ExitTimeOut: the agent drains running operations for up
+  to ShutdownTimeout (30 s) after SIGTERM before launchd sends SIGKILL.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mirbadllm.agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/lib/mirbadllm-agent/mirbadllm-agent</string>
+        <string>--config</string>
+        <string>/Library/Application Support/mirbadllm-agent/agent.json</string>
+    </array>
+    <key>UserName</key>
+    <string>_mirbadllm</string>
+    <key>GroupName</key>
+    <string>_mirbadllm</string>
+    <key>WorkingDirectory</key>
+    <string>/Library/Application Support/mirbadllm-agent/state</string>
+    <key>Umask</key>
+    <integer>63</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>AbandonProcessGroup</key>
+    <true/>
+    <key>ExitTimeOut</key>
+    <integer>45</integer>
+    <key>StandardOutPath</key>
+    <string>/Library/Logs/mirbadllm-agent/agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Library/Logs/mirbadllm-agent/agent.log</string>
+</dict>
+</plist>

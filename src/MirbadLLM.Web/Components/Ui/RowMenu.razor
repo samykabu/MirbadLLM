@@ -1,0 +1,37 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* A table row's secondary actions behind one "⋯" button: a WAI-ARIA menu button (aria-haspopup="menu",
+   aria-expanded, aria-controls) whose menu is a native popover, so it sits in the top layer and is never clipped
+   by a scrolling table panel. It is anchored to the button with CSS anchor positioning (js/shell.js places it
+   where that is unsupported). Enter/Space/ArrowDown open it on the first item, ArrowUp on the last; arrows,
+   Home and End move between items; Esc or Tab closes it and focus returns to the button — all in the browser
+   (js/shell.js, [data-row-menu]), no server round trip. Items are links or buttons with role="menuitem". *@
+<span class="row-menu">
+    <button type="button" class="btn btn-sm btn-ghost row-menu-trigger" popovertarget="@MenuId" aria-haspopup="menu"
+            aria-expanded="false" aria-controls="@MenuId" aria-label="@Label" title="@Label"
+            style="@($"anchor-name: --{MenuId}")" data-row-menu-trigger data-testid="@TestId">
+        <Icon Name="more" />
+    </button>
+    <div class="row-menu-list" id="@MenuId" popover role="menu" aria-label="@Label" data-row-menu
+         style="@($"position-anchor: --{MenuId}")" data-testid="@($"{TestId}-menu")">
+        @ChildContent
+    </div>
+</span>
+
+@code {
+    /// <summary>Unique on the page; also the CSS anchor name, so only letters, digits and hyphens are kept.</summary>
+    [Parameter, EditorRequired]
+    public string Id { get; set; } = "";
+
+    /// <summary>The button's accessible name and the menu's label, e.g. "More actions for qwen3-coder".</summary>
+    [Parameter, EditorRequired]
+    public string Label { get; set; } = "";
+
+    /// <summary>The items: <c>&lt;a role="menuitem" class="row-menu-item" tabindex="-1"&gt;</c>.</summary>
+    [Parameter]
+    public RenderFragment? ChildContent { get; set; }
+
+    [Parameter]
+    public string? TestId { get; set; }
+
+    private string MenuId => "rowmenu-" + string.Concat(Id.Select(c => char.IsAsciiLetterOrDigit(c) ? char.ToLowerInvariant(c) : '-'));
+}

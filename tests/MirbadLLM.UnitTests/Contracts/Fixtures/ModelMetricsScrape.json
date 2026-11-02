@@ -1,0 +1,6 @@
+{
+  "modelId": "qwen36-35b-a3b-nvfp4",
+  "at": "2026-10-03T10:05:00+00:00",
+  "text": "# HELP vllm:num_requests_running Number of requests in model execution batches.\n# TYPE vllm:num_requests_running gauge\nvllm:num_requests_running{model_name=\"qwen36-35b-a3b-nvfp4\"} 2.0\n",
+  "error": null
+}

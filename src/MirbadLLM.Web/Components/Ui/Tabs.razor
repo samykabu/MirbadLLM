@@ -1,0 +1,132 @@
+@namespace MirbadLLM.Web.Components.Ui
+@inject NavigationManager Nav
+@* Accessible WAI-ARIA tabs: role=tablist/tab/tabpanel, aria-selected, roving tabindex with arrow-key/Home/End
+   navigation (automatic activation: moving focus also selects), and — when QueryKey is set — the selected
+   tab persisted in the URL query string so a reload or a shared link keeps it.
+
+   Keyboard focus moves in the browser (js/shell.js handles keydown on any [data-roving-tabs] list: it moves
+   focus, updates the roving tabindex and clicks the new tab), so focus never waits for a server round trip;
+   Blazor then syncs the selection from that click.
+
+   Two looks: Line (default) — a full-width baseline with the selected tab's accent underline sitting on it,
+   the panel starting right under the row; Segmented — a lighter pill track for a second level of tabs
+   inside a Line tab's panel, so the hierarchy reads at a glance. Phones scroll the row sideways with edge
+   fades and 44px targets. *@
+<div class="tabs @(Variant == TabsVariant.Segmented ? "tabs--segmented" : "tabs--line")" data-testid="@TestId">
+    <div class="tabs-bar">
+        <div class="tabs-list" role="tablist" aria-label="@AriaLabel" data-roving-tabs data-testid="@($"{TestId}-list")">
+            @foreach (var tab in Items)
+            {
+                bool selected = tab.Id == SelectedId;
+                <button type="button" role="tab" class="tabs-tab" id="@TabButtonId(tab.Id)"
+                        aria-selected="@(selected ? "true" : "false")" aria-controls="@TabPanelId(tab.Id)"
+                        tabindex="@(selected ? "0" : "-1")" disabled="@tab.Disabled"
+                        data-testid="@($"{TestId}-tab-{tab.Id}")"
+                        @onclick="() => SelectAsync(tab.Id)">
+                    <span class="tabs-tab-label" data-text="@tab.Label">@tab.Label</span>
+                    @if (tab.Count is int count)
+                    {
+                        <span class="visually-hidden">, </span>
+                        <span class="tabs-tab-count num" data-testid="@($"{TestId}-tab-{tab.Id}-count")">@count</span>
+                        @if (!string.IsNullOrEmpty(tab.CountNoun))
+                        {
+                            <span class="visually-hidden">@($" {tab.CountNoun}")</span>
+                        }
+                    }
+                    @if (!string.IsNullOrEmpty(tab.BadgeText))
+                    {
+                        <span class="visually-hidden">, </span>
+                        <span class="state state--@(tab.BadgeClass ?? "busy") tabs-tab-status" data-testid="@($"{TestId}-tab-{tab.Id}-badge")">
+                            @if (!string.IsNullOrEmpty(tab.BadgeIcon))
+                            {
+                                <Icon Name="@tab.BadgeIcon" />
+                            }
+                            <span>@tab.BadgeText</span>
+                        </span>
+                    }
+                </button>
+            }
+        </div>
+    </div>
+    <div class="tabs-panel" role="tabpanel" id="@TabPanelId(SelectedId)" aria-labelledby="@TabButtonId(SelectedId)"
+         tabindex="0" data-testid="@($"{TestId}-panel")">
+        @if (ChildContent is not null)
+        {
+            @ChildContent(SelectedId)
+        }
+    </div>
+</div>
+
+@code {
+    private bool _resolvedFromQuery;
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<TabItem> Items { get; set; } = [];
+
+    [Parameter, EditorRequired]
+    public string SelectedId { get; set; } = "";
+
+    [Parameter]
+    public EventCallback<string> SelectedIdChanged { get; set; }
+
+    /// <summary>When set, the selection is read from and written to <c>?{QueryKey}=id</c> (other query
+    /// parameters are preserved). Null/empty disables URL persistence.</summary>
+    [Parameter]
+    public string? QueryKey { get; set; }
+
+    [Parameter, EditorRequired]
+    public string AriaLabel { get; set; } = "";
+
+    [Parameter]
+    public string TestId { get; set; } = "tabs";
+
+    /// <summary><see cref="TabsVariant.Line"/> for a page's main tabs, <see cref="TabsVariant.Segmented"/> for a
+    /// second level nested inside one of them.</summary>
+    [Parameter]
+    public TabsVariant Variant { get; set; } = TabsVariant.Line;
+
+    [Parameter]
+    public RenderFragment<string>? ChildContent { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (_resolvedFromQuery || string.IsNullOrEmpty(QueryKey))
+        {
+            return;
+        }
+
+        _resolvedFromQuery = true;
+        string? fromQuery = Microsoft.AspNetCore.WebUtilities.QueryHelpers
+            .ParseQuery(new Uri(Nav.Uri).Query)
+            .GetValueOrDefault(QueryKey)
+            .FirstOrDefault();
+
+        if (fromQuery is not null && fromQuery != SelectedId && Items.Any(t => t.Id == fromQuery && !t.Disabled))
+        {
+            SelectedId = fromQuery;
+            await SelectedIdChanged.InvokeAsync(SelectedId);
+        }
+    }
+
+    private async Task SelectAsync(string id)
+    {
+        if (id == SelectedId)
+        {
+            return;
+        }
+
+        SelectedId = id;
+        await SelectedIdChanged.InvokeAsync(id);
+
+        if (!string.IsNullOrEmpty(QueryKey))
+        {
+            UrlQuery.For(Nav).Replace(QueryKey, id);
+        }
+    }
+
+    private static string TabButtonId(string id) => $"tab-{Slug(id)}";
+
+    private static string TabPanelId(string id) => $"tabpanel-{Slug(id)}";
+
+    private static string Slug(string id) => id.Replace(' ', '-').ToLowerInvariant();
+}

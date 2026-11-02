@@ -1,0 +1,97 @@
+/* Connect: endpoint facts, the served models with where they run, then one tab per client. */
+.connect-endpoints .panel-label { margin-bottom: var(--ss-sp-3); }
+
+/* Readable measure for prose (the panel itself can be 1100px wide). */
+.connect-prose { max-width: 75ch; }
+
+.served-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.served-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: var(--ss-sp-2) var(--ss-sp-5);
+    padding: var(--ss-sp-3) var(--ss-sp-4);
+}
+
+.served-row + .served-row { border-top: 1px solid var(--ss-border); }
+
+.served-name {
+    justify-self: start;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    font-size: var(--ss-fs-200);
+    background: none;
+    padding: 0;
+}
+
+.served-where {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--ss-text-muted);
+    font-family: var(--ss-font-mono);
+    font-size: var(--ss-fs-100);
+    white-space: nowrap;
+}
+
+.served-runtime {
+    padding: 1px 6px;
+    border: 1px solid var(--ss-border);
+    border-radius: var(--ss-radius-sm);
+    color: var(--ss-text);
+}
+
+.served-others { margin-top: var(--ss-sp-5); }
+.served-others .section-head { flex-wrap: wrap; gap: var(--ss-sp-2); }
+.served-others h3 { margin: 0; font-size: var(--ss-fs-200); font-weight: 500; color: var(--ss-text-muted); }
+.served-others .section-head a { display: inline-flex; align-items: center; gap: var(--ss-sp-1); font-size: var(--ss-fs-100); }
+.served-identity { display: grid; gap: var(--ss-sp-1); min-width: 0; }
+.served-identity .served-name { color: var(--ss-text); font-family: var(--ss-font-mono); text-decoration: none; }
+.served-identity .served-name:hover { text-decoration: underline; }
+.served-identity .served-where { white-space: normal; font-family: var(--ss-font-sans); }
+.served-row.served-row--unavailable { grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+
+.snippet-model {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    overflow-wrap: anywhere;
+    gap: var(--ss-sp-1);
+    max-width: 75ch;
+    margin-bottom: var(--ss-sp-4);
+}
+
+.snippet-model .form-select { max-width: 32rem; }
+
+@media (max-width: 639.98px) {
+    .served-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .served-where { grid-column: 1 / -1; grid-row: 2; }
+}
+
+.access-layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.25fr); gap:var(--ss-sp-4); align-items:start; }
+.access-layout > div { min-width:0; }
+.access-client > .section { margin-top:0; }
+.access-client { padding:var(--ss-sp-4); border:1px solid var(--ss-panel-edge); border-radius:var(--ss-radius-lg); background:var(--ss-panel); box-shadow:var(--ss-panel-shadow); }
+.served-row { grid-template-columns:minmax(0,1fr) auto auto auto; gap:var(--ss-sp-2); }
+.served-swatch { display:inline-block; width:8px; height:8px; margin-right:var(--ss-sp-2); border-radius:var(--ss-radius-sm); }
+@media (max-width:1199.98px) { .access-layout { grid-template-columns:minmax(0,1fr); } }
+@media (max-width:760px) { .served-row { grid-template-columns:minmax(0,1fr) auto; } .served-state { grid-column:1; grid-row:3; justify-self:start; } .served-row button { grid-column:2; grid-row:1; } }
+.access-client .snippet { border: 0; box-shadow: none; border-radius: 0; }
+.access-client .snippet-head { padding: 0 0 8px; }
+.access-client .snippet-head h3 { font-size: 13px; }
+.access-client .snippet-model { margin-bottom: 12px; }
+.access-client ::deep .tabs-panel { padding-top: 12px; }
+.served-name { font-size: 12.5px; }
+.served-state { background: transparent; border: 0; padding: 0; }
+.connect-endpoints .kv { gap: 10px 12px; font-size: 13px; }
+@media (min-width: 1200px) {
+    .access-client > .section { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,280px); gap: 12px; }
+    .access-client .section-head { margin: 0; align-items: center; }
+    .access-client .snippet-model { grid-column: 2; grid-row: 1; }
+    .access-client .snippet-model .field-label, .access-client .snippet-model .field-hint { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+    .access-client .connect-clients, .access-client .snippet-steps { grid-column: 1 / -1; }
+}

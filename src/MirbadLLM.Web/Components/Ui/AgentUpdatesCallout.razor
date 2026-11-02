@@ -1,0 +1,121 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using MirbadLLM.Web.Api
+@inject IServiceProvider Services
+@* Nodes page: the agents from another build than MirbadLLM (docs/multinode/agent-updates.md §3), "Update all" for the
+   ones that can be pushed, and the fleet's automatic updates. Each node's page has the notes and the manual steps. *@
+
+@{
+    var outdated = Admin?.OutdatedAgents() ?? [];
+    int pushable = outdated.Count(o => o.Blocker is null);
+    bool automatic = Admin?.UpdateSettings?.Automatic == true;
+    // An admin always sees the switch, so automatic updates can be turned on while every agent is current.
+    bool canSwitch = Admin?.UpdateSettings is not null && Caller is not null;
+}
+@if (outdated.Count > 0 || automatic || canSwitch)
+{
+    <div class="callout @(outdated.Count > 0 ? "callout--busy" : "callout--ready") page-alert agent-updates" role="status" data-testid="agent-updates">
+        <Icon Name="download" />
+        <div class="callout-body">
+            @if (outdated.Count > 0)
+            {
+                <span class="callout-title" data-testid="agent-updates-title">
+                    @(outdated.Count == 1 ? "1 node runs" : $"{outdated.Count} nodes run") another build than MirbadLLM <span class="num">@ProductVersion.Display(ProductVersion.Controller)</span>
+                </span>
+                <ul class="agent-updates-list">
+                    @foreach (var (node, blocker) in outdated)
+                    {
+                        <li data-testid="@($"agent-updates-{node.NodeId}")">
+                            <a href="@($"nodes/{Uri.EscapeDataString(node.NodeId)}")">@(node.DisplayName ?? node.NodeId)</a>
+                            <span class="num muted">@ProductVersion.Display(node.AgentVersion)</span>
+                            <span class="muted">· @(blocker ?? "can be updated from here")</span>
+                        </li>
+                    }
+                </ul>
+            }
+            else
+            {
+                <span class="callout-title">Every agent runs MirbadLLM's build</span>
+            }
+            <span class="muted">
+                @(automatic
+                    ? "Automatic updates are on: the master updates each outdated node it can reach, one at a time."
+                    : outdated.Count > 0
+                        ? "Open a node for what its update brings and the steps to update it by hand."
+                        : "Automatic updates are off: after the next MirbadLLM update, update the nodes from here or turn them on.")
+            </span>
+            @if (Admin is not null && Caller is not null)
+            {
+                <div class="agent-updates-actions">
+                    @if (pushable > 0)
+                    {
+                        <button type="button" class="btn btn-sm btn-primary" data-testid="agent-updates-all" disabled="@(_busy)" @onclick="UpdateAllAsync">
+                            <Icon Name="download" /> Update @(pushable == 1 ? "1 node" : $"{pushable} nodes")
+                        </button>
+                    }
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-testid="agent-updates-automatic" disabled="@_busy"
+                            @onclick="() => SetAutomaticAsync(!automatic)">
+                        @(automatic ? "Turn automatic updates off" : "Update automatically after each MirbadLLM update")
+                    </button>
+                </div>
+            }
+            @if (_message is not null)
+            {
+                <p class="@(_failed ? "svc-error" : "muted")" role="status" data-testid="agent-updates-message">@_message</p>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter]
+    public NodeAdminService? Admin { get; set; }
+
+    [Parameter]
+    public NodeApiCaller? Caller { get; set; }
+
+    private bool _busy;
+    private string? _message;
+    private bool _failed;
+
+    private async Task UpdateAllAsync()
+    {
+        if (Admin is null || Caller is null || Services.GetService<MirbadLLM.Orchestration.Agents.AgentOperationRunner>() is not { } runner)
+        {
+            return;
+        }
+
+        await RunAsync(async () =>
+        {
+            var result = await Admin.UpdateOutdatedAgentsAsync(new AgentUpdateStartRequest(), Caller, runner);
+            string started = result.Started.Count == 1 ? "1 update sent" : $"{result.Started.Count} updates sent";
+            return result.Skipped.Count == 0 ? $"{started}." : $"{started}; not sent: {string.Join("; ", result.Skipped.Select(s => $"{s.Key}: {s.Value}"))}";
+        });
+    }
+
+    private Task SetAutomaticAsync(bool automatic) => RunAsync(async () =>
+    {
+        await Admin!.SetAutomaticAgentUpdatesAsync(automatic, Caller!);
+        return automatic ? "Automatic agent updates are on." : "Automatic agent updates are off.";
+    });
+
+    private async Task RunAsync(Func<Task<string>> action)
+    {
+        _busy = true;
+        _message = null;
+        try
+        {
+            _message = await action();
+            _failed = false;
+        }
+        catch (NodeApiException ex)
+        {
+            _message = ex.Message;
+            _failed = true;
+        }
+        finally
+        {
+
+            _busy = false;
+        }
+    }
+}

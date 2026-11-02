@@ -1,0 +1,135 @@
+/* The model workspace header: back link, identity + state, actions, chips, then the line tabs that every page of one
+   model shares. The tab row is the page's top edge for the content below it, so it carries the only seam. */
+.model-header {
+    display: grid;
+    gap: var(--ss-sp-3);
+    margin-bottom: var(--ss-sp-5);
+    min-width: 0;
+}
+
+.model-header > .page-header-back { justify-self: start; margin-bottom: calc(-1 * var(--ss-sp-2)); }
+
+.model-header-main {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--ss-sp-3) var(--ss-sp-4);
+    min-width: 0;
+}
+
+.model-header-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--ss-sp-2) var(--ss-sp-3);
+    min-width: 0;
+}
+
+.model-header-title h1 {
+    overflow-wrap: anywhere;
+}
+
+.model-header-title ::deep .state {
+    align-self: center;
+}
+
+.model-header-id {
+    font-family: var(--ss-font-mono);
+    font-size: var(--ss-fs-200);
+    color: var(--ss-series-1);
+    overflow-wrap: anywhere;
+}
+
+.model-header-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-2);
+}
+
+.model-header-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ss-sp-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.model-header-chips .model-chip {
+    color: var(--ss-text);
+    background: var(--ss-panel);
+    border-color: var(--ss-border);
+}
+
+.model-header-chips a.model-chip { color: var(--ss-accent-text); }
+.model-header-chips a.model-chip:hover { border-color: var(--ss-border-control); }
+.model-header-chips a.model-chip:focus-visible { outline: 2px solid var(--ss-focus); outline-offset: 2px; }
+
+.model-chip--muted { color: var(--ss-text-muted) !important; }
+
+.model-chip-key {
+    color: var(--ss-text-muted);
+}
+
+.model-header-pending {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ss-sp-2);
+}
+
+/* Line tabs as page links: the baseline is the seam, the current page carries the accent underline. */
+.model-tabs {
+    --ss-tab-indicator: var(--ss-accent);
+    display: flex;
+    gap: var(--ss-sp-1);
+    margin-top: var(--ss-sp-1);
+    border-bottom: 1px solid var(--ss-border);
+    overflow-x: auto;
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+}
+
+.model-tabs::-webkit-scrollbar { display: none; }
+
+[data-bs-theme=dark] .model-tabs { --ss-tab-indicator: var(--ss-accent-text); }
+
+.model-tabs a {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    padding: var(--ss-sp-2) var(--ss-sp-3);
+    border-bottom: 2px solid transparent;
+    border-radius: var(--ss-radius) var(--ss-radius) 0 0;
+    color: var(--ss-text-muted);
+    font-family: var(--ss-font-mono);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: color var(--ss-dur) var(--ss-ease), background-color var(--ss-dur) var(--ss-ease), border-color var(--ss-dur) var(--ss-ease);
+}
+
+.model-tabs a:hover { color: var(--ss-text); background: var(--ss-hover); border-bottom-color: var(--ss-border-control); }
+
+.model-tabs a[aria-current=page] {
+    color: var(--ss-text);
+    font-weight: 600;
+    border-bottom-color: var(--ss-tab-indicator);
+}
+
+.model-tabs a:focus-visible { outline: 2px solid var(--ss-focus); outline-offset: -2px; }
+
+@media (pointer: coarse) {
+    .model-tabs a { min-height: 44px; }
+    .model-header-actions ::deep .btn { min-height: 44px; }
+    .model-header > .page-header-back { min-height: 44px; }
+}
+
+@media (max-width: 639.98px) {
+    .model-header-actions { width: 100%; }
+    .model-header-actions ::deep .btn { flex: 1 1 0; justify-content: center; }
+}

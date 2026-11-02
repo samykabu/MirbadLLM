@@ -1,0 +1,211 @@
+@namespace MirbadLLM.Web.Components.Ui
+@inject IModelRuntime Runtime
+@inject IServiceProvider ServiceProvider
+@* Start, stop and the over-memory "Start anyway" confirmation for a page that lists models (Models, Overview). The
+   code paths are the Dashboard's model-card ones, moved here unchanged so every page that starts a model goes through
+   the same held-model guard, admission refusal and force-start dialog. The page calls StartAsync / StopAsync from its
+   own buttons and reads IsBusy and Error; Changed fires after every attempt so the page reloads. *@
+<ConfirmDialog @bind-Open="_forceOpen" Title="@($"Start {_forceName} anyway?")" ConfirmLabel="Start anyway" Destructive="true"
+               OnConfirm="ForceStartAsync" TestId="force-start-dialog">
+    <p data-testid="force-start-numbers">
+        @_forceName needs <strong class="num">@UiFormat.GiB(_forceNeed)</strong>@(_forceWhere is null ? "" : $" on {_forceWhere}"), but only
+        <strong class="num">@UiFormat.GiB(_forceFreeAfterReserve)</strong> is free after the
+        <span class="num">@UiFormat.GiB(_forceReserve)</span> reserve (<span class="num">@UiFormat.GiB(_forceFree)</span> free in total@(_forceHeldByOthers > 0 ? $", {UiFormat.GiB(_forceHeldByOthers)} held by other starts" : "")).
+    </p>
+    <p class="muted">
+        Starting anyway can push ComfyUI, Ollama or other models on this node out of memory, or leave this model failing while it loads.
+    </p>
+</ConfirmDialog>
+
+@code {
+    /// <summary>The page's models (names, budgets, placements).</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<ModelDefinition> Models { get; set; } = [];
+
+    /// <summary>The fleet's nodes (empty without node services): a refused model's own node's memory and reserve.</summary>
+    [Parameter]
+    public IReadOnlyList<MirbadLLM.Web.Components.Pages.Nodes.NodeRow> NodeRows { get; set; } = [];
+
+    /// <summary>The configured reserve, used when the model's node is unknown.</summary>
+    [Parameter]
+    public double ReserveGiB { get; set; } = 8;
+
+    /// <summary>After every start or stop attempt (successful or not): the page reloads.</summary>
+    [Parameter]
+    public EventCallback Changed { get; set; }
+
+    private readonly HashSet<string> _busy = new(StringComparer.Ordinal);
+    private IOwnershipStore? _ownership;
+    private ModelStartService? _starts;
+
+    private bool _forceOpen;
+    private string? _forceId;
+    private string _forceName = "";
+    private double _forceNeed;
+    private double _forceFree;
+    private double _forceFreeAfterReserve;
+    private double _forceReserve = 8;
+    private double _forceHeldByOthers;
+    private string? _forceWhere;
+
+    /// <summary>The last start or stop failure, named for the operator; null after a clean attempt.</summary>
+    public string? Error { get; private set; }
+
+    /// <summary>A start or stop request for this model is in flight.</summary>
+    public bool IsBusy(string id) => _busy.Contains(id) || _starts?.IsPending(id) == true;
+
+    public bool IsQueued(string id) => _starts?.IsQueued(id) == true;
+
+    public void CancelStart(string id) => _starts?.Cancel(id);
+
+    /// <summary>Clears the last failure (the page's dismiss).</summary>
+    public void ClearError() => Error = null;
+
+    private bool Grouped => NodeRows.Count > 1;
+
+    protected override void OnInitialized()
+    {
+        _ownership = ServiceProvider.GetService<IOwnershipStore>();
+        _starts = ServiceProvider.GetService<ModelStartService>();
+    }
+
+    public async Task StartAsync(string id)
+    {
+        Error = null;
+        if (!_busy.Add(id)) return;
+        try
+        {
+            await MirbadLLM.Orchestration.Multinode.HeldModelGuard.EnsureNotHeldAsync(_ownership, id); // design §6.7
+            await (_starts?.StartAsync(id, force: false) ?? Runtime.StartAsync(id, force: false));
+        }
+        catch (ModelMemoryAdmissionException ex)
+        {
+            await PrepareForceStartAsync(id, ex);
+        }
+        catch (ModelBusyException ex)
+        {
+            Error = EditorRefusals.Runtime(ex, NameOf(id), "start");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Error = $"Couldn't start {NameOf(id)}: {ex.Message}";
+        }
+        finally
+        {
+            _busy.Remove(id);
+        }
+
+        StateHasChanged();
+        await Changed.InvokeAsync();
+    }
+
+    private async Task PrepareForceStartAsync(string id, ModelMemoryAdmissionException refusal)
+    {
+        var model = Models.FirstOrDefault(m => m.Id == id);
+        string? placedOn = model?.Placement?.NodeId;
+        var node = Grouped && placedOn is { } nodeId ? NodeRows.FirstOrDefault(n => n.Id == nodeId) : null;
+        _forceHeldByOthers = 0;
+        _forceWhere = null;
+
+        // The agent's own refusal numbers when it sent them (D96, MN-132): on a discrete node the refusing GPU by its current
+        // index (or the host part), with that GPU's need, free, reserve and the memory other starts hold.
+        if (AdmissionNumbers.FromRefusal(refusal, placedOn, node?.Capabilities?.Gpus) is { } numbers)
+        {
+            _forceId = id;
+            _forceName = NameOf(id);
+            _forceNeed = numbers.NeedGiB;
+            _forceFree = numbers.AvailableGiB;
+            _forceReserve = numbers.ReserveGiB;
+            _forceFreeAfterReserve = numbers.FreeAfterReserveGiB;
+            _forceHeldByOthers = numbers.HeldByOthersGiB;
+            // One node keeps its text: only a GPU, the host part or (several nodes) the node is named.
+            _forceWhere = numbers.Where is { } where && (Grouped || !string.Equals(where, placedOn, StringComparison.Ordinal)) ? where : null;
+            _forceOpen = true;
+            return;
+        }
+
+        // No numbers from the agent: several nodes = the model's own node's live host memory and reserve (W7 review
+        // MN-126), not the bootstrap node's probe.
+        double free;
+        double reserve;
+        if (node?.Memory is { } nodeMemory)
+        {
+            free = nodeMemory.HostAvailableGiB;
+            reserve = node.ReserveGiB;
+        }
+        else
+        {
+            var probe = ServiceProvider.GetService<IMemoryProbe>();
+            free = probe is null ? 0 : (await probe.GetAsync()).AvailableGiB;
+            reserve = ReserveGiB;
+        }
+
+        _forceId = id;
+        _forceName = NameOf(id);
+        _forceNeed = model?.MemoryBudgetGiB ?? 0;
+        _forceFree = free;
+        _forceReserve = reserve;
+        _forceFreeAfterReserve = Math.Max(0, free - reserve);
+        _forceOpen = true;
+    }
+
+    private async Task ForceStartAsync()
+    {
+        if (_forceId is not { } id)
+        {
+            return;
+        }
+
+        _busy.Add(id);
+        try
+        {
+            await MirbadLLM.Orchestration.Multinode.HeldModelGuard.EnsureNotHeldAsync(_ownership, id); // design §6.7
+            await (_starts?.StartAsync(id, force: true) ?? Runtime.StartAsync(id, force: true));
+        }
+        catch (ModelBusyException ex)
+        {
+            Error = EditorRefusals.Runtime(ex, NameOf(id), "start");
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Error = $"Couldn't start {NameOf(id)}: {ex.Message}";
+        }
+        finally
+        {
+            _busy.Remove(id);
+            _forceId = null;
+        }
+
+        await Changed.InvokeAsync();
+    }
+
+    public async Task StopAsync(string id)
+    {
+        Error = null;
+        _busy.Add(id);
+        try
+        {
+            await MirbadLLM.Orchestration.Multinode.HeldModelGuard.EnsureNotHeldAsync(_ownership, id); // design §6.7
+            _starts?.Cancel(id);
+            await Runtime.StopAsync(id);
+        }
+        catch (ModelBusyException ex)
+        {
+            Error = EditorRefusals.Runtime(ex, NameOf(id), "stop");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Error = $"Couldn't stop {NameOf(id)}: {ex.Message}";
+        }
+        finally
+        {
+            _busy.Remove(id);
+        }
+
+        await Changed.InvokeAsync();
+    }
+
+    private string NameOf(string id) => Models.FirstOrDefault(m => m.Id == id)?.ServedName ?? id;
+}

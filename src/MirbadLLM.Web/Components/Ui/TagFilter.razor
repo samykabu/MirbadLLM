@@ -1,0 +1,116 @@
+@namespace MirbadLLM.Web.Components.Ui
+@inject NavigationManager Nav
+@* Filter a model list by tag: one toggle button per tag in use (aria-pressed, with its count), multi-select
+   where a model must carry ALL selected tags, a Clear action and a live "N of M models" line. The selection
+   lives in the URL query (?tags=embedding,vision, replaced in place like Tabs' ?tab=) so a reload, a shared
+   link or Back from a model's page keeps it. Renders nothing while no model has a tag. *@
+@if (Items.Count > 0)
+{
+    <div class="tag-filter" role="group" aria-labelledby="@LabelId" data-testid="@TestId">
+        <span class="tag-filter-label" id="@LabelId"><Icon Name="tag" /> Filter by tag</span>
+        <div class="tag-filter-chips">
+            @foreach (var (tag, count) in Items)
+            {
+                bool on = Selected.Contains(tag);
+                <button type="button" class="tag-toggle" aria-pressed="@(on ? "true" : "false")" data-testid="@($"{TestId}-{tag}")"
+                        @onclick="() => ToggleAsync(tag)">
+                    @if (on)
+                    {
+                        <Icon Name="check" />
+                    }
+                    <span>@ModelTags.Label(tag)</span>
+                    <span class="visually-hidden">, </span>
+                    <span class="tag-toggle-count num">@count</span>
+                    <span class="visually-hidden">@(count == 1 ? " model" : " models")</span>
+                </button>
+            }
+        </div>
+        @if (Selected.Count > 0)
+        {
+            <button type="button" class="btn btn-sm btn-ghost" data-testid="@($"{TestId}-clear")" @onclick="ClearAsync">
+                <Icon Name="close" /> Clear
+            </button>
+        }
+        <span class="filter-count num" role="status" data-testid="@($"{TestId}-count")">@Matching of @Total @(Total == 1 ? "model" : "models")</span>
+    </div>
+}
+
+@code {
+    private static int _nextId;
+    private readonly int _id = Interlocked.Increment(ref _nextId);
+    private bool _resolvedFromQuery;
+
+    /// <summary>Every tag in use with how many models carry it (see <see cref="ModelTags.Counts"/>).</summary>
+    [Parameter, EditorRequired]
+    public IReadOnlyList<(string Tag, int Count)> Counts { get; set; } = [];
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<string> Selected { get; set; } = [];
+
+    [Parameter]
+    public EventCallback<IReadOnlyList<string>> SelectedChanged { get; set; }
+
+    /// <summary>Models shown after filtering.</summary>
+    [Parameter]
+    public int Matching { get; set; }
+
+    [Parameter]
+    public int Total { get; set; }
+
+    /// <summary>Query-string key the selection is kept under; null/empty turns URL persistence off.</summary>
+    [Parameter]
+    public string? QueryKey { get; set; } = "tags";
+
+    [Parameter]
+    public string TestId { get; set; } = "tag-filter";
+
+    private string LabelId => $"tag-filter-{_id}-label";
+
+    /// <summary>Tags in use, plus any selected tag no model carries any more (count 0) so it can still be turned off.</summary>
+    private IReadOnlyList<(string Tag, int Count)> Items =>
+        [.. Counts, .. Selected.Where(s => !Counts.Any(c => c.Tag == s)).Select(s => (s, 0))];
+
+    /// <summary>Parses <c>embedding,vision</c> into normalized, de-duplicated tags.</summary>
+    public static IReadOnlyList<string> Parse(string? value) =>
+        (value ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(ModelTags.Normalize)
+            .OfType<string>()
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (_resolvedFromQuery || string.IsNullOrEmpty(QueryKey))
+        {
+            return;
+        }
+
+        _resolvedFromQuery = true;
+        string? fromQuery = Microsoft.AspNetCore.WebUtilities.QueryHelpers
+            .ParseQuery(new Uri(Nav.Uri).Query)
+            .GetValueOrDefault(QueryKey)
+            .FirstOrDefault();
+
+        var parsed = Parse(fromQuery);
+        if (parsed.Count > 0 && !parsed.SequenceEqual(Selected, StringComparer.Ordinal))
+        {
+            Selected = parsed;
+            await SelectedChanged.InvokeAsync(parsed);
+        }
+    }
+
+    private Task ToggleAsync(string tag) =>
+        SetAsync(Selected.Contains(tag) ? Selected.Where(t => t != tag).ToList() : [.. Selected, tag]);
+
+    private Task ClearAsync() => SetAsync([]);
+
+    private async Task SetAsync(IReadOnlyList<string> selected)
+    {
+        Selected = selected;
+        await SelectedChanged.InvokeAsync(selected);
+        if (!string.IsNullOrEmpty(QueryKey))
+        {
+            UrlQuery.For(Nav).Replace(QueryKey, selected.Count == 0 ? null : string.Join(',', selected));
+        }
+    }
+}

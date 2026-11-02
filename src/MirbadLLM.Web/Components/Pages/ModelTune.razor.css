@@ -1,0 +1,104 @@
+/* Tune leads with the goal, then the honest time cost and Start; the search mode and phases wait under Customize. */
+.job-lede {
+    max-width: 78ch;
+    margin: calc(-1 * var(--ss-sp-2)) 0 var(--ss-sp-4);
+    color: var(--ss-text-muted);
+    text-wrap: pretty;
+}
+
+.tune-cost {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--ss-sp-3) var(--ss-sp-5);
+    padding: var(--ss-sp-3) 0;
+    border-top: 1px solid var(--ss-border);
+}
+
+.tune-cost-figure {
+    display: grid;
+    gap: 2px;
+}
+
+.tune-cost-label {
+    font-family: var(--ss-font-mono);
+    font-size: var(--ss-fs-100);
+    font-weight: 500;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ss-text-muted);
+}
+
+.tune-cost-value {
+    font-family: var(--ss-font-mono);
+    font-size: var(--ss-fs-400);
+    font-weight: 600;
+    color: var(--ss-text); /* a cost is a figure, not a state: no amber */
+    white-space: nowrap;
+}
+
+.tune-cost-note {
+    flex: 1 1 240px;
+    min-width: 0;
+    max-width: 70ch;
+    color: var(--ss-text-muted);
+    font-size: var(--ss-fs-100);
+    line-height: 1.5;
+}
+
+.tune-customize {
+    border-top: 1px solid var(--ss-border);
+    padding-top: var(--ss-sp-3);
+}
+
+.tune-customize > summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ss-sp-2);
+    min-height: 32px;
+    font-family: var(--ss-font-mono);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--ss-accent-text);
+    cursor: pointer;
+    list-style: revert;
+}
+
+.tune-customize > summary .muted { color: var(--ss-text-muted); font-weight: 400; }
+
+.tune-customize > summary:focus-visible {
+    outline: 2px solid var(--ss-focus);
+    outline-offset: 2px;
+    border-radius: var(--ss-radius-sm);
+}
+
+.tune-customize-body {
+    display: grid;
+    gap: var(--ss-sp-3);
+    margin-top: var(--ss-sp-3);
+    min-width: 0;
+}
+
+/* A combined step (KV cache × prefix caching, speculative × CUDA graphs): the title heads the row on the left, the
+   dimensions it combines are ticked on the right, and its values sit under them. */
+.plan-steps li.plan-step--multi > .plan-step-values { grid-column: 2; }
+
+.plan-step-checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--ss-sp-2) var(--ss-sp-4);
+}
+
+@media (pointer: coarse) {
+    .tune-customize > summary { min-height: 44px; }
+}
+
+@media (max-width: 639.98px) {
+    .plan-steps li.plan-step--multi > .plan-step-values { grid-column: auto; }
+}
+
+/* Four goals do not fit a phone row: the segmented control wraps instead of pushing the page sideways. */
+.job-intro-body .segmented {
+    flex-wrap: wrap;
+    max-width: 100%;
+}

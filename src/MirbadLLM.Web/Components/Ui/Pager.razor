@@ -1,0 +1,286 @@
+@namespace MirbadLLM.Web.Components.Ui
+@inject NavigationManager Nav
+@* One pager for every list that can grow: a "1–25 of 137" range, a rows-per-page select (10/25/50/All by
+   default) and first/previous/numbered/next/last buttons inside <nav aria-label="Pagination">, the current page
+   marked aria-current="page". Page and size live in the URL query (?page=2&size=50, or ?{prefix}-page= when a
+   page holds several paged lists) and are replaced in place like Tabs' ?tab=, so reload, Back and a shared link
+   keep the position. The parent owns the list: it binds Page/Size and renders Pager.Slice(items, page, size).
+   Changing ResetKey (the filter text, the selected tags…) puts the list back on page 1. Renders nothing while
+   every item fits on one page. Phones keep only the current page number between the arrows. *@
+@if (Visible)
+{
+    <nav class="pager" aria-label="@AriaLabel" data-testid="@TestId">
+        <div class="pager-bar">
+        <span class="pager-range num" aria-live="polite" data-testid="@($"{TestId}-range")">@RangeText</span>
+        <span class="pager-size">
+            <label class="pager-size-label" for="@SizeId">Rows per page</label>
+            <select id="@SizeId" class="form-select form-select-sm" data-testid="@($"{TestId}-size")" @onchange="OnSizeChanged">
+                @foreach (int option in Sizes)
+                {
+                    <option value="@SizeToken(option)" selected="@(option == EffectiveSize)">@(option == 0 ? "All" : option.ToString(System.Globalization.CultureInfo.InvariantCulture))</option>
+                }
+            </select>
+        </span>
+        @if (PageCount > 1)
+        {
+            <ul class="pager-pages">
+                <li class="pager-edge">
+                    <button type="button" class="pager-btn" aria-label="First page" disabled="@(CurrentPage == 1)"
+                            data-testid="@($"{TestId}-first")" @onclick="() => GoAsync(1)"><Icon Name="chevrons-left" /></button>
+                </li>
+                <li>
+                    <button type="button" class="pager-btn" aria-label="Previous page" disabled="@(CurrentPage == 1)"
+                            data-testid="@($"{TestId}-prev")" @onclick="() => GoAsync(CurrentPage - 1)"><Icon Name="chevron-left" /></button>
+                </li>
+                @foreach (int? number in Window(CurrentPage, PageCount))
+                {
+                    if (number is int n)
+                    {
+                        bool current = n == CurrentPage;
+                        <li class="@(current ? "pager-num is-current" : "pager-num")">
+                            <button type="button" class="pager-btn num" aria-label="@($"Page {n}")" aria-current="@(current ? "page" : null)"
+                                    data-testid="@($"{TestId}-page-{n}")" @onclick="() => GoAsync(n)">@n</button>
+                        </li>
+                    }
+                    else
+                    {
+                        <li class="pager-num pager-gap" aria-hidden="true">…</li>
+                    }
+                }
+                <li>
+                    <button type="button" class="pager-btn" aria-label="Next page" disabled="@(CurrentPage == PageCount)"
+                            data-testid="@($"{TestId}-next")" @onclick="() => GoAsync(CurrentPage + 1)"><Icon Name="chevron-right" /></button>
+                </li>
+                <li class="pager-edge">
+                    <button type="button" class="pager-btn" aria-label="Last page" disabled="@(CurrentPage == PageCount)"
+                            data-testid="@($"{TestId}-last")" @onclick="() => GoAsync(PageCount)"><Icon Name="chevrons-right" /></button>
+                </li>
+            </ul>
+        }
+        </div>
+    </nav>
+}
+
+@code {
+    private static int _nextId;
+    private readonly int _id = Interlocked.Increment(ref _nextId);
+    private bool _resolvedFromQuery;
+    private bool _hasResetKey;
+    private string? _lastResetKey;
+
+    /// <summary>Rows-per-page choices; 0 means All.</summary>
+    public static readonly IReadOnlyList<int> DefaultSizes = [10, 25, 50, 0];
+
+    /// <summary>Items in the (already filtered) list.</summary>
+    [Parameter, EditorRequired]
+    public int Total { get; set; }
+
+    /// <summary>1-based page; bind with <c>@bind-Page</c>.</summary>
+    [Parameter]
+    public int Page { get; set; } = 1;
+
+    [Parameter]
+    public EventCallback<int> PageChanged { get; set; }
+
+    /// <summary>Rows per page, 0 for All; bind with <c>@bind-Size</c>. Starts at <see cref="DefaultSize"/>.</summary>
+    [Parameter]
+    public int? Size { get; set; }
+
+    [Parameter]
+    public EventCallback<int?> SizeChanged { get; set; }
+
+    [Parameter]
+    public int DefaultSize { get; set; } = 25;
+
+    [Parameter]
+    public IReadOnlyList<int> Sizes { get; set; } = DefaultSizes;
+
+    /// <summary>Null keeps ?page=&amp;size=; a prefix gives ?{prefix}-page=&amp;{prefix}-size= for a page with several
+    /// paged lists. Empty string turns URL persistence off.</summary>
+    [Parameter]
+    public string? QueryPrefix { get; set; }
+
+    /// <summary>When this value changes after the first render (a filter, a tag selection), the list goes back to page 1.</summary>
+    [Parameter]
+    public string? ResetKey { get; set; }
+
+    /// <summary>What the items are called in the range text, e.g. "models".</summary>
+    [Parameter]
+    public string? Noun { get; set; }
+
+    [Parameter]
+    public string AriaLabel { get; set; } = "Pagination";
+
+    [Parameter]
+    public string TestId { get; set; } = "pager";
+
+    private string SizeId => $"pager-{_id}-size";
+
+    private string? PageKey => QueryPrefix switch { null => "page", "" => null, _ => $"{QueryPrefix}-page" };
+
+    private string? SizeKey => QueryPrefix switch { null => "size", "" => null, _ => $"{QueryPrefix}-size" };
+
+    private int EffectiveSize => Normalize(Size ?? DefaultSize);
+
+    private int PageCount => PageCountFor(Total, EffectiveSize);
+
+    private int CurrentPage => Clamp(Page, Total, EffectiveSize);
+
+    private bool Visible => Total > 0 && (EffectiveSize == 0 ? Total > Sizes.Where(s => s > 0).DefaultIfEmpty(0).Min() : PageCount > 1);
+
+    private string RangeText
+    {
+        get
+        {
+            var (from, to) = Range(Total, CurrentPage, EffectiveSize);
+            string noun = string.IsNullOrEmpty(Noun) ? "" : $" {Noun}";
+            return $"{from}–{to} of {Total}{noun}";
+        }
+    }
+
+    /// <summary>Number of pages for <paramref name="total"/> items at <paramref name="size"/> per page (0 = All); at least 1.</summary>
+    public static int PageCountFor(int total, int size) =>
+        size <= 0 || total <= 0 ? 1 : (total + size - 1) / size;
+
+    /// <summary><paramref name="page"/> kept within 1..PageCount.</summary>
+    public static int Clamp(int page, int total, int size) => Math.Clamp(page, 1, PageCountFor(total, size));
+
+    /// <summary>1-based first and last item shown on the page (0–0 for an empty list).</summary>
+    public static (int From, int To) Range(int total, int page, int size)
+    {
+        if (total <= 0)
+        {
+            return (0, 0);
+        }
+
+        if (size <= 0)
+        {
+            return (1, total);
+        }
+
+        int p = Clamp(page, total, size);
+        return ((p - 1) * size + 1, Math.Min(p * size, total));
+    }
+
+    /// <summary>The items on <paramref name="page"/> (clamped) at <paramref name="size"/> per page (null = 25, 0 = All).</summary>
+    public static List<T> Slice<T>(IReadOnlyList<T> items, int page, int? size, int defaultSize = 25)
+    {
+        int s = Normalize(size ?? defaultSize);
+        if (s == 0)
+        {
+            return [.. items];
+        }
+
+        int p = Clamp(page, items.Count, s);
+        return items.Skip((p - 1) * s).Take(s).ToList();
+    }
+
+    /// <summary>Page numbers to show: every page up to 7; beyond that the first, the last, and the current page with one
+    /// neighbour each side, null marking a gap.</summary>
+    public static IReadOnlyList<int?> Window(int current, int count)
+    {
+        if (count <= 7)
+        {
+            return Enumerable.Range(1, Math.Max(1, count)).Select(n => (int?)n).ToList();
+        }
+
+        var pages = new SortedSet<int> { 1, count, current, Math.Max(1, current - 1), Math.Min(count, current + 1) };
+        var result = new List<int?>();
+        int previous = 0;
+        foreach (int n in pages)
+        {
+            if (n - previous == 2)
+            {
+                result.Add(previous + 1); // a one-page gap shows the page instead of "…"
+            }
+            else if (n - previous > 2)
+            {
+                result.Add(null);
+            }
+
+            result.Add(n);
+            previous = n;
+        }
+
+        return result;
+    }
+
+    private static int Normalize(int size) => size < 0 ? 0 : size;
+
+    private static string SizeToken(int size) => size == 0 ? "all" : size.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private static int? ParseSize(string? value) =>
+        value is null ? null
+        : string.Equals(value, "all", StringComparison.OrdinalIgnoreCase) ? 0
+        : int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int n) && n > 0 ? n
+        : null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (_resolvedFromQuery || PageKey is null)
+        {
+            return;
+        }
+
+        _resolvedFromQuery = true;
+        var query = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query);
+        int? size = ParseSize(query.GetValueOrDefault(SizeKey!).FirstOrDefault());
+        if (size is int s && Sizes.Contains(s) && s != EffectiveSize)
+        {
+            Size = s;
+            await SizeChanged.InvokeAsync(s);
+        }
+
+        if (int.TryParse(query.GetValueOrDefault(PageKey).FirstOrDefault(), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out int page) && page > 1 && page != Page)
+        {
+            Page = page;
+            await PageChanged.InvokeAsync(page);
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!_hasResetKey)
+        {
+            _hasResetKey = true;
+            _lastResetKey = ResetKey;
+            return;
+        }
+
+        if (!string.Equals(_lastResetKey, ResetKey, StringComparison.Ordinal))
+        {
+            _lastResetKey = ResetKey;
+            if (Page != 1)
+            {
+                await SetAsync(1, Size);
+            }
+        }
+    }
+
+    private Task GoAsync(int page) => SetAsync(Clamp(page, Total, EffectiveSize), Size);
+
+    private Task OnSizeChanged(ChangeEventArgs e) => SetAsync(1, ParseSize(e.Value?.ToString()) ?? DefaultSize);
+
+    private async Task SetAsync(int page, int? size)
+    {
+        bool sizeChanged = size != Size;
+        Page = page;
+        Size = size;
+        await PageChanged.InvokeAsync(page);
+        if (sizeChanged)
+        {
+            await SizeChanged.InvokeAsync(size);
+        }
+
+        if (PageKey is not null)
+        {
+            int s = Normalize(size ?? DefaultSize);
+            UrlQuery.For(Nav).Replace(new Dictionary<string, object?>
+            {
+                [PageKey] = page > 1 ? page : null,
+                [SizeKey!] = s == DefaultSize ? null : SizeToken(s),
+            });
+        }
+    }
+}

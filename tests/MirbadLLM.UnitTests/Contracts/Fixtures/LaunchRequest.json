@@ -1,0 +1,61 @@
+{
+  "mode": "ensureStarted",
+  "spec": {
+    "kind": "container",
+    "runtime": "vllm",
+    "image": "local/qwen38-vllm-dflash2:66e5414c6d75",
+    "imageDigest": "sha256:66e5414c6d75",
+    "executable": null,
+    "argv": [
+      "--model",
+      "/models/Qwen3.6-35B-A3B-NVFP4",
+      "--served-model-name",
+      "qwen36-35b"
+    ],
+    "env": {
+      "HF_HUB_OFFLINE": "1",
+      "HF_TOKEN": "hf_fixture_secret"
+    },
+    "secretEnvNames": [
+      "HF_TOKEN"
+    ],
+    "containerPort": 8000,
+    "mounts": [
+      {
+        "volume": "models",
+        "subPath": null,
+        "target": "/models",
+        "readOnly": true
+      },
+      {
+        "volume": "cache",
+        "subPath": null,
+        "target": "/root/.cache",
+        "readOnly": false
+      }
+    ],
+    "gpus": {
+      "mode": "all"
+    },
+    "ipcHost": true,
+    "healthPath": "/health",
+    "labels": {
+      "mirbadllm.served-name": "qwen36-35b",
+      "mirbadllm.config-hash": "9f2c1a3b",
+      "mirbadllm.exec-fingerprint": "41ab5c8d",
+      "mirbadllm.budget-gib": "36"
+    }
+  },
+  "admission": {
+    "budgetGiB": 36,
+    "hostBudgetGiB": null,
+    "reserveGiB": 8,
+    "gpuReserveGiB": null,
+    "force": false
+  },
+  "expectedConfigHash": "9f2c1a3b",
+  "expectedExecutionFingerprint": "41ab5c8d",
+  "operationId": "op-001",
+  "issuedAt": "2026-10-03T10:00:00+00:00",
+  "expiresAt": "2026-10-04T10:00:00+00:00"
+}

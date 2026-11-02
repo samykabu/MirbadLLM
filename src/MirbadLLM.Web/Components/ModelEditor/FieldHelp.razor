@@ -1,0 +1,52 @@
+@* A field's label with an info button. The button opens a floating help panel (What / Why / Example) through the
+   native Popover API: it overlays the form instead of pushing fields down, sits in the top layer, and closes on Esc
+   or an outside click with no script. Where CSS anchor positioning is supported it opens next to the button. *@
+<div class="field-head">
+    @if (Leading is not null)
+    {
+        @Leading
+    }
+    else if (ShowLabel)
+    {
+        <label class="field-label" for="@For">@Label</label>
+    }
+    <button type="button" class="info-btn" aria-label="@($"About: {Label}")" popovertarget="@PanelId"
+            style="@($"anchor-name: --{PanelId}")" data-testid="@($"info-toggle-{For}")">
+        <Icon Name="info" />
+    </button>
+</div>
+<div class="help-popover" id="@PanelId" popover role="note" aria-label="@($"About {Label}")"
+     style="@($"position-anchor: --{PanelId}")" data-testid="@($"info-panel-{For}")">
+    <p class="help-popover-title">@Label</p>
+    <dl class="help-panel">
+        <dt>What it is</dt>
+        <dd>@Help.What</dd>
+        <dt>Why it matters</dt>
+        <dd>@Help.Why</dd>
+        <dt>Example</dt>
+        <dd>@Help.Example</dd>
+    </dl>
+</div>
+
+@code {
+    /// <summary>The field's own label text.</summary>
+    [Parameter, EditorRequired]
+    public string Label { get; set; } = "";
+
+    /// <summary>The id of the input this help is about (used for the label's <c>for</c> and the panel's <c>aria-controls</c>/testid).</summary>
+    [Parameter, EditorRequired]
+    public string For { get; set; } = "";
+
+    [Parameter, EditorRequired]
+    public FieldHelpText Help { get; set; } = null!;
+
+    /// <summary>False for a field that already has its own visible label (e.g. a checkbox) — the info button still needs <see cref="Label"/> for its aria-label.</summary>
+    [Parameter]
+    public bool ShowLabel { get; set; } = true;
+
+    /// <summary>Content placed before the info button instead of the label, e.g. a switch with its own label.</summary>
+    [Parameter]
+    public RenderFragment? Leading { get; set; }
+
+    private string PanelId => $"{For}-help";
+}

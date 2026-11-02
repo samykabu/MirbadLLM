@@ -1,0 +1,9 @@
+{
+  "folder": "Qwen3.6-35B-A3B-NVFP4",
+  "sizeBytes": 35849945088,
+  "hasConfig": true,
+  "partial": false,
+  "weightsGiB": 34.2,
+  "architecture": "Qwen2ForCausalLM",
+  "detectedFormat": "NVFP4"
+}

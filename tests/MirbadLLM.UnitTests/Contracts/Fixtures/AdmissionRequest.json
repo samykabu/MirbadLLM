@@ -1,0 +1,10 @@
+{
+  "budgetGiB": 24,
+  "hostBudgetGiB": 10,
+  "reserveGiB": 4,
+  "gpuReserveGiB": 0.5,
+  "gpuReservesGiB": {
+    "GPU-3f1c2a4b-5d6e-4f70-8a91-b2c3d4e5f601": 1
+  },
+  "force": false
+}

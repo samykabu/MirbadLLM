@@ -1,0 +1,16 @@
+{
+  "type": "reservation",
+  "reservation": {
+    "operationId": "op-001",
+    "modelId": "qwen36-35b",
+    "gpus": [],
+    "budgetGiB": 36,
+    "hostBudgetGiB": null,
+    "hostPort": 8101,
+    "createdAt": "2026-10-03T10:00:00+00:00"
+  },
+  "released": false,
+  "bootId": "b11ac10b-58cc-4372-a567-0e02b2c3d479",
+  "seq": 5,
+  "at": "2026-10-03T10:00:20+00:00"
+}

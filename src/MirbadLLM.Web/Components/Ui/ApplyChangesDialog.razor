@@ -1,0 +1,249 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using MirbadLLM.Orchestration
+@inject IModelRuntime Runtime
+@inject IServiceProvider Services
+@* "Apply changes now?": the saved settings only take effect when the container is recreated. Lists every
+   changed launch setting as old → new, says how long a restart takes (from the last measured start), and
+   restarts on confirm. A refused admission falls through to the same force dialog as Start, with exact numbers.
+   The dialog closes only once the restart was accepted: any refusal or error is shown inside it (the page behind
+   a modal is inert and may be scrolled away), the wait is bounded, and the confirm button re-enables. *@
+<ConfirmDialog @bind-Open="_open" Title="Apply changes now?" ConfirmLabel="Restart now" CancelLabel="Later" CloseOnConfirm="false"
+               OnConfirm="RestartAsync" OnCancel="LaterAsync" TestId="apply-dialog">
+    <p>
+        <strong>@_name</strong> is running with other settings than the saved ones.
+        @(_changes.Count == 0 ? "A restart launches it with the saved settings." : "A restart applies:")
+    </p>
+    @if (_changes.Count > 0)
+    {
+        <ul class="change-list" data-testid="apply-changes">
+            @foreach (var change in _changes)
+            {
+                <li>
+                    <span class="change-label">@change.Label:</span>
+                    <span class="num change-old">@change.Old</span>
+                    <span class="change-arrow" aria-label="to">→</span>
+                    <span class="num change-new">@change.New</span>
+                </li>
+            }
+        </ul>
+    }
+    <p class="muted" data-testid="apply-estimate">@_estimate</p>
+    @DialogStatus("apply")
+</ConfirmDialog>
+
+<ConfirmDialog @bind-Open="_forceOpen" Title="@($"Restart {_name} anyway?")" ConfirmLabel="Restart anyway" Destructive="true" CloseOnConfirm="false"
+               OnConfirm="ForceRestartAsync" OnCancel="LaterAsync" TestId="force-restart-dialog">
+    <p data-testid="force-restart-numbers">
+        @_name needs <strong class="num">@UiFormat.GiB(_need)</strong>@(_where is null ? "" : $" on {_where}"), but only
+        <strong class="num">@UiFormat.GiB(_freeAfterReserve)</strong> is free after the
+        <span class="num">@UiFormat.GiB(_reserve)</span> reserve (<span class="num">@UiFormat.GiB(_free)</span> free in total,
+        counting the <span class="num">@UiFormat.GiB(_own)</span> its running container releases).
+    </p>
+    <p class="muted">
+        Restarting anyway can push ComfyUI, Ollama or other models on this box out of memory, or leave this model failing while it loads.
+    </p>
+    @DialogStatus("force-restart")
+</ConfirmDialog>
+
+@code {
+    private bool _open;
+    private bool _forceOpen;
+    private string _id = "";
+    private string _name = "";
+    private IReadOnlyList<SettingChange> _changes = [];
+    private string _estimate = "";
+    private double _need;
+    private double _own;
+    private double _free;
+    private double _freeAfterReserve;
+    private double _reserve;
+    private string? _error;
+    private bool _restarting;
+    private string? _nodeId;
+    private string? _where;
+    private ModelDefinition? _saved;
+
+    // Resolved once (MN-132): a lookup from the scope while the circuit or host is being disposed throws.
+    private MirbadLLM.Orchestration.Benchmarking.ModelJobService? _jobs;
+    private IOwnershipStore? _ownership;
+    private INodeRegistry? _nodes;
+    private IMemoryProbe? _probe;
+    private IModelLauncher? _launcher;
+    private StartupTimeTracker? _tracker;
+    private double _defaultReserve = new MirbadLLMOptions().MemoryReserveGiB;
+    private TimeSpan _restartWait = DefaultRestartWait;
+
+    protected override void OnInitialized()
+    {
+        _jobs = Services.GetService<MirbadLLM.Orchestration.Benchmarking.ModelJobService>();
+        _ownership = Services.GetService<IOwnershipStore>();
+        _nodes = Services.GetService<INodeRegistry>();
+        _probe = Services.GetService<IMemoryProbe>();
+        _launcher = Services.GetService<IModelLauncher>();
+        _tracker = Services.GetService<StartupTimeTracker>();
+        _defaultReserve = Services.GetService<IOptions<MirbadLLMOptions>>()?.Value.MemoryReserveGiB ?? _defaultReserve;
+        _restartWait = Services.GetService<ApplyRestartOptions>()?.Wait ?? DefaultRestartWait;
+    }
+
+    /// <summary>Raised after a restart was requested (true) or the user chose Later (false).</summary>
+    [Parameter]
+    public EventCallback<bool> OnFinished { get; set; }
+
+    /// <summary>
+    /// Opens the dialog for <paramref name="saved"/> (already saved), listing <paramref name="changes"/>.
+    /// <paramref name="ownBudgetGiB"/> is the budget the running container holds, released by the restart.
+    /// </summary>
+    public Task OpenAsync(ModelDefinition saved, IReadOnlyList<SettingChange> changes, double ownBudgetGiB)
+    {
+        ArgumentNullException.ThrowIfNull(saved);
+        _saved = saved;
+        _id = saved.Id;
+        _name = saved.ServedName;
+        _nodeId = saved.Placement?.NodeId;
+        _where = null;
+        _changes = changes;
+        _need = saved.MemoryBudgetGiB;
+        _own = ownBudgetGiB;
+        _error = null;
+        _restarting = false;
+        _forceOpen = false;
+        _estimate = SettingChanges.RestartEstimate(_tracker?.GetLast(saved.Id));
+        _open = true;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// The Apply action for a model whose status says a restart is pending: diff what the container runs
+    /// (read back from its command line) against the saved definition, then open the dialog.
+    /// </summary>
+    public async Task OpenForPendingAsync(ModelDefinition saved)
+    {
+        ArgumentNullException.ThrowIfNull(saved);
+        ModelDefinition? launched = null;
+        if (_launcher is { } launcher)
+        {
+            try
+            {
+                launched = await launcher.GetLaunchedDefinitionAsync(saved.Id);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or DockerApiException)
+            {
+                launched = null;
+            }
+        }
+
+        var changes = launched is null ? [] : SettingChanges.RestartNeeded(launched, saved);
+        await OpenAsync(saved, changes, launched?.MemoryBudgetGiB ?? saved.MemoryBudgetGiB);
+    }
+
+    /// <summary>How long the dialog waits for Docker to accept the restart (stop, remove, create, start) before it
+    /// stops waiting and says so. vLLM gets 30 s to stop; the rest is Docker bookkeeping (or an image pull).</summary>
+    public static readonly TimeSpan DefaultRestartWait = TimeSpan.FromSeconds(90);
+
+    private TimeSpan RestartWait => _restartWait;
+
+    /// <summary>The progress line while the restart runs, or the error after it failed — inside the open dialog.</summary>
+    private RenderFragment DialogStatus(string testId) => __builder =>
+    {
+        if (_restarting)
+        {
+            <p class="muted" role="status" aria-live="polite" data-testid="@($"{testId}-progress")">
+                Stopping @_name and starting it with the saved settings. This takes up to a minute; it then loads in the background.
+            </p>
+        }
+        else if (_error is not null)
+        {
+            <div class="callout callout--failed" role="alert" data-testid="@($"{testId}-error")">
+                <Icon Name="state-failed" />
+                <div class="callout-body">@_error</div>
+            </div>
+        }
+    };
+
+    private Task RestartAsync() => RunRestartAsync(force: false);
+
+    private Task ForceRestartAsync() => RunRestartAsync(force: true);
+
+    /// <summary>
+    /// Recreates the container. Closes the dialog and raises <see cref="OnFinished"/> only once Docker accepted
+    /// the restart; a memory refusal moves to the force dialog; anything else (another model still starting,
+    /// a tuning run on this model, a Docker error, no answer within <see cref="RestartWait"/>) stays in the
+    /// dialog as a message, with the confirm button enabled again. The settings are already saved either way.
+    /// </summary>
+    private async Task RunRestartAsync(bool force)
+    {
+        _error = null;
+        // The job on this model's node (D83: every node has its own; the oldest job overall is another node's on a fleet).
+        if (_jobs?.JobAffecting(_saved) is { } job && job.ModelId == _id)
+        {
+            string run = job.Kind == MirbadLLM.Orchestration.Benchmarking.JobKind.Tuning ? "A tuning run" : "A benchmark";
+            _error = $"{run} is measuring {_name}. Wait for it to finish or cancel it, then restart; the settings are saved.";
+            return;
+        }
+
+        _restarting = true;
+        StateHasChanged();
+        try
+        {
+            // A model a move, job or restore holds refuses a plain restart (design §6.7, MN-130).
+            await MirbadLLM.Orchestration.Multinode.HeldModelGuard.EnsureNotHeldAsync(_ownership, _id);
+            await Runtime.RestartAsync(_id, force).WaitAsync(RestartWait);
+            _open = false;
+            _forceOpen = false;
+            _restarting = false;
+            await OnFinished.InvokeAsync(true);
+        }
+        catch (ModelMemoryAdmissionException ex) when (!force)
+        {
+            // The agent's own refusal numbers when it sent them (the refusing GPU on a discrete node, W8 review MN-128), else
+            // the page's estimate from the memory probe.
+            var gpus = _nodeId is { } node && _nodes is { } nodes
+                ? (await nodes.GetAsync(node))?.LastCapabilities?.Gpus
+                : null;
+            if (AdmissionNumbers.FromRefusal(ex, _nodeId, gpus) is { } numbers)
+            {
+                _need = numbers.NeedGiB;
+                _reserve = numbers.ReserveGiB;
+                _own = numbers.ReleasedGiB;
+                _free = numbers.AvailableGiB + numbers.ReleasedGiB;
+                _freeAfterReserve = numbers.FreeAfterReserveGiB;
+                _where = numbers.Where;
+            }
+            else
+            {
+                var memory = _probe is { } probe ? await probe.GetAsync() : new MemorySnapshot(0, 0);
+                _reserve = _defaultReserve;
+                _free = memory.AvailableGiB + _own;
+                _freeAfterReserve = Math.Max(0, _free - _reserve);
+            }
+
+            _open = false;
+            _forceOpen = true;
+        }
+        catch (ModelBusyException ex)
+        {
+            // A move, job or restore holds the model (409 model_busy, D101): name it and say what to do.
+            _error = EditorRefusals.Runtime(ex, _name, "restart") + " The settings are saved.";
+        }
+        catch (ModelStartConflictException ex)
+        {
+            string other = string.IsNullOrEmpty(ex.StartingModelId) ? "Another model" : ex.StartingModelId;
+            _error = $"{other} is still starting, and two models loading together both fail. Restart {_name} once it is Ready; the settings are saved.";
+        }
+        catch (TimeoutException)
+        {
+            _error = $"Docker hasn't confirmed the restart of {_name} after {RestartWait.TotalSeconds:0} s. It may still be in progress: check the model's status before trying again. The settings are saved.";
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _error = $"Couldn't restart {_name}: {ex.Message} The settings are saved.";
+        }
+        finally
+        {
+            _restarting = false;
+        }
+    }
+
+    private Task LaterAsync() => OnFinished.InvokeAsync(false);
+}

@@ -1,0 +1,9 @@
+{
+  "scenario": "embeddings",
+  "method": "POST",
+  "path": "/v1/embeddings",
+  "status": 200,
+  "contentType": "application/json; charset=utf-8",
+  "retryAfter": null,
+  "body": "{\n  \u0022object\u0022: \u0022list\u0022,\n  \u0022data\u0022: [\n    {\n      \u0022object\u0022: \u0022embedding\u0022,\n      \u0022index\u0022: 0,\n      \u0022embedding\u0022: [0.1, 0.2, 0.3, 0.4]\n    }\n  ],\n  \u0022model\u0022: \u0022embed-model\u0022,\n  \u0022usage\u0022: {\u0022prompt_tokens\u0022: 5, \u0022total_tokens\u0022: 5}\n}"
+}

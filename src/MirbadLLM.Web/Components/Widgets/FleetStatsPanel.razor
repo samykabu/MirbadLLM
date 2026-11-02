@@ -1,0 +1,75 @@
+@namespace MirbadLLM.Web.Components.Widgets
+@using System.Globalization
+@* The Overview's fleet counters: requests served, tokens today, the crash-free streak and the error budget left. Every
+   figure is counted or measured; what is not known reads "—". *@
+<aside class="panel fleet-stats" aria-labelledby="fleet-stats-title" data-testid="fleet-stats">
+    <h2 class="fleet-stats-title" id="fleet-stats-title">Fleet today</h2>
+    <dl class="fleet-counters">
+        <div>
+            <dt>Requests served</dt>
+            <dd class="num" data-testid="fleet-requests">@UiFormat.Whole(Requests)</dd>
+            <span class="muted">@CountedSince</span>
+        </div>
+        <div>
+            <dt>Tokens today</dt>
+            <dd class="num" data-testid="fleet-tokens-today">@Compact(TokensToday)</dd>
+            <span class="muted">Generated since local midnight</span>
+        </div>
+        <div>
+            <dt>Crash-free streak</dt>
+            <dd class="num" data-testid="fleet-crash-free">@(CrashFree is { } streak ? Streak(streak) : UiFormat.Missing)</dd>
+            <span class="muted">@(CrashedEver ? "Since the last model crash" : "No crash since counting began")</span>
+        </div>
+        <div>
+            <dt>Error budget</dt>
+            <dd class="num" data-testid="fleet-error-budget">@(ErrorBudgetLeft is double left ? $"{UiFormat.Whole(left * 100)}% left" : UiFormat.Missing)</dd>
+            <span class="muted">Target under @UiFormat.Number(BudgetPercent)% failed</span>
+        </div>
+    </dl>
+</aside>
+
+@code {
+    [Parameter]
+    public long? Requests { get; set; }
+
+    [Parameter]
+    public double? TokensToday { get; set; }
+
+    [Parameter]
+    public TimeSpan? CrashFree { get; set; }
+
+    [Parameter]
+    public bool CrashedEver { get; set; }
+
+    [Parameter]
+    public DateTimeOffset? CountingSince { get; set; }
+
+    [Parameter]
+    public double? ErrorBudgetLeft { get; set; }
+
+    [Parameter]
+    public double BudgetPercent { get; set; } = 2;
+
+    private string CountedSince => CountingSince is { } since ? $"Since {since.UtcDateTime.ToString("d MMM yyyy", CultureInfo.InvariantCulture)}" : "Not counted on this host";
+
+    /// <summary>A streak's length, whole units only: "11 days", "5 h", "42 min", "&lt; 1 min".</summary>
+    public static string Streak(TimeSpan span) => span switch
+    {
+        { TotalDays: >= 2 } => $"{(int)span.TotalDays} days",
+        { TotalDays: >= 1 } => "1 day",
+        { TotalHours: >= 1 } => $"{(int)span.TotalHours} h",
+        { TotalMinutes: >= 1 } => $"{(int)span.TotalMinutes} min",
+        _ => "< 1 min",
+    };
+
+    /// <summary>"1.24 M", "18.4 k", "512"; "—" when unknown.</summary>
+    public static string Compact(double? value) => value switch
+    {
+        null => UiFormat.Missing,
+        double v when !double.IsFinite(v) => UiFormat.Missing,
+        >= 1_000_000_000 => (value.Value / 1_000_000_000).ToString("0.##", CultureInfo.InvariantCulture) + " B",
+        >= 1_000_000 => (value.Value / 1_000_000).ToString("0.##", CultureInfo.InvariantCulture) + " M",
+        >= 10_000 => (value.Value / 1_000).ToString("0.#", CultureInfo.InvariantCulture) + " k",
+        _ => UiFormat.Whole(value),
+    };
+}

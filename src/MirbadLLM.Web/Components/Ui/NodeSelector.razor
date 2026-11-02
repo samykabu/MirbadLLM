@@ -1,0 +1,143 @@
+@namespace MirbadLLM.Web.Components.Ui
+@inject NavigationManager Nav
+@*
+    The node selector of the per-node pages (design §8.3 Monitoring, §9.1 Services; MN-120): a Segmented control of
+    native radios with up to four nodes (arrow keys move and select, like the time-window selector), a select with more.
+    Hidden with one node, so a single-node install looks exactly as before. The selection lives in ?node= (QueryKey).
+*@
+@if (Nodes.Count > 1)
+{
+    <div class="node-selector" data-testid="@TestId">
+        @if (Nodes.Count <= MaxSegmented)
+        {
+            <div class="segmented" role="radiogroup" aria-label="@Label" data-testid="@($"{TestId}-segmented")">
+                @foreach (var node in Nodes)
+                {
+                    <label class="segmented-option" title="@StateTitle(node)">
+                        <input type="radio" name="@_group" value="@node.Id" checked="@(node.Id == SelectedId)"
+                               data-testid="@($"node-option-{node.Id}")" @onchange="() => SelectAsync(node.Id)" />
+                        <span>@node.Name</span>
+                        @if (StateSuffix(node) is { } suffix)
+                        {
+                            <span class="node-selector-state" data-testid="@($"node-option-state-{node.Id}")">@suffix</span>
+                        }
+                    </label>
+                }
+            </div>
+        }
+        else
+        {
+            <label class="visually-hidden" for="@_group">@Label</label>
+            <select class="form-select" id="@_group" data-testid="@($"{TestId}-select")"
+                    value="@SelectedId" @onchange="e => SelectAsync(e.Value?.ToString())">
+                @foreach (var node in Nodes)
+                {
+                    <option value="@node.Id" selected="@(node.Id == SelectedId)">@node.Name@(StateSuffix(node) is { } suffix ? $" · {suffix}" : "")</option>
+                }
+            </select>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>Nodes up to which the Segmented control is used (design §8.3: "Segmented control when ≤ 4 nodes").</summary>
+    public const int MaxSegmented = 4;
+
+    /// <summary>The query parameter that keeps the selection.</summary>
+    public const string DefaultQueryKey = "node";
+
+    private static int _nextId;
+    private readonly string _group = $"node-selector-{Interlocked.Increment(ref _nextId)}";
+
+    /// <summary>One selectable node.</summary>
+    /// <param name="Id">Node id.</param>
+    /// <param name="Name">Display name (the id when it has none).</param>
+    /// <param name="State">Current state; anything but Online is named next to the node.</param>
+    /// <param name="Draining">Draining flag (named next to the node).</param>
+    public sealed record Option(string Id, string Name, NodeState State, bool Draining = false);
+
+    [Parameter, EditorRequired]
+    public IReadOnlyList<Option> Nodes { get; set; } = [];
+
+    [Parameter, EditorRequired]
+    public string SelectedId { get; set; } = "";
+
+    [Parameter]
+    public EventCallback<string> SelectedIdChanged { get; set; }
+
+    /// <summary>Query parameter written on change; null or empty disables URL persistence.</summary>
+    [Parameter]
+    public string? QueryKey { get; set; } = DefaultQueryKey;
+
+    [Parameter]
+    public string Label { get; set; } = "Node";
+
+    [Parameter]
+    public string TestId { get; set; } = "node-selector";
+
+    /// <summary>
+    /// The selectable nodes from the Nodes page's rows (registry merged with live status, ordered by name): every node
+    /// except one still pending approval, which the master sends nothing to (design §3.2). Revoked nodes are never rows.
+    /// </summary>
+    public static List<Option> From(IEnumerable<MirbadLLM.Web.Components.Pages.Nodes.NodeRow> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        return [.. rows.Where(r => r.State != NodeState.PendingApproval).Select(r => new Option(r.Id, r.Name, r.State, r.Draining))];
+    }
+
+    /// <summary>The value of <c>?{queryKey}=</c> in the current URL, or null.</summary>
+    public static string? FromQuery(NavigationManager nav, string queryKey = DefaultQueryKey)
+    {
+        ArgumentNullException.ThrowIfNull(nav);
+        string? value = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(new Uri(nav.Uri).Query)
+            .GetValueOrDefault(queryKey)
+            .FirstOrDefault();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    /// <summary>
+    /// The node to show: <paramref name="requested"/> when it is one of <paramref name="nodes"/>, else
+    /// <paramref name="defaultId"/> when it is, else the first node; <paramref name="defaultId"/> with no nodes at all.
+    /// </summary>
+    public static string Resolve(IReadOnlyList<Option> nodes, string? requested, string defaultId)
+    {
+        ArgumentNullException.ThrowIfNull(nodes);
+        if (requested is not null && nodes.Any(n => n.Id == requested))
+        {
+            return requested;
+        }
+
+        return nodes.Count == 0 || nodes.Any(n => n.Id == defaultId) ? defaultId : nodes[0].Id;
+    }
+
+    /// <summary>"Offline", "Draining", "Degraded"…; null for an Online node that is not draining.</summary>
+    public static string? StateSuffix(Option node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        string? state = node.State switch
+        {
+            NodeState.Online => null,
+            NodeState.PendingApproval => "Pending approval",
+            NodeState.PendingTakeover => "Pending takeover",
+            _ => node.State.ToString(),
+        };
+        return node.Draining ? state is null ? "Draining" : $"{state}, draining" : state;
+    }
+
+    private static string StateTitle(Option node) => StateSuffix(node) is { } suffix ? $"{node.Name} ({node.Id}) · {suffix}" : $"{node.Name} ({node.Id})";
+
+    private async Task SelectAsync(string? id)
+    {
+        if (string.IsNullOrEmpty(id) || id == SelectedId || Nodes.All(n => n.Id != id))
+        {
+            return;
+        }
+
+        SelectedId = id;
+        await SelectedIdChanged.InvokeAsync(id);
+        if (!string.IsNullOrEmpty(QueryKey))
+        {
+            UrlQuery.For(Nav).Replace(QueryKey, id);
+        }
+    }
+}

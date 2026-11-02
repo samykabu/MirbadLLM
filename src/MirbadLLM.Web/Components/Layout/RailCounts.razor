@@ -1,0 +1,85 @@
+@implements IAsyncDisposable
+@inject IServiceProvider ServiceProvider
+
+@switch (Kind)
+{
+    case "overview":
+        @* The attention count while something needs you, else the fleet's live generation (Monitoring's old count). *@
+        if (_attention > 0)
+        {
+            <span class="nav-meta nav-meta--attention" data-testid="rail-attention" title="@($"{_attention} items need attention")">@_attention</span>
+        }
+        else
+        {
+            <span class="nav-meta @(_generation is not null ? "nav-meta--live" : null)" data-testid="rail-generation" title="Fleet generation, tok/s">@UiFormat.Number(_generation)</span>
+        }
+        break;
+    case "models":
+        <span class="nav-meta" data-testid="rail-models" title="Ready of all models">@_models</span>
+        break;
+    case "nodes":
+        <span class="nav-meta" data-testid="rail-node-count" title="Reporting of all nodes">@_nodes</span>
+        break;
+}
+
+@code {
+    [Parameter, EditorRequired] public string Kind { get; set; } = "";
+
+    private LiveDataService? _live;
+    private bool _ownsLive;
+    private IDisposable? _subscription;
+    private int _attention;
+    private double? _generation;
+    private string _models = UiFormat.Missing;
+    private string _nodes = UiFormat.Missing;
+    private const LiveNeeds Needs = LiveNeeds.Models | LiveNeeds.Statuses;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _live = LiveDataService.Resolve(ServiceProvider, out _ownsLive);
+        await ApplyAsync(await _live.GetAsync(Needs));
+        _subscription = _live.Subscribe(Needs, snapshot => InvokeAsync(async () =>
+        {
+            await ApplyAsync(snapshot);
+            StateHasChanged();
+        }));
+    }
+
+    private async Task ApplyAsync(LiveSnapshot snapshot)
+    {
+        _models = snapshot.Models is null || snapshot.Statuses is null ? UiFormat.Missing
+            : $"{snapshot.Models.Count(m => snapshot.Statuses.GetValueOrDefault(m.Id)?.State == ModelState.Ready)}/{snapshot.Models.Count}";
+        var rates = (snapshot.Models ?? []).Where(m => PoolingDetection.Detect(m) == PoolingMode.None
+                && snapshot.Statuses?.GetValueOrDefault(m.Id)?.State == ModelState.Ready)
+            .Select(m => snapshot.LatestKpis.GetValueOrDefault(m.Id)?.Load.GenerationTokensPerSecond)
+            .Where(v => v is { } value && double.IsFinite(value)).ToList();
+        _generation = rates.Count > 0 ? rates.Sum() : null;
+
+        if (Kind is "overview" or "nodes")
+        {
+            var cache = ServiceProvider.GetService<INodeStatusCache>();
+            var registry = ServiceProvider.GetService<INodeRegistry>();
+            try
+            {
+                var reading = await FleetNodes.ReadAsync(cache, registry, snapshot.Models ?? [], CancellationToken.None);
+                _nodes = cache is null && registry is null || reading.Error is not null ? UiFormat.Missing
+                    : $"{reading.Rows.Count(n => n.IsServing && n.Memory is not null)}/{reading.Rows.Count}";
+                _attention = AttentionItems.Build(snapshot, reading.Rows, ServiceProvider.GetService<IMetricsHistory>()).Count;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            {
+                _nodes = UiFormat.Missing;
+                _attention = AttentionItems.Build(snapshot, [], ServiceProvider.GetService<IMetricsHistory>()).Count;
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _subscription?.Dispose();
+        if (_ownsLive && _live is not null)
+        {
+            await _live.DisposeAsync();
+        }
+    }
+}

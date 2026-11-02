@@ -1,0 +1,33 @@
+{
+  "kind": "process",
+  "image": null,
+  "imageDigest": null,
+  "executable": "llama-server",
+  "executableVersion": "b11476",
+  "argv": [
+    "-m",
+    "{models}/Qwen3-Embedding-4B-GGUF/Qwen3-Embedding-4B-Q8_0.gguf",
+    "--alias",
+    "qwen3-embedding-4b-win",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "{port}"
+  ],
+  "env": {},
+  "mounts": [],
+  "gpus": [
+    {
+      "index": 1,
+      "uuid": "GPU-7c1e9a52-3f60-4d2b-9a8e-5b0f2c6d1e44"
+    }
+  ],
+  "labels": {
+    "mirbadllm.model": "qwen3-embedding-4b",
+    "mirbadllm.node": "win-1",
+    "mirbadllm.operation": "op-301",
+    "mirbadllm.served-name": "qwen3-embedding-4b-win"
+  },
+  "executionFingerprint": "5e0c7a91d2b34f68",
+  "createdAt": "2026-10-07T10:00:05+00:00"
+}

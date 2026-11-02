@@ -1,0 +1,17 @@
+
+	disabled services = {
+		"com.apple.AEServer" => enabled
+		"actions.runner.example-org.mac-build-2" => enabled
+		"com.apple.screensharing" => enabled
+		"actions.runner.example-org.mac-build-3" => enabled
+		"com.carriez.RustDesk_service" => enabled
+		"com.apple.CSCSupportd" => disabled
+		"com.apple.ftpd" => disabled
+		"com.apple.mdmclient.daemon.runatboot" => disabled
+		"com.docker.socket" => enabled
+		"com.openssh.sshd" => enabled
+		"com.docker.vmnetd" => enabled
+		"com.apple.smbd" => enabled
+		"actions.runner.example-org.mac-build-1" => enabled
+		"com.mirbadllm.agent" => enabled
+	}

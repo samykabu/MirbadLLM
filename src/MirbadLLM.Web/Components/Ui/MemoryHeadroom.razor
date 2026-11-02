@@ -1,0 +1,214 @@
+@namespace MirbadLLM.Web.Components.Ui
+@* A node's unified memory: what MirbadLLM models hold, what everything else uses, what is still free, and the
+   reserve kept back for other workloads (drawn hatched, inside free). Values are always printed in the legend.
+   With Gpus set it draws one bar per GPU instead (a discrete node, design §8.3), each with its own legend.
+   The bar can never draw past its total: free is clamped to the total and the models segment to what is measured in
+   use. When the readings disagree (model budgets above the memory the node measures in use, or a free reading above
+   the total) the legend and a note say which number is measured and which is budgeted, instead of drawing an
+   impossible bar. Bare drops the panel frame, for a bar inside another panel (the Overview's node panels). *@
+@if (Gpus is { Count: > 0 } gpus)
+{
+    <section class="@(Bare ? "headroom headroom--bare headroom--gpus" : "panel headroom headroom--gpus")" aria-labelledby="@HeadingId" data-testid="@Tid("memory-bar")">
+        <div class="headroom-head">
+            @Heading(@<text>@Title <span class="headroom-total num">@GpuCountText(gpus.Count)</span></text>)
+            @if (HostAvailableGiB is not null || HostTotalGiB is not null)
+            {
+                <span class="muted" data-testid="@Tid("memory-host")">
+                    Host RAM <span class="num">@UiFormat.GiB(HostAvailableGiB)</span> free of <span class="num">@UiFormat.GiB(HostTotalGiB)</span>
+                </span>
+            }
+        </div>
+        @foreach (var gpu in gpus)
+        {
+            var bar = new BarMath(gpu.TotalGiB ?? 0, gpu.AvailableGiB ?? 0, gpu.ModelsGiB, gpu.ReserveGiB);
+            bool known = gpu.TotalGiB is > 0 && gpu.AvailableGiB is not null;
+            string gpuId = Tid($"memory-gpu-{gpu.Index}");
+            <div class="headroom-gpu" data-testid="@gpuId" data-uuid="@gpu.Uuid">
+                <div class="headroom-head">
+                    <span class="headroom-gpu-title">
+                        GPU <span class="num">@gpu.Index</span>@(gpu.Name is null ? "" : $" · {gpu.Name}")
+                        <span class="headroom-total num">@UiFormat.GiB(gpu.TotalGiB) total</span>
+                    </span>
+                    <span class="muted">
+                        <span class="num" data-testid="@($"{gpuId}-admittable")">@(known ? UiFormat.GiB(bar.Admittable) : UiFormat.Missing)</span> can be given to a new model
+                        (free minus the <span class="num">@UiFormat.GiB(gpu.ReserveGiB)</span> reserve)
+                    </span>
+                </div>
+                <div class="headroom-bar" role="img" aria-label="@GpuAriaLabel(gpu, bar, known)" data-testid="@($"{gpuId}-track")">
+                    @if (known)
+                    {
+                        <span class="headroom-seg headroom-seg--models" style="width:@bar.Pct(bar.ModelsShown)"></span>
+                        <span class="headroom-seg headroom-seg--other" style="width:@bar.Pct(bar.Other)"></span>
+                        <span style="flex:1"></span>
+                        <span class="headroom-seg headroom-seg--reserve" style="width:@bar.Pct(bar.ReserveShown)"></span>
+                    }
+                </div>
+                <Legend AriaLabel="@($"GPU {gpu.Index} memory breakdown")" TestId="@($"{gpuId}-legend")"
+                        Items="@ItemsFor(gpu.ModelsGiB, known ? bar : null, gpu.AvailableGiB, gpu.ReserveGiB)" />
+                @if (known && Disagreement(bar) is { } gpuNote)
+                {
+                    <p class="headroom-note" data-testid="@($"{gpuId}-mismatch")"><Icon Name="info" /> <span>@gpuNote</span></p>
+                }
+            </div>
+        }
+    </section>
+}
+else
+{
+    <section class="@(Bare ? "headroom headroom--bare" : "panel headroom")" aria-labelledby="@HeadingId" data-testid="@Tid("memory-bar")">
+        <div class="headroom-head">
+            @Heading(@<text>@Title <span class="headroom-total num">@UiFormat.GiB(TotalGiB) total</span></text>)
+            <span class="muted">
+                <span class="num" data-testid="@Tid("memory-admittable")">@UiFormat.GiB(Unified.Admittable)</span> can be given to a new model
+                (free minus the <span class="num">@UiFormat.GiB(ReserveGiB)</span> reserve)
+            </span>
+        </div>
+        <div class="headroom-bar" role="img" aria-label="@AriaLabel" data-testid="@Tid("memory-bar-track")">
+            <span class="headroom-seg headroom-seg--models" style="width:@Unified.Pct(Unified.ModelsShown)"></span>
+            <span class="headroom-seg headroom-seg--other" style="width:@Unified.Pct(Unified.Other)"></span>
+            <span style="flex:1"></span>
+            <span class="headroom-seg headroom-seg--reserve" style="width:@Unified.Pct(Unified.ReserveShown)"></span>
+        </div>
+        <Legend AriaLabel="Memory breakdown" TestId="@Tid("memory-legend")" Items="LegendItems" />
+        @if (TotalGiB > 0 && Disagreement(Unified) is { } note)
+        {
+            <p class="headroom-note" data-testid="@Tid("memory-mismatch")"><Icon Name="info" /> <span>@note</span></p>
+        }
+    </section>
+}
+
+@code {
+    [Parameter]
+    public double TotalGiB { get; set; }
+
+    [Parameter]
+    public double AvailableGiB { get; set; }
+
+    /// <summary>Sum of the memory budgets of models that are Starting, Ready or Stopping.</summary>
+    [Parameter]
+    public double ModelsGiB { get; set; }
+
+    [Parameter]
+    public double ReserveGiB { get; set; }
+
+    /// <summary>Heading text (default "Memory").</summary>
+    [Parameter]
+    public string Title { get; set; } = "Memory";
+
+    /// <summary>Heading level, 2 (page section, the default) to 4 (inside a node group).</summary>
+    [Parameter]
+    public int HeadingLevel { get; set; } = 2;
+
+    /// <summary>
+    /// Prefix for the heading id and the test ids, so several bars can share a page (one per node). Null keeps the
+    /// page-level ids (<c>headroom-title</c>, <c>memory-bar</c>, …).
+    /// </summary>
+    [Parameter]
+    public string? IdPrefix { get; set; }
+
+    /// <summary>Per-GPU variant (discrete node): one bar per GPU. Null or empty draws the unified bar.</summary>
+    [Parameter]
+    public IReadOnlyList<GpuHeadroom>? Gpus { get; set; }
+
+    /// <summary>Host RAM total, shown as text in the per-GPU variant.</summary>
+    [Parameter]
+    public double? HostTotalGiB { get; set; }
+
+    /// <summary>Host RAM available, shown as text in the per-GPU variant.</summary>
+    [Parameter]
+    public double? HostAvailableGiB { get; set; }
+
+    /// <summary>Draw without the panel frame, inside another panel (no nested cards). Default false: a panel of its own.</summary>
+    [Parameter]
+    public bool Bare { get; set; }
+
+    /// <summary>Below this (GiB) two readings count as agreeing: rounding, not a disagreement.</summary>
+    private const double Tolerance = 0.05;
+
+    private BarMath Unified => new(TotalGiB, AvailableGiB, ModelsGiB, ReserveGiB);
+
+    private string HeadingId => IdPrefix is null ? "headroom-title" : $"{IdPrefix}-headroom-title";
+
+    private string Tid(string name) => IdPrefix is null ? name : $"{IdPrefix}-{name}";
+
+    private RenderFragment Heading(RenderFragment content) => HeadingLevel switch
+    {
+        3 => @<h3 class="headroom-title" id="@HeadingId">@content</h3>,
+        4 => @<h4 class="headroom-title" id="@HeadingId">@content</h4>,
+        _ => @<h2 class="headroom-title" id="@HeadingId">@content</h2>,
+    };
+
+    private string AriaLabel =>
+        $"Memory of {UiFormat.GiB(TotalGiB)}: MirbadLLM models {ModelsText(ModelsGiB, Unified)}, other processes {UiFormat.GiB(Unified.Other)}, " +
+        $"free {UiFormat.GiB(Unified.FreeShown)}, of which {UiFormat.GiB(Unified.ReserveShown)} is kept in reserve.";
+
+    private IReadOnlyList<LegendItem> LegendItems => ItemsFor(ModelsGiB, Unified, AvailableGiB, ReserveGiB);
+
+    /// <summary>The legend; <paramref name="bar"/> null = nothing measured (every figure but the budgets is a dash).</summary>
+    private static IReadOnlyList<LegendItem> ItemsFor(double models, BarMath? bar, double? free, double reserve) =>
+    [
+        new("MirbadLLM models", "var(--ss-series-1)", LegendSwatch.Block, bar is { } b ? ModelsText(models, b) : UiFormat.GiB(models)),
+        new("Other processes", "var(--ss-series-other)", LegendSwatch.Block, UiFormat.GiB(bar?.Other)),
+        new("Free", "var(--ss-sunken)", LegendSwatch.Outline, UiFormat.GiB(bar is { } f ? f.FreeShown : free)),
+        new("Reserve (inside free)", "var(--ss-series-reserve)", LegendSwatch.Block, UiFormat.GiB(reserve)),
+    ];
+
+    /// <summary>The models figure: the budget when the node's reading agrees, else measured and budgeted side by side.</summary>
+    private static string ModelsText(double models, BarMath bar) => bar.BudgetsExceedMeasured
+        ? $"{UiFormat.GiB(bar.ModelsShown)} · budget {UiFormat.GiB(models)}"
+        : UiFormat.GiB(models);
+
+    /// <summary>Why the bar does not draw a reading as given; null when the readings agree.</summary>
+    private static string? Disagreement(BarMath bar)
+    {
+        var parts = new List<string>(2);
+        if (bar.FreeExceedsTotal)
+        {
+            parts.Add($"The node reports {UiFormat.GiB(bar.Available)} free of {UiFormat.GiB(bar.Total)} total; the bar caps free at the total.");
+        }
+
+        if (bar.BudgetsExceedMeasured)
+        {
+            parts.Add($"Budgets total {UiFormat.GiB(bar.Models)}, but {UiFormat.GiB(bar.ModelsShown)} is measured in use; the bar draws the measured figure. " +
+                "A model still loading, or holding less than its budget, reads this way.");
+        }
+
+        return parts.Count == 0 ? null : string.Join(" ", parts);
+    }
+
+    private static string GpuCountText(int count) => count == 1 ? "1 GPU" : $"{count} GPUs";
+
+    private static string GpuAriaLabel(GpuHeadroom gpu, BarMath bar, bool known) => known
+        ? $"GPU {gpu.Index} memory of {UiFormat.GiB(gpu.TotalGiB)}: MirbadLLM models {ModelsText(gpu.ModelsGiB, bar)}, other processes {UiFormat.GiB(bar.Other)}, " +
+          $"free {UiFormat.GiB(bar.FreeShown)}, of which {UiFormat.GiB(bar.ReserveShown)} is kept in reserve."
+        : $"GPU {gpu.Index} memory: not reported.";
+
+    /// <summary>
+    /// How one bar splits: models (capped at what is measured in use), other processes, free (capped at the total), and
+    /// the reserve inside free. The drawn segments always sum to at most the total.
+    /// </summary>
+    private readonly record struct BarMath(double Total, double Available, double Models, double Reserve)
+    {
+        /// <summary>Free as drawn: never below zero, never above the total.</summary>
+        public double FreeShown => Math.Clamp(Available, 0, Math.Max(0, Total));
+
+        private double Used => Math.Max(0, Total - FreeShown);
+
+        public double ModelsShown => Math.Min(Models, Used);
+
+        public double Other => Math.Max(0, Used - ModelsShown);
+
+        public double ReserveShown => Math.Min(Reserve, FreeShown);
+
+        public double Admittable => Math.Max(0, FreeShown - Reserve);
+
+        /// <summary>Model budgets add up to more than the node measures in use.</summary>
+        public bool BudgetsExceedMeasured => Models - ModelsShown > Tolerance;
+
+        /// <summary>The free reading is above the total (two readings taken at different instants, or a bad probe).</summary>
+        public bool FreeExceedsTotal => Total > 0 && Available - Total > Tolerance;
+
+        public string Pct(double gib) =>
+            Total <= 0 ? "0%" : FormattableString.Invariant($"{Math.Clamp(gib / Total * 100, 0, 100):0.##}%");
+    }
+}

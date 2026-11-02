@@ -1,0 +1,293 @@
+@namespace MirbadLLM.Web.Components.Ui
+@using System.Globalization
+@using MirbadLLM.Orchestration.Benchmarking
+@* One benchmark result: whether it was measured on a quiet box, throughput and latency per concurrency
+   level (median of the runs, every run listed), the long-prompt prefill, and the correctness guardrails. *@
+<div class="bench-result" data-testid="@TestId">
+    @if (Result.Noise.Noisy)
+    {
+        <div class="callout callout--busy" role="status" data-testid="@($"{TestId}-noisy")">
+            <Icon Name="warning" />
+            <div class="callout-body">
+                <span class="callout-title">Noisy: something else competed for the GPU</span>
+                @foreach (string reason in Result.Noise.Reasons)
+                {
+                    <span>@Capitalize(reason)</span>
+                }
+                <span class="muted">Compare noisy numbers with care, or run again on a quiet box.</span>
+            </div>
+        </div>
+    }
+    else if (Result.Noise.Unknown is { Count: > 0 } unknown)
+    {
+        <p class="quiet-note" data-testid="@($"{TestId}-unknown")">
+            <Icon Name="warning" />
+            Noise unknown: @string.Join("; ", unknown.Select(u => u.Replace("noise unknown: ", "", StringComparison.Ordinal))). No other requests were seen, but the telemetry does not cover every run.
+        </p>
+    }
+    else
+    {
+        <p class="quiet-note" data-testid="@($"{TestId}-quiet")">
+            <Icon Name="check" />
+            Quiet box: no other requests ran during the measurements@(Result.Noise.IdleGpuPercent is { } idle ? $"; the GPU was {UiFormat.Number(idle)}% busy before the first request" : "").
+        </p>
+    }
+
+    @if (Result.Embeddings is { } emb)
+    {
+        <div class="panel--scroll-x">
+            <table class="data-table data-table--stack" data-testid="@($"{TestId}-embeddings")">
+                <caption class="visually-hidden">Embedding throughput and latency per concurrency level, median of @EmbeddingRunCount runs</caption>
+                <thead>
+                    <tr>
+                        <th scope="col"><ColumnHelp Label="Concurrent" Key="n" Scope="@TestId" Text="@BenchGlossary.EmbeddingConcurrent" /></th>
+                        <th scope="col"><ColumnHelp Label="Input tok/s" Key="input" Scope="@TestId" Text="@BenchGlossary.EmbeddingN16" /></th>
+                        <th scope="col"><ColumnHelp Label="Requests/s" Key="rps" Scope="@TestId" Text="@BenchGlossary.EmbeddingRequests" /></th>
+                        <th scope="col"><ColumnHelp Label="Latency p50" Key="p50" Scope="@TestId" Text="@BenchGlossary.EmbeddingP50" /></th>
+                        <th scope="col"><ColumnHelp Label="Latency p95" Key="p95" Scope="@TestId" Text="@BenchGlossary.EmbeddingP95" /></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var level in emb.Levels)
+                    {
+                        <tr>
+                            <td class="col-primary num">N = @level.Concurrency@(level.Noisy ? " (noisy)" : "")</td>
+                            <td data-label="Input tok/s" class="num">@UiFormat.Number(level.InputTokS) tok/s</td>
+                            <td data-label="Requests/s" class="num">@UiFormat.Number(level.RequestsPerSecond)</td>
+                            <td data-label="Latency p50" class="num">@UiFormat.LatencyText(level.LatencyP50)</td>
+                            <td data-label="Latency p95" class="num">@UiFormat.LatencyText(level.LatencyP95)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            <p class="table-legend" data-testid="@($"{TestId}-legend")">@BenchGlossary.EmbeddingLegend</p>
+        </div>
+        <div class="panel panel-body section-tight">
+            <BarList Title="Input tok/s by concurrency (median)" TestId="@($"{TestId}-bars")"
+                     Items="@emb.Levels.Select(l => new BarItem($"N = {l.Concurrency}", l.InputTokS, $"{UiFormat.Number(l.InputTokS)} tok/s")).ToList()" />
+        </div>
+        <dl class="kv kv--wide bench-facts">
+            <dt>Inputs per request</dt>
+            <dd class="num">@emb.InputsPerRequest (mixed lengths, unique per run)</dd>
+            <dt>Vectors</dt>
+            <dd data-testid="@($"{TestId}-vectors")">
+                <span class="verdict verdict--@(emb.Check.Valid ? "ok" : "bad")">
+                    <Icon Name="@(emb.Check.Valid ? "check" : "state-failed")" />
+                    @(emb.Check.Valid ? "Valid" : "Invalid")
+                </span>
+                <span>@emb.Check.Detail</span>
+            </dd>
+        </dl>
+    }
+    else
+    {
+    <div class="panel--scroll-x">
+        <table class="data-table data-table--stack" data-testid="@($"{TestId}-levels")">
+            <caption class="visually-hidden">Throughput and latency per concurrency level, median of @RunCount runs</caption>
+            <thead>
+                <tr>
+                    @if (V2)
+                    {
+                        <th scope="col"><ColumnHelp Label="Output" Key="output" Scope="@TestId" Text="@BenchGlossary.OutputTokens" /></th>
+                    }
+                    <th scope="col"><ColumnHelp Label="Concurrent" Key="n" Scope="@TestId" Text="@BenchGlossary.Concurrent" /></th>
+                    <th scope="col"><ColumnHelp Label="Per request" Key="per-request" Scope="@TestId" Text="@BenchGlossary.PerRequest" /></th>
+                    <th scope="col"><ColumnHelp Label="Aggregate" Key="aggregate" Scope="@TestId" Text="@BenchGlossary.Aggregate" /></th>
+                    <th scope="col"><ColumnHelp Label="TTFT p50" Key="ttft50" Scope="@TestId" Text="@BenchGlossary.TtftP50" /></th>
+                    <th scope="col"><ColumnHelp Label="TTFT p95" Key="ttft95" Scope="@TestId" Text="@BenchGlossary.TtftP95" /></th>
+                    @if (V2)
+                    {
+                        <th scope="col"><ColumnHelp Label="Errors" Key="errors" Scope="@TestId" Text="@BenchGlossary.Errors" /></th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var level in Result.Levels)
+                {
+                    <tr>
+                        @if (V2)
+                        {
+                            <td data-label="Output" class="num">@level.OutputTokens.ToString("N0", CultureInfo.InvariantCulture) tokens</td>
+                        }
+                        <td class="col-primary num">N = @level.Concurrency@(level.Noisy ? " (noisy)" : "")</td>
+                        <td data-label="Per request" class="num">@UiFormat.Number(level.PerRequestTokS) tok/s</td>
+                        <td data-label="Aggregate" class="num">@UiFormat.Number(level.AggregateTokS) tok/s</td>
+                        <td data-label="TTFT p50" class="num">@UiFormat.LatencyText(level.TtftP50)</td>
+                        <td data-label="TTFT p95" class="num">@UiFormat.LatencyText(level.TtftP95)</td>
+                        @if (V2)
+                        {
+                            <td data-label="Errors" class="num">@(level.Errors == 0 ? "0" : $"{level.Errors} failed")</td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+        <p class="table-legend" data-testid="@($"{TestId}-legend")">@BenchGlossary.Legend</p>
+    </div>
+    <div class="panel panel-body section-tight">
+        <BarList Title="Aggregate tok/s by concurrency (median)" TestId="@($"{TestId}-bars")"
+                 Items="@Result.Levels.Select(l => new BarItem(V2 ? $"{l.OutputTokens} tok, N = {l.Concurrency}" : $"N = {l.Concurrency}", l.AggregateTokS, $"{UiFormat.Number(l.AggregateTokS)} tok/s")).ToList()" />
+    </div>
+
+    <dl class="kv kv--wide bench-facts">
+        @if (V2)
+        {
+            <dt>Workload</dt>
+            <dd data-testid="@($"{TestId}-preset")">@(Result.Preset is { } preset ? WorkloadProfiles.For(preset).Name : "—") · @Result.Repetitions repetitions per case</dd>
+            <dt>Cold long prompts</dt>
+            <dd data-testid="@($"{TestId}-long")">
+                @if (Result.LongPrompts is { Count: > 0 } longs)
+                {
+                    @foreach (var lp in longs)
+                    {
+                        <div>
+                            <span class="num">@lp.TargetTokens.ToString("N0", CultureInfo.InvariantCulture)</span> tokens:
+                            TTFT <span class="num">@UiFormat.Seconds(lp.TtftMedian)</span> median
+                            (<span class="num">@string.Join(" / ", lp.TtftRuns.Select(t => UiFormat.Seconds(t)))</span>)@(lp.Errors > 0 ? $", {lp.Errors} failed" : "")
+                        </div>
+                    }
+                }
+                else
+                {
+                    <span>Not part of this workload (or the context is too short).</span>
+                }
+            </dd>
+            <dt>Shared prefix</dt>
+            <dd data-testid="@($"{TestId}-shared")">
+                @if (Result.SharedPrefix is { } sp)
+                {
+                    <span class="verdict verdict--@(sp.CacheReuseObserved ? "ok" : "warn")">
+                        <Icon Name="@(sp.CacheReuseObserved ? "check" : "warning")" /> @sp.Label
+                    </span>
+                    <span>
+                        <span class="num">@sp.PrefixTokens.ToString("N0", CultureInfo.InvariantCulture)</span>-token system prompt, @sp.Questions questions per run:
+                        TTFT <span class="num">@UiFormat.Seconds(sp.TtftMedian)</span> median, p95 <span class="num">@UiFormat.Seconds(sp.TtftP95)</span>@(sp.CacheHitTokens is { } hits ? $", {hits:N0} cached tokens reused" : "")@(sp.Errors > 0 ? $", {sp.Errors} failed" : "")
+                    </span>
+                }
+                else
+                {
+                    <span>Not part of this workload.</span>
+                }
+            </dd>
+            <dt>Mixed workload</dt>
+            <dd data-testid="@($"{TestId}-mixed")">
+                @if (Result.Mixed is { } mixed)
+                {
+                    <span>
+                        Cold <span class="num">@mixed.LongTargetTokens.ToString("N0", CultureInfo.InvariantCulture)</span>-token prompt with N=@mixed.Concurrency chat on top:
+                        short TTFT p95 <span class="num">@UiFormat.Seconds(mixed.ShortTtftP95)</span>
+                        (<span class="num">@string.Join(" / ", mixed.ShortTtftP95Runs.Select(t => UiFormat.Seconds(t)))</span>),
+                        <span class="num">@UiFormat.Number(mixed.ShortPerRequestTokS)</span> tok/s per short request,
+                        long TTFT <span class="num">@UiFormat.Seconds(mixed.LongTtftMedian)</span> median@(mixed.Errors > 0 ? $", {mixed.Errors} failed" : "")
+                    </span>
+                }
+                else
+                {
+                    <span>Not part of this workload (or the context is too short).</span>
+                }
+            </dd>
+            <dt>KV pool pressure</dt>
+            <dd data-testid="@($"{TestId}-pool")">
+                @if (Result.Preemptions is { } preemptions)
+                {
+                    <span class="verdict verdict--@(preemptions == 0 ? "ok" : "warn")">
+                        <Icon Name="@(preemptions == 0 ? "check" : "warning")" /> <span class="num">@preemptions</span> preemptions
+                    </span>
+                    @if (Result.KvCacheUsageMax is { } usage)
+                    {
+                        <span>, KV cache usage peaked at <span class="num">@UiFormat.Percent(usage * 100)</span></span>
+                    }
+                }
+                else
+                {
+                    <span>Not read (/metrics unavailable); the preemption guard was skipped.</span>
+                }
+            </dd>
+            <dt>Tool calls</dt>
+            <dd data-testid="@($"{TestId}-tool")">
+                @if (Result.Tools is { } tools)
+                {
+                    <span class="verdict verdict--@(tools.Valid == tools.Total ? "ok" : "bad")">
+                        <Icon Name="@(tools.Valid == tools.Total ? "check" : "state-failed")" />
+                        <span class="num">@tools.Valid / @tools.Total</span> valid
+                    </span>
+                    <details class="qa-details">
+                        <summary>Show calls</summary>
+                        <ul class="qa-list">
+                            @foreach (var c in tools.Cases)
+                            {
+                                <li>
+                                    <span class="verdict verdict--@(c.Valid ? "ok" : "bad")"><Icon Name="@(c.Valid ? "check" : "state-failed")" /> @(c.Valid ? "Valid" : "Invalid")</span>
+                                    <code>@c.Detail</code>
+                                </li>
+                            }
+                        </ul>
+                    </details>
+                }
+                else
+                {
+                    <span>Not part of this workload.</span>
+                }
+            </dd>
+        }
+        else
+        {
+        <dt>Long prompt</dt>
+        <dd data-testid="@($"{TestId}-prefill")">
+            @if (Result.Prefill is { } p)
+            {
+                <span><span class="num">@p.PromptTokens.ToString("N0", CultureInfo.InvariantCulture)</span> tokens: cold <span class="num">@UiFormat.Seconds(p.ColdSeconds)</span>
+                    (<span class="num">@UiFormat.Whole(p.ColdTokensPerSecond)</span> tok/s prefill), prefix-cache hit <span class="num">@UiFormat.Seconds(p.CachedSeconds)</span></span>
+            }
+            else
+            {
+                <span>@UiFormat.Missing (context too short to measure)</span>
+            }
+        </dd>
+        <dt>Tool call</dt>
+        <dd data-testid="@($"{TestId}-tool")">
+            <span class="verdict verdict--@(Result.Guardrails.ToolCallValid ? "ok" : "bad")">
+                <Icon Name="@(Result.Guardrails.ToolCallValid ? "check" : "state-failed")" />
+                @(Result.Guardrails.ToolCallValid ? "Valid" : "Invalid")
+            </span>
+            <code>@Result.Guardrails.ToolCallDetail</code>
+        </dd>
+        }
+        <dt>Objective answers</dt>
+        <dd data-testid="@($"{TestId}-qa")">
+            <span><span class="num">@Result.Guardrails.QaCorrect / @Result.Guardrails.QaTotal</span> correct</span>
+            <details class="qa-details">
+                <summary>Show answers</summary>
+                <ul class="qa-list">
+                    @foreach (var answer in Result.Guardrails.Answers)
+                    {
+                        <li>
+                            <span class="verdict verdict--@(answer.Correct ? "ok" : "bad")"><Icon Name="@(answer.Correct ? "check" : "state-failed")" /> @(answer.Correct ? "Right" : "Wrong")</span>
+                            <span class="qa-question">@answer.Question</span>
+                            <span class="muted">expected <code>@answer.Expected</code>, got <code>@(string.IsNullOrEmpty(answer.Answer) ? "(empty)" : answer.Answer)</code></span>
+                        </li>
+                    }
+                </ul>
+            </details>
+        </dd>
+    </dl>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired]
+    public BenchmarkResult Result { get; set; } = null!;
+
+    [Parameter]
+    public string TestId { get; set; } = "bench-result";
+
+    private int RunCount => Result.Levels.Select(l => l.Runs.Count).DefaultIfEmpty(0).Max();
+
+    /// <summary>A workload-preset result (schema v2).</summary>
+    private bool V2 => Result.SchemaVersion >= 2;
+
+    private int EmbeddingRunCount => Result.Embeddings?.Levels.Select(l => l.Runs.Count).DefaultIfEmpty(0).Max() ?? 0;
+
+    private static string Capitalize(string text) =>
+        text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..];
+}

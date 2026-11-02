@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "processes": [
+    {
+      "modelId": "qwen3-embedding-4b",
+      "operationId": "op-301",
+      "spec": {
+        "kind": "process",
+        "runtime": "llamacpp",
+        "image": null,
+        "imageDigest": null,
+        "executable": "llama-server",
+        "executableVersion": "b11476",
+        "argv": [
+          "-m",
+          "{models}/Qwen3-Embedding-4B-GGUF/Qwen3-Embedding-4B-Q8_0.gguf",
+          "--alias",
+          "qwen3-embedding-4b-win",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          "{port}"
+        ],
+        "env": {},
+        "secretEnvNames": [],
+        "containerPort": 8000,
+        "mounts": [],
+        "gpus": {
+          "mode": "uuids",
+          "uuids": [
+            "GPU-7c1e9a52-3f60-4d2b-9a8e-5b0f2c6d1e44"
+          ]
+        },
+        "ipcHost": false,
+        "healthPath": "/health",
+        "labels": {
+          "mirbadllm.served-name": "qwen3-embedding-4b-win",
+          "mirbadllm.exec-fingerprint": "5e0c7a91d2b34f68"
+        }
+      },
+      "process": {
+        "pid": 18244,
+        "startTime": "2026-10-07T10:00:05.1234567+00:00",
+        "imagePath": "C:\\Program Files\\mirbadllm-agent\\runtimes\\llama.cpp\\b11476\\llama-server.exe"
+      },
+      "executableName": "llama-server",
+      "executableVersion": "b11476",
+      "port": 8102,
+      "argvDigest": "3fa1c09d7e2b5a64",
+      "protectedApiKey": "AQAAANCMnd8BFdERjHoAwE/Cl+sBAAAAfixture==",
+      "jobName": "mirbadllm-ss-qwen3-embedding-4b",
+      "logPath": "C:\\ProgramData\\mirbadllm-agent\\state\\logs\\ss-qwen3-embedding-4b.log",
+      "gpus": [
+        {
+          "index": 1,
+          "uuid": "GPU-7c1e9a52-3f60-4d2b-9a8e-5b0f2c6d1e44"
+        }
+      ],
+      "startedAt": "2026-10-07T10:00:05+00:00",
+      "readyAt": "2026-10-07T10:01:40+00:00",
+      "restartCount": 1,
+      "restartTimes": [
+        "2026-10-07T12:30:00+00:00"
+      ],
+      "measuredGpuGiB": 7.6
+    }
+  ],
+  "pending": [
+    {
+      "modelId": "bge-reranker",
+      "operationId": "op-302",
+      "executablePath": "C:\\Program Files\\mirbadllm-agent\\runtimes\\llama.cpp\\b11476\\llama-server.exe",
+      "port": 8103,
+      "argvDigest": "9c4e21b07a5d3f18",
+      "at": "2026-10-07T10:05:00+00:00"
+    }
+  ]
+}

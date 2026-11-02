@@ -1,0 +1,46 @@
+/* Same row language as the tag filter: a muted label, then the control. The Segmented track wraps instead of
+   pushing the page sideways on a phone. */
+.node-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--ss-sp-2) var(--ss-sp-3);
+    margin-bottom: var(--ss-sp-3);
+    min-width: 0;
+}
+
+.node-filter-label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--ss-sp-1);
+    color: var(--ss-text-muted);
+    font-size: var(--ss-fs-100);
+}
+
+.node-filter-label ::deep .icon {
+    width: 14px;
+    height: 14px;
+}
+
+.node-filter .segmented {
+    flex-wrap: wrap;
+    max-width: 100%;
+}
+
+.node-filter-count {
+    color: var(--ss-text-muted);
+    font-size: var(--ss-fs-100);
+    font-weight: 400;
+}
+
+.node-filter-select {
+    width: auto;
+    max-width: 100%;
+    min-width: 12rem;
+}
+
+@media (pointer: coarse) {
+    .node-filter .segmented-option {
+        min-height: 44px;
+    }
+}
