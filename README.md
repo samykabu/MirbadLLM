@@ -45,7 +45,7 @@ agent** runs on every machine that serves models. It starts each model with that
 before a start, and reports GPU, memory and throughput telemetry. The master reaches every agent over mutual TLS and
 never touches a GPU or a model file itself.
 
-The name comes from the Arabic word مربض, the pen where a flock is gathered, kept and looked after. MirbadLLM does
+The name comes from the Arabic word مِرْبَد (mirbad), the enclosure where camels are gathered and kept. MirbadLLM does
 the same for models scattered across your machines.
 
 ### What your old machines can run

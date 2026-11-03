@@ -63,8 +63,8 @@ service.
   status and the primary action, tabular monospace numerals for measurements.
 - Craft bar (products it should sit alongside): Vercel / Linear, Grafana, Portainer / Proxmox.
 - Both light and dark themes are required.
-- Name and identity (2026-10-16, renamed 2026-11-01): the product is **MirbadLLM** (from مربض, the Arabic word for
-  the pen where a flock is gathered and looked after), with the graphite-and-amber brand: the isometric cube
+- Name and identity (2026-10-16, renamed 2026-11-01): the product is **MirbadLLM** (from مِرْبَد, the Arabic word for
+  the enclosure where camels are gathered and kept), with the graphite-and-amber brand: the isometric cube
   "M" mark, Plus Jakarta Sans for the wordmark and headings, Inter for the interface, Azeret Mono for measurements.
   It replaced an earlier working name that was too close to the unrelated Mesh LLM project and to several existing
   packages. The mark is always shown exactly as delivered (transparent, never filtered, recoloured or backed).
