@@ -17,6 +17,7 @@
 </p>
 
 <p align="center">
+  <a href="https://mirbadllm.vektragrid.com">Website</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="docs/setup.md">Setup guide</a> ·
   <a href="docs/README.md">Documentation</a> ·
@@ -64,7 +65,8 @@ guide for 4-bit GGUF models with a moderate context window:
 
 These are rules of thumb, not guarantees. Context length, quantization and how many requests run at once all move
 them. You do not have to do the arithmetic yourself, though: the agent reads each GGUF header, estimates the memory a
-model needs, and refuses a start that would not fit, with the reason.
+model needs, and refuses a start that would not fit, with the reason. To look up your own machine, use
+[Will it run?](https://mirbadllm.vektragrid.com/will-it-run/) on the website.
 
 Two limits to know today. A PC node needs an NVIDIA GPU, on Windows 11 (llama.cpp) or on Linux (vLLM in Docker), and a
 Mac node needs Apple Silicon. AMD GPUs and CPU-only machines are not supported yet.
@@ -284,7 +286,8 @@ docs/                         Architecture, setup, operator guides, designs, ima
 
 ## Documentation
 
-The [documentation index](docs/README.md) lists every guide. The ones you will use most:
+The [documentation index](docs/README.md) lists every guide. The same guides are on the website, with search and an
+Arabic interface: [mirbadllm.vektragrid.com/docs](https://mirbadllm.vektragrid.com/docs/). The ones you will use most:
 
 - [Setup guide](docs/setup.md): single machine, adding nodes, the development fleet
 - [Configuration](docs/configuration.md): environment variables and settings
@@ -310,6 +313,8 @@ commands, the branch and pull request flow, and how CI treats pull requests from
 
 ## Community and support
 
+- Website, in English and Arabic: [mirbadllm.vektragrid.com](https://mirbadllm.vektragrid.com), including a
+  [100-second tour](https://mirbadllm.vektragrid.com/tour/) and a [FAQ](https://mirbadllm.vektragrid.com/faq/)
 - Questions and ideas: [GitHub Discussions](https://github.com/samykabu/MirbadLLM/discussions)
 - Bugs and feature requests: [GitHub issues](https://github.com/samykabu/MirbadLLM/issues/new/choose)
 
