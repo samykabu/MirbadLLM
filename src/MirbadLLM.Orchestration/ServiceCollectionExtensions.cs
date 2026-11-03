@@ -272,6 +272,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<INodeStatusCache>(sp => sp.GetRequiredService<NodeStatusCache>());
 
         services.AddSingleton<ModelRecoveryState>();
+        services.AddSingleton<OperatorStops>();
 
         // With the runner and the reference store: it closes launch references and routes stale_master from any caller to
         // the node state (W3 review MN-094, D52).
@@ -322,7 +323,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IOptions<RegistryMigrationOptions>>(),
             sp.GetRequiredService<ModelRecoveryState>(),
             sp.GetRequiredService<INodeStatusCache>(),
-            sp.GetRequiredService<IOwnershipStore>()));
+            sp.GetRequiredService<IOwnershipStore>(),
+            sp.GetRequiredService<OperatorStops>()));
         services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<CertificateRotationService>());
         services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<CaRotationService>());
     }

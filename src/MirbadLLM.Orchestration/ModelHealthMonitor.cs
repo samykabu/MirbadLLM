@@ -34,7 +34,8 @@ public sealed partial class ModelHealthMonitor(
     IOptions<RegistryMigrationOptions>? migrationOptions = null,
     ModelRecoveryState? recovery = null,
     INodeStatusCache? nodes = null,
-    IOwnershipStore? ownership = null) : BackgroundService
+    IOwnershipStore? ownership = null,
+    OperatorStops? operatorStops = null) : BackgroundService
 {
     private readonly MirbadLLMOptions _options = options.Value;
     private readonly Dictionary<string, ModelState> _lastKnownState = [];
@@ -85,7 +86,9 @@ public sealed partial class ModelHealthMonitor(
         foreach (var model in models.Where(m => m.AutoStart))
         {
             string nodeId = nodeOf[model.Id];
-            _ = _starts.Enqueue(nodeId, () => AutoStartAsync(model, nodeId, id => NodeOfStatus(id, nodeOf, bootstrapNodeId), ct));
+            long stopsWhenQueued = operatorStops?.Count(model.Id) ?? 0;
+            _ = _starts.Enqueue(nodeId, () => AutoStartAsync(model, nodeId, id => NodeOfStatus(id, nodeOf, bootstrapNodeId), ct,
+                stopsWhenQueued: stopsWhenQueued));
         }
     }
 
@@ -96,8 +99,10 @@ public sealed partial class ModelHealthMonitor(
     /// </summary>
     /// <param name="guard">For a recovery or crash restart: re-checked before every send, and the start also goes ahead
     /// from Failed.</param>
+    /// <param name="stopsWhenQueued">For the boot pass: <see cref="OperatorStops.Count"/> when the start was queued; an
+    /// operator stop since then cancels it.</param>
     private async Task<bool> AutoStartAsync(ModelDefinition model, string nodeId, Func<string, string> nodeOfStatus, CancellationToken ct,
-        Func<CancellationToken, Task<bool>>? guard = null)
+        Func<CancellationToken, Task<bool>>? guard = null, long? stopsWhenQueued = null)
     {
         bool started = false;
         try
@@ -135,6 +140,13 @@ public sealed partial class ModelHealthMonitor(
                     if (status.State != ModelState.Stopped && !(guard is not null && status.State == ModelState.Failed))
                     {
                         Log.ModelAlreadyRunning(logger, model.Id, status.State);
+                        return true;
+                    }
+
+                    // The operator stopped the model while this start waited (a node that synchronized meanwhile): leave it.
+                    if (stopsWhenQueued is { } before && operatorStops is not null && operatorStops.Count(model.Id) != before)
+                    {
+                        Log.AutoStartStoppedByOperator(logger, model.Id);
                         return true;
                     }
 

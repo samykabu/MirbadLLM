@@ -11,7 +11,8 @@ public sealed class ModelStartService(
     IModelRuntime runtime,
     IHostApplicationLifetime lifetime,
     IOwnershipStore? ownership = null,
-    IOptions<RegistryMigrationOptions>? migration = null)
+    IOptions<RegistryMigrationOptions>? migration = null,
+    OperatorStops? operatorStops = null)
 {
     private readonly PerNodeStartLanes _lanes = new();
     private readonly Lock _gate = new();
@@ -33,8 +34,13 @@ public sealed class ModelStartService(
         }
     }
 
+    /// <summary>
+    /// Cancels a queued manual start. Every operator stop calls this first, so it also tells a boot auto-start still waiting
+    /// for its node to leave the model stopped (<see cref="OperatorStops"/>).
+    /// </summary>
     public bool Cancel(string id)
     {
+        operatorStops?.Record(id);
         lock (_gate)
         {
             if (!_pending.TryGetValue(id, out var entry) || entry.Dispatched)
