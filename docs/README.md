@@ -2,7 +2,8 @@
 
 MirbadLLM gathers the machines you already own, from an old gaming PC to a laptop, a Mac or a DGX Spark, into one
 place that runs AI models and manages them. These guides cover installing it, adding machines, and running it day to
-day.
+day. They are also published on the website, with search:
+[mirbadllm.vektragrid.com/docs](https://mirbadllm.vektragrid.com/docs/).
 
 Start with the [setup guide](setup.md) to install MirbadLLM, then read the [architecture](architecture.md) when you
 want to know how the parts fit together. The design documents further down record why the system is built the way it
