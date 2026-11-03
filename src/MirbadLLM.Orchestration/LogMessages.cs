@@ -15,6 +15,9 @@ internal static partial class Log
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not auto-start model {ModelId}: {Reason}")]
     public static partial void AutoStartRefused(ILogger logger, string modelId, string reason);
 
+    [LoggerMessage(Level = LogLevel.Information, Message = "Model {ModelId} was stopped by the operator while its auto-start waited; leaving it stopped.")]
+    public static partial void AutoStartStoppedByOperator(ILogger logger, string modelId);
+
     [LoggerMessage(Level = LogLevel.Error, Message = "Failed to auto-start model {ModelId}.")]
     public static partial void AutoStartFailed(ILogger logger, Exception exception, string modelId);
 

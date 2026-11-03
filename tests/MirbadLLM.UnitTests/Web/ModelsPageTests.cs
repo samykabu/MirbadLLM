@@ -30,15 +30,19 @@ public sealed class ModelsPageTests
             host.Services.GetRequiredService<IHostApplicationLifetime>()));
         var cut = ctx.Render<Models>();
         await cut.Find("[data-testid=start-a]").ClickAsync(new MouseEventArgs());
-        var b = cut.Find("[data-testid=start-b]").ClickAsync(new MouseEventArgs());
-        var c = cut.Find("[data-testid=start-c]").ClickAsync(new MouseEventArgs());
+        // Find and click on the renderer's thread: a re-render between the two would drop the found button's handler.
+        Task b = Task.CompletedTask, c = Task.CompletedTask;
+        await cut.InvokeAsync(() => { b = cut.Find("[data-testid=start-b]").ClickAsync(new MouseEventArgs()); });
+        await cut.InvokeAsync(() => { c = cut.Find("[data-testid=start-c]").ClickAsync(new MouseEventArgs()); });
         cut.WaitForAssertion(() =>
         {
             Assert.Contains("Queued", cut.Find("[data-testid=start-b]").TextContent, StringComparison.Ordinal);
             Assert.True(cut.Find("[data-testid=start-b]").HasAttribute("disabled"));
             Assert.NotNull(cut.Find("[data-testid=cancel-start-c]"));
         });
-        await cut.Find("[data-testid=cancel-start-c]").ClickAsync(new MouseEventArgs());
+        Task cancel = Task.CompletedTask;
+        await cut.InvokeAsync(() => { cancel = cut.Find("[data-testid=cancel-start-c]").ClickAsync(new MouseEventArgs()); });
+        await cancel;
         await c.WaitAsync(TimeSpan.FromSeconds(5), Xunit.TestContext.Current.CancellationToken);
         Assert.Equal(["a"], runtime.StartCalls.Select(s => s.Id));
         runtime.SetStatus(new("a", ModelState.Ready));

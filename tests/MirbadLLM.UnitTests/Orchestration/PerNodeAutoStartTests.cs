@@ -396,6 +396,35 @@ public sealed class PerNodeAutoStartTests
     }
 
     [Fact]
+    public async Task Monitor_AModelTheOperatorStopsWhileBootAutoStartWaits_StaysStopped()
+    {
+        // D51 within one controller lifetime: boot auto-start waits for a node that is not synchronized yet; meanwhile the
+        // node syncs, the operator stops the model, and the next round reads Stopped. It must not start it again (found by
+        // the Windows chaos runs, where the wait and the stop overlapped).
+        ModelHealthMonitor.AutoStartPollInterval = TimeSpan.FromMilliseconds(5);
+        var models = new[] { Model("a", "dgx") };
+        var stops = new OperatorStops();
+        var runtime = new NodeAwareRuntime(models) { UnsyncedBeforeStart = 2 };
+        runtime.BeforeGetStatus = id =>
+        {
+            if (runtime.Attempts.Count == 2)
+            {
+                stops.Record(id);
+            }
+        };
+        using var monitor = new ModelHealthMonitor(new FakeModelRegistry(models), runtime,
+            Options.Create(new MirbadLLMOptions { HealthPollInterval = TimeSpan.FromHours(1), StartupTimeout = TimeSpan.FromMinutes(1) }),
+            NullLogger<ModelHealthMonitor>.Instance, operatorStops: stops);
+
+        await monitor.StartAsync(TestContext.Current.CancellationToken);
+        await Task.Delay(400, TestContext.Current.CancellationToken); // dozens of 5 ms rounds
+        await monitor.StopAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["a", "a"], runtime.Attempts);
+        Assert.Empty(runtime.Started);
+    }
+
+    [Fact]
     public async Task Monitor_StartConflictPastTheStartupTimeout_GivesUpOnThatModelOnly()
     {
         ModelHealthMonitor.AutoStartPollInterval = TimeSpan.FromMilliseconds(5);
