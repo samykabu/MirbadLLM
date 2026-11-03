@@ -8,12 +8,12 @@ namespace MirbadLLM.NodeRuntime.Runtimes.Process;
 /// Loopback port checks for supervised processes (design-p3p4 §A.1.4; MN-207, D121 / spike S1 C11): on a desktop PC other
 /// programs hold ports (the owner's own llama-server listens on 8000), so before a create the driver skips every port that
 /// any process listens on, on <b>any</b> address (<see cref="IPGlobalProperties.GetActiveTcpListeners"/>), and then
-/// test-binds <c>127.0.0.1:{port}</c> with exclusive address use. It only ever looks at ports; it never touches the
+/// test-binds <c>127.0.0.1:{port}</c> and <c>0.0.0.0:{port}</c> with exclusive address use. It only ever looks at ports; it never touches the
 /// process holding one.
 /// </summary>
 public static class ProcessPorts
 {
-    /// <summary>True when <paramref name="port"/> is in use (a listener on any address, or the loopback test-bind fails).</summary>
+    /// <summary>True when <paramref name="port"/> is in use (a listener on any address, or a loopback or wildcard test-bind fails).</summary>
     public static bool IsTaken(int port)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(port, 1);
@@ -30,21 +30,28 @@ public static class ProcessPorts
             // The listener table is unavailable: the test-bind below still decides.
         }
 
+        // Loopback, then the wildcard address: Windows lets a loopback bind succeed while another program holds 0.0.0.0, and
+        // some hosts hide listeners from the table above, so only the exclusive wildcard bind catches that case.
+        return !CanBind(IPAddress.Loopback, port) || !CanBind(IPAddress.Any, port);
+    }
+
+    private static bool CanBind(IPAddress address, int port)
+    {
         try
         {
             using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
             if (OperatingSystem.IsWindows())
             {
-                // Fails when any other socket holds the port, on any address.
+                // Fails when another socket holds the port on this address (or, for the wildcard, on any address).
                 socket.ExclusiveAddressUse = true;
             }
 
-            socket.Bind(new IPEndPoint(IPAddress.Loopback, port));
-            return false;
+            socket.Bind(new IPEndPoint(address, port));
+            return true;
         }
         catch (SocketException)
         {
-            return true;
+            return false;
         }
     }
 
