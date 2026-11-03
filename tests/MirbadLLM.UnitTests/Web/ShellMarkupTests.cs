@@ -75,6 +75,7 @@ public sealed partial class ShellMarkupTests
         Assert.NotNull(rail.QuerySelector("[data-testid=controller-version-link] [data-testid=controller-version]"));
         Assert.NotNull(rail.QuerySelector(".sidenav-foot-card [data-shortcuts-open]"));
         Assert.NotNull(rail.QuerySelector("[data-testid=rail-tour]"));
+        Assert.Equal("https://mirbadllm.vektragrid.com/docs/", rail.QuerySelector("[data-testid=rail-website]")?.GetAttribute("href"));
     }
 
     [GeneratedRegex("<button[^>]*data-theme-toggle[^>]*>")]
