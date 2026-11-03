@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MirbadLLM system architecture</title>
+  <meta name="illustration-theme" content="mirbadllm/light/remote">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,500;0,700;0,800;1,500&family=Azeret+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f7f7f5;
+      --color-ink:     #1e2226;
+      --color-muted:   #5f676e;
+      --color-accent:  #8a5a00;
+      --font-sans:     'Inter', system-ui, sans-serif;
+      --font-serif:    'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+      --font-mono:     'Azeret Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1240px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 1240px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · MirbadLLM</p>
+    <h1>MirbadLLM system architecture</h1>
+    <svg viewBox="0 48 1240 592" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="architecture-title architecture-desc">
+<title id="architecture-title">MirbadLLM system architecture</title>
+<desc id="architecture-desc">Clients call the master's router and UI; the master reaches one node agent per machine over mTLS, and each agent runs vLLM, llama.cpp or MLX models and reports host telemetry.</desc>
+<defs><marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5f676e"/></marker><marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#8a5a00"/></marker><marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0f6863"/></marker></defs>
+<rect x="0" y="48" width="1240" height="592" fill="#f7f7f5"/>
+<rect x="24" y="112" width="200" height="264" rx="8" fill="rgba(30,34,38,0.02)" stroke="rgba(30,34,38,0.16)" stroke-width="0.8"/><rect x="36" y="106" width="51" height="12" rx="2" fill="#f7f7f5"/><text x="61.5" y="115" fill="#7f8a92" font-size="7.5" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em">CLIENTS</text>
+<rect x="256" y="112" width="448" height="408" rx="8" fill="rgba(30,34,38,0.02)" stroke="rgba(30,34,38,0.16)" stroke-width="0.8"/><rect x="268" y="106" width="126" height="12" rx="2" fill="#f7f7f5"/><text x="331.0" y="115" fill="#7f8a92" font-size="7.5" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em">MASTER · MirbadLLM.Web</text>
+<rect x="772" y="112" width="444" height="408" rx="8" fill="rgba(30,34,38,0.02)" stroke="rgba(30,34,38,0.16)" stroke-width="0.8"/><rect x="784" y="106" width="161" height="12" rx="2" fill="#f7f7f5"/><text x="864.5" y="115" fill="#7f8a92" font-size="7.5" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em">NODES · ONE AGENT PER MACHINE</text>
+<path d="M 208,184 H 280" fill="none" stroke="#8a5a00" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+<path d="M 208,324 H 280" fill="none" stroke="#0f6863" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<path d="M 456,184 H 504" fill="none" stroke="#5f676e" stroke-width="1.2" marker-end="url(#arrow)"/>
+<path d="M 456,324 H 504" fill="none" stroke="#5f676e" stroke-width="1.2" marker-end="url(#arrow)"/>
+<path d="M 592,292 V 216" fill="none" stroke="#5f676e" stroke-width="1.2" marker-end="url(#arrow)"/>
+<path d="M 680,168 H 800" fill="none" stroke="#0f6863" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<path d="M 680,184 H 740 Q 748,184 748,192 V 300 Q 748,308 756,308 H 800" fill="none" stroke="#0f6863" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<path d="M 680,200 H 720 Q 728,200 728,208 V 440 Q 728,448 736,448 H 800" fill="none" stroke="#0f6863" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<path d="M 800,472 H 456" fill="none" stroke="#5f676e" stroke-width="1" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+<rect x="231.0" y="164" width="26" height="12" rx="2" fill="#f7f7f5"/><text x="244" y="173" fill="#8a5a00" font-size="8" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">/V1</text>
+<rect x="225.5" y="304" width="37" height="12" rx="2" fill="#f7f7f5"/><text x="244" y="313" fill="#0f6863" font-size="8" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">:8080</text>
+<rect x="461.5" y="164" width="37" height="12" rx="2" fill="#f7f7f5"/><text x="480" y="173" fill="#5f676e" font-size="8" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">PROXY</text>
+<rect x="600" y="248" width="53" height="12" rx="2" fill="#f7f7f5"/><text x="605" y="257" fill="#5f676e" font-size="8" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="start" letter-spacing="0.06em">COMMANDS</text>
+<rect x="686.0" y="148" width="64" height="12" rx="2" fill="#f7f7f5"/><text x="718" y="157" fill="#0f6863" font-size="8" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">MTLS :9443</text>
+<rect x="590.5" y="480" width="75" height="12" rx="2" fill="#f7f7f5"/><text x="628" y="489" fill="#5f676e" font-size="8" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">ENROLL :8443</text>
+<rect x="40" y="152" width="168" height="64" rx="6" fill="#f7f7f5"/><rect x="40" y="152" width="168" height="64" rx="6" fill="rgba(95,103,110,0.10)" stroke="#7f8a92" stroke-width="1"/><rect x="48" y="158" width="25" height="12" rx="2" fill="transparent" stroke="rgba(127,138,146,0.40)" stroke-width="0.8"/><text x="60.5" y="167" fill="#7f8a92" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text><text x="124.0" y="185.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Apps and agents</text><text x="124.0" y="201.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">OpenAI SDKs · IDE agents</text>
+<rect x="40" y="292" width="168" height="64" rx="6" fill="#f7f7f5"/><rect x="40" y="292" width="168" height="64" rx="6" fill="rgba(95,103,110,0.10)" stroke="#7f8a92" stroke-width="1"/><rect x="48" y="298" width="25" height="12" rx="2" fill="transparent" stroke="rgba(127,138,146,0.40)" stroke-width="0.8"/><text x="60.5" y="307" fill="#7f8a92" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text><text x="124.0" y="325.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Operator browser</text><text x="124.0" y="341.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">Blazor Server UI</text>
+<rect x="280" y="152" width="176" height="64" rx="6" fill="#f7f7f5"/><rect x="280" y="152" width="176" height="64" rx="6" fill="rgba(242,169,0,0.16)" stroke="#8a5a00" stroke-width="1"/><rect x="288" y="158" width="25" height="12" rx="2" fill="transparent" stroke="rgba(138,90,0,0.50)" stroke-width="0.8"/><text x="300.5" y="167" fill="#8a5a00" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">API</text><text x="368.0" y="185.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Router</text><text x="368.0" y="201.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">/v1 · API-key check</text>
+<rect x="280" y="292" width="176" height="64" rx="6" fill="#f7f7f5"/><rect x="280" y="292" width="176" height="64" rx="6" fill="#ffffff" stroke="#1e2226" stroke-width="1"/><rect x="288" y="298" width="20" height="12" rx="2" fill="transparent" stroke="rgba(30,34,38,0.40)" stroke-width="0.8"/><text x="298.0" y="307" fill="#1e2226" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">UI</text><text x="368.0" y="325.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Blazor UI · admin API</text><text x="368.0" y="341.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">/ · /api</text>
+<rect x="280" y="432" width="176" height="64" rx="6" fill="#f7f7f5"/><rect x="280" y="432" width="176" height="64" rx="6" fill="#ffffff" stroke="#1e2226" stroke-width="1"/><rect x="288" y="438" width="25" height="12" rx="2" fill="transparent" stroke="rgba(30,34,38,0.40)" stroke-width="0.8"/><text x="300.5" y="447" fill="#1e2226" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">PKI</text><text x="368.0" y="465.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Enroll listener · CA</text><text x="368.0" y="481.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">:8443 · MirbadLLM.Pki</text>
+<rect x="504" y="152" width="176" height="64" rx="6" fill="#f7f7f5"/><rect x="504" y="152" width="176" height="64" rx="6" fill="#ffffff" stroke="#1e2226" stroke-width="1"/><rect x="512" y="158" width="30" height="12" rx="2" fill="transparent" stroke="rgba(30,34,38,0.40)" stroke-width="0.8"/><text x="527.0" y="167" fill="#1e2226" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">MTLS</text><text x="592.0" y="185.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Agent client</text><text x="592.0" y="201.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">pinned certificates</text>
+<rect x="504" y="292" width="176" height="64" rx="6" fill="#f7f7f5"/><rect x="504" y="292" width="176" height="64" rx="6" fill="rgba(30,34,38,0.05)" stroke="#5f676e" stroke-width="1"/><rect x="512" y="298" width="30" height="12" rx="2" fill="transparent" stroke="rgba(95,103,110,0.50)" stroke-width="0.8"/><text x="527.0" y="307" fill="#5f676e" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">CORE</text><text x="592.0" y="318.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Orchestration</text><text x="592.0" y="334.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">registry · placement</text><text x="592.0" y="348.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">jobs · backups</text>
+<rect x="800" y="132" width="392" height="72" rx="6" fill="#f7f7f5"/><rect x="800" y="132" width="392" height="72" rx="6" fill="#ffffff" stroke="#1e2226" stroke-width="1"/><rect x="808" y="138" width="35" height="12" rx="2" fill="transparent" stroke="rgba(30,34,38,0.40)" stroke-width="0.8"/><text x="825.5" y="147" fill="#1e2226" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text><text x="996.0" y="162.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Linux · DGX Spark · GPU PC</text><text x="996.0" y="178.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">vLLM model containers (Docker)</text><text x="996.0" y="192.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">mirbadllm-hostd (systemd) · nvidia-smi</text>
+<rect x="800" y="272" width="392" height="72" rx="6" fill="#f7f7f5"/><rect x="800" y="272" width="392" height="72" rx="6" fill="#ffffff" stroke="#1e2226" stroke-width="1"/><rect x="808" y="278" width="35" height="12" rx="2" fill="transparent" stroke="rgba(30,34,38,0.40)" stroke-width="0.8"/><text x="825.5" y="287" fill="#1e2226" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text><text x="996.0" y="302.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Windows PC</text><text x="996.0" y="318.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">llama-server.exe processes</text><text x="996.0" y="332.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">Windows services (SCM) · nvidia-smi</text>
+<rect x="800" y="412" width="392" height="72" rx="6" fill="#f7f7f5"/><rect x="800" y="412" width="392" height="72" rx="6" fill="#ffffff" stroke="#1e2226" stroke-width="1"/><rect x="808" y="418" width="35" height="12" rx="2" fill="transparent" stroke="rgba(30,34,38,0.40)" stroke-width="0.8"/><text x="825.5" y="427" fill="#1e2226" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text><text x="996.0" y="442.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Apple Silicon Mac</text><text x="996.0" y="458.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">llama.cpp (Metal) · MLX processes</text><text x="996.0" y="472.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">mirbadllm-hostd (launchd) · IOKit GPU</text>
+<text x="1216" y="548" text-anchor="end" fill="#5f676e" font-size="12" font-style="italic" font-family="'Plus Jakarta Sans', 'Inter', system-ui, sans-serif">In development, a fake runtime stands in for every runtime (tools/dev-multinode).</text>
+<line x1="24" y1="572" x2="1216" y2="572" stroke="rgba(30,34,38,0.10)" stroke-width="0.8"/><text x="24" y="590" fill="#5f676e" font-size="8" font-family="'Azeret Mono', ui-monospace, monospace" letter-spacing="0.18em">LEGEND</text><rect x="96" y="582" width="14" height="10" rx="2" fill="rgba(242,169,0,0.16)" stroke="#8a5a00" stroke-width="1"/><text x="116" y="590" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">Entry point</text><rect x="201.2" y="582" width="14" height="10" rx="2" fill="#ffffff" stroke="#1e2226" stroke-width="1"/><text x="221.2" y="590" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">Master component</text><rect x="332.4" y="582" width="14" height="10" rx="2" fill="rgba(30,34,38,0.05)" stroke="#5f676e" stroke-width="1"/><text x="352.4" y="590" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">State</text><rect x="406.4" y="582" width="14" height="10" rx="2" fill="rgba(95,103,110,0.10)" stroke="#7f8a92" stroke-width="1"/><text x="426.4" y="590" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">Client</text><line x1="485.59999999999997" y1="587" x2="509.59999999999997" y2="587" stroke="#0f6863" stroke-width="1.2" marker-end="url(#arrow-link)"/><text x="515.5999999999999" y="590" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">HTTP / mTLS call</text><line x1="626.8" y1="587" x2="650.8" y2="587" stroke="#8a5a00" stroke-width="1.2" marker-end="url(#arrow-accent)"/><text x="656.8" y="590" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">Inference path</text><line x1="757.5999999999999" y1="587" x2="781.5999999999999" y2="587" stroke="#5f676e" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow)"/><text x="787.5999999999999" y="590" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">Enrollment (once per node)</text>
+</svg>
+
+  </div>
+</body>
+</html>

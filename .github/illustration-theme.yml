@@ -1,6 +1,36 @@
 schema_version: "1.0"
 active:
-  theme: "cobalt"
+  theme: "mirbadllm"
   mode: "light"
   font_loading: "remote"
-custom_themes: {}
+custom_themes:
+  mirbadllm:
+    label: "MirbadLLM"
+    description: "Graphite and amber, the tokens of mirbadllm.vektragrid.com (src/styles/site.css)."
+    typography:
+      sans: "'Inter', system-ui, sans-serif"
+      serif: "'Plus Jakarta Sans', 'Inter', system-ui, sans-serif"
+      mono: "'Azeret Mono', ui-monospace, monospace"
+      remote_css_url: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,500;0,700;0,800;1,500&family=Azeret+Mono:wght@400;500&display=swap"
+    light:
+      paper: "#f7f7f5"
+      paper-2: "#ffffff"
+      ink: "#1e2226"
+      muted: "#5f676e"
+      soft: "#7f8a92"
+      rule: "rgba(30,34,38,0.12)"
+      rule-solid: "#e1e3e0"
+      accent: "#8a5a00"
+      accent-tint: "rgba(242,169,0,0.16)"
+      link: "#0f6863"
+    dark:
+      paper: "#15181b"
+      paper-2: "#1e2226"
+      ink: "#eeefec"
+      muted: "#9aa3aa"
+      soft: "#6e7880"
+      rule: "rgba(238,239,236,0.12)"
+      rule-solid: "#2d3237"
+      accent: "#f2b42e"
+      accent-tint: "rgba(242,169,0,0.14)"
+      link: "#2ab7a9"

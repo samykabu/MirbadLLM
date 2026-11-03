@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Services page and host agents</title>
+  <meta name="illustration-theme" content="mirbadllm/light/remote">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:ital,wght@0,500;0,700;0,800;1,500&family=Azeret+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:   #f7f7f5;
+      --color-ink:     #1e2226;
+      --color-muted:   #5f676e;
+      --color-accent:  #8a5a00;
+      --font-sans:     'Inter', system-ui, sans-serif;
+      --font-serif:    'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+      --font-mono:     'Azeret Mono', ui-monospace, monospace;
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 3rem 2rem;
+    }
+
+    .frame { max-width: 1240px; width: 100%; }
+
+    .eyebrow {
+      font-family: var(--font-mono);
+      font-size: 0.66rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--color-muted);
+      margin-bottom: 0.5rem;
+    }
+
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      color: var(--color-ink);
+      margin-bottom: 1.5rem;
+    }
+
+    svg { width: 100%; min-width: 1240px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Architecture · MirbadLLM</p>
+    <h1>Services page and host agents</h1>
+    <svg viewBox="0 48 1240 592" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="host-services-title host-services-desc">
+<title id="host-services-title">Services page and host agents</title>
+<desc id="host-services-desc">The master's host service manager keeps the whitelists and confirmations and calls each node agent over mTLS; on Linux the agent controls containers through Docker and units through the root mirbadllm-hostd, on Windows through the SCM and on a Mac through hostd under launchd.</desc>
+<defs>
+<marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#5f676e"/></marker>
+<marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#8a5a00"/></marker>
+<marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#0f6863"/></marker>
+</defs>
+<rect x="0" y="48" width="1240" height="592" fill="#f7f7f5"/>
+<rect x="24" y="112" width="200" height="128" rx="8" fill="rgba(30,34,38,0.02)" stroke="rgba(30,34,38,0.16)" stroke-width="0.8"/>
+<rect x="36" y="106" width="48" height="12" rx="2" fill="#f7f7f5"/>
+<text x="60.0" y="115" fill="#7f8a92" font-size="7.5" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em">BROWSER</text>
+<rect x="256" y="112" width="264" height="392" rx="8" fill="rgba(30,34,38,0.02)" stroke="rgba(30,34,38,0.16)" stroke-width="0.8"/>
+<rect x="268" y="106" width="133" height="12" rx="2" fill="#f7f7f5"/>
+<text x="334.7" y="115" fill="#7f8a92" font-size="7.5" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em">MASTER · MirbadLLM.Web</text>
+<rect x="552" y="112" width="664" height="392" rx="8" fill="rgba(30,34,38,0.02)" stroke="rgba(30,34,38,0.16)" stroke-width="0.8"/>
+<rect x="564" y="106" width="173" height="12" rx="2" fill="#f7f7f5"/>
+<text x="650.6" y="115" fill="#7f8a92" font-size="7.5" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.14em">NODES · ONE AGENT PER MACHINE</text>
+<path d="M 208,184 H 280" fill="none" stroke="#0f6863" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<path d="M 388,224 V 292" fill="none" stroke="#5f676e" stroke-width="1.2" marker-end="url(#arrow)"/>
+<path d="M 496,170 H 576" fill="none" stroke="#0f6863" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<path d="M 496,188 H 532 Q 540,188 540,196 V 344 Q 540,352 548,352 H 576" fill="none" stroke="#0f6863" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<path d="M 496,206 H 520 Q 528,206 528,214 V 440 Q 528,448 536,448 H 576" fill="none" stroke="#0f6863" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<path d="M 768,168 H 824" fill="none" stroke="#5f676e" stroke-width="1.2" marker-end="url(#arrow)"/>
+<path d="M 768,208 H 788 Q 796,208 796,216 V 240 Q 796,248 804,248 H 824" fill="none" stroke="#8a5a00" stroke-width="1.4" marker-end="url(#arrow-accent)"/>
+<rect x="226.2" y="164" width="36" height="12" rx="2" fill="#f7f7f5"/>
+<text x="244" y="173" fill="#0f6863" font-size="8" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">:8080</text>
+<rect x="504.5" y="150" width="63" height="12" rx="2" fill="#f7f7f5"/>
+<text x="536" y="159" fill="#0f6863" font-size="8" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">MTLS :9443</text>
+<rect x="775.5" y="148" width="41" height="12" rx="2" fill="#f7f7f5"/>
+<text x="796" y="157" fill="#5f676e" font-size="8" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">DOCKER</text>
+<rect x="40" y="152" width="168" height="64" rx="6" fill="#f7f7f5"/>
+<rect x="40" y="152" width="168" height="64" rx="6" fill="rgba(95,103,110,0.10)" stroke="#7f8a92" stroke-width="1"/>
+<rect x="48" y="158" width="25" height="12" rx="2" fill="transparent" stroke="rgba(127,138,146,0.40)" stroke-width="0.8"/>
+<text x="60.5" y="167" fill="#7f8a92" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">EXT</text>
+<text x="124.0" y="182.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Operator browser</text>
+<text x="124.0" y="198.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">Services page</text>
+<rect x="280" y="152" width="216" height="72" rx="6" fill="#f7f7f5"/>
+<rect x="280" y="152" width="216" height="72" rx="6" fill="#ffffff" stroke="#1e2226" stroke-width="1"/>
+<rect x="288" y="158" width="30" height="12" rx="2" fill="transparent" stroke="rgba(30,34,38,0.40)" stroke-width="0.8"/>
+<text x="303.0" y="167" fill="#1e2226" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">CORE</text>
+<text x="388.0" y="179.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Host service manager</text>
+<text x="388.0" y="195.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">whitelists · confirmations</text>
+<text x="388.0" y="209.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">session authorization</text>
+<rect x="280" y="292" width="216" height="64" rx="6" fill="#f7f7f5"/>
+<rect x="280" y="292" width="216" height="64" rx="6" fill="rgba(30,34,38,0.05)" stroke="#5f676e" stroke-width="1"/>
+<rect x="288" y="298" width="35" height="12" rx="2" fill="transparent" stroke="rgba(95,103,110,0.50)" stroke-width="0.8"/>
+<text x="305.5" y="307" fill="#5f676e" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">STATE</text>
+<text x="388.0" y="322.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">host-services.json</text>
+<text x="388.0" y="338.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">whitelist · restart policies</text>
+<rect x="576" y="152" width="192" height="72" rx="6" fill="#f7f7f5"/>
+<rect x="576" y="152" width="192" height="72" rx="6" fill="#ffffff" stroke="#1e2226" stroke-width="1"/>
+<rect x="584" y="158" width="35" height="12" rx="2" fill="transparent" stroke="rgba(30,34,38,0.40)" stroke-width="0.8"/>
+<text x="601.5" y="167" fill="#1e2226" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text>
+<text x="672.0" y="179.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Node agent · Linux</text>
+<text x="672.0" y="195.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">mirbadllm-agent</text>
+<text x="672.0" y="209.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">container + unit backends</text>
+<rect x="824" y="132" width="368" height="64" rx="6" fill="#f7f7f5"/>
+<rect x="824" y="132" width="368" height="64" rx="6" fill="rgba(30,34,38,0.05)" stroke="#5f676e" stroke-width="1"/>
+<rect x="832" y="138" width="40" height="12" rx="2" fill="transparent" stroke="rgba(95,103,110,0.50)" stroke-width="0.8"/>
+<text x="852.0" y="147" fill="#5f676e" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">ENGINE</text>
+<text x="1008.0" y="162.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Docker engine</text>
+<text x="1008.0" y="178.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">discover every container · control whitelisted ones</text>
+<rect x="824" y="216" width="368" height="72" rx="6" fill="#f7f7f5"/>
+<rect x="824" y="216" width="368" height="72" rx="6" fill="rgba(242,169,0,0.16)" stroke="#8a5a00" stroke-width="1"/>
+<rect x="832" y="222" width="30" height="12" rx="2" fill="transparent" stroke="rgba(138,90,0,0.50)" stroke-width="0.8"/>
+<text x="847.0" y="231" fill="#8a5a00" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">ROOT</text>
+<text x="1008.0" y="243.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">mirbadllm-hostd</text>
+<text x="1008.0" y="259.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">systemd · root · Unix socket only, no TCP</text>
+<text x="1008.0" y="273.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">deny list · unit whitelist · systemctl · nvidia-smi</text>
+<rect x="576" y="320" width="616" height="64" rx="6" fill="#f7f7f5"/>
+<rect x="576" y="320" width="616" height="64" rx="6" fill="#ffffff" stroke="#1e2226" stroke-width="1"/>
+<rect x="584" y="326" width="35" height="12" rx="2" fill="transparent" stroke="rgba(30,34,38,0.40)" stroke-width="0.8"/>
+<text x="601.5" y="335" fill="#1e2226" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text>
+<text x="884.0" y="350.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Node agent · Windows PC</text>
+<text x="884.0" y="366.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">Windows services through the Service Control Manager (SCM)</text>
+<rect x="576" y="416" width="616" height="64" rx="6" fill="#f7f7f5"/>
+<rect x="576" y="416" width="616" height="64" rx="6" fill="#ffffff" stroke="#1e2226" stroke-width="1"/>
+<rect x="584" y="422" width="35" height="12" rx="2" fill="transparent" stroke="rgba(30,34,38,0.40)" stroke-width="0.8"/>
+<text x="601.5" y="431" fill="#1e2226" font-size="7" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.08em">AGENT</text>
+<text x="884.0" y="446.0" fill="#1e2226" font-size="12" font-weight="600" font-family="'Inter', system-ui, sans-serif" text-anchor="middle">Node agent · Apple Silicon Mac</text>
+<text x="884.0" y="462.0" fill="#5f676e" font-size="9" font-family="'Azeret Mono', ui-monospace, monospace" text-anchor="middle">launchd jobs (Ollama, LM Studio, ComfyUI) through mirbadllm-hostd (launchd)</text>
+<text x="576" y="536" fill="#5f676e" font-size="12" font-style="italic" font-family="'Plus Jakarta Sans', 'Inter', system-ui, sans-serif">Only hostd runs systemctl, as root, and only for whitelisted units the deny list allows.</text>
+<line x1="24" y1="564" x2="1216" y2="564" stroke="rgba(30,34,38,0.10)" stroke-width="0.8"/>
+<text x="24" y="582" fill="#5f676e" font-size="8" font-family="'Azeret Mono', ui-monospace, monospace" letter-spacing="0.18em">LEGEND</text>
+<rect x="96" y="574" width="14" height="10" rx="2" fill="#ffffff" stroke="#1e2226" stroke-width="1"/>
+<text x="116" y="582" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">Component</text>
+<rect x="194.8" y="574" width="14" height="10" rx="2" fill="rgba(30,34,38,0.05)" stroke="#5f676e" stroke-width="1"/>
+<text x="214.8" y="582" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">State or engine</text>
+<rect x="324.8" y="574" width="14" height="10" rx="2" fill="rgba(95,103,110,0.10)" stroke="#7f8a92" stroke-width="1"/>
+<text x="344.8" y="582" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">Client</text>
+<rect x="408.0" y="574" width="14" height="10" rx="2" fill="rgba(242,169,0,0.16)" stroke="#8a5a00" stroke-width="1"/>
+<text x="428.0" y="582" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">Root boundary</text>
+<line x1="528" y1="579" x2="552" y2="579" stroke="#0f6863" stroke-width="1.2" marker-end="url(#arrow-link)"/>
+<text x="558" y="582" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">HTTP / mTLS call</text>
+<line x1="665" y1="579" x2="689" y2="579" stroke="#8a5a00" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+<text x="695" y="582" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">Unix socket to root</text>
+<line x1="818" y1="579" x2="842" y2="579" stroke="#5f676e" stroke-width="1.2" marker-end="url(#arrow)"/>
+<text x="848" y="582" fill="#5f676e" font-size="9" font-family="'Inter', system-ui, sans-serif">Local call</text>
+</svg>
+  </div>
+</body>
+</html>

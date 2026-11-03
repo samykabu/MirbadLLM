@@ -223,7 +223,7 @@ Until the first API key exists, `/v1` is open and the UI says so in its header. 
 | Multi-node | Master on one machine; agents on Linux PCs (systemd), Windows PCs (a Windows service) and Apple Silicon Macs (a LaunchDaemon) | [Add nodes](docs/setup.md#add-nodes) |
 | Development | Master and two fake-runtime agents on loopback | [Development fleet](docs/setup.md#development-fleet) |
 
-![Deployment topologies](docs/images/deployment.png)
+![Deployment topologies](docs/images/deployment.svg)
 
 Joining a machine takes one command. On the master, **Nodes > Add node** creates a one-time join command for Linux,
 Windows or macOS. The command downloads the agent bundle from the master, checks its SHA-256, installs the agent as a
@@ -250,19 +250,19 @@ Every master setting also has an environment form (`MirbadLLM__Key`, `MirbadLLM_
 
 ## Architecture
 
-![MirbadLLM architecture](docs/images/architecture.png)
+![MirbadLLM architecture](docs/images/architecture.svg)
 
 The master is one ASP.NET Core process: the Blazor Server UI, the `/api` admin API, the `/v1` router, the registry,
 jobs, backups and a small certificate authority. Each agent is a separate .NET process that runs the runtime drivers,
 admission, downloads, telemetry and a reverse proxy to its models. A request takes this path:
 
-![Request flow](docs/images/request-flow.png)
+![Request flow](docs/images/request-flow.svg)
 
 More detail, including the behaviour contracts every part keeps, is in [docs/architecture.md](docs/architecture.md).
 
 ## Project structure
 
-![Project structure](docs/images/repo-structure.png)
+![Project structure](docs/images/repo-structure.svg)
 
 ```
 src/

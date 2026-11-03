@@ -1,8 +1,6 @@
 # MirbadLLM architecture and behaviour contracts
 
-This document describes how MirbadLLM is built and the behaviour each part promises. The project started as a
-controller for a single NVIDIA DGX Spark; the sections after the overview still carry that history, phase by phase
-(P1 to P4), because the contracts were written as each phase landed.
+This document describes how MirbadLLM is built and the behaviour each part promises.
 
 MirbadLLM runs local LLMs on one or more machines and serves all of them behind one OpenAI-compatible `/v1`
 endpoint. A **master** holds the model registry, API keys, the Blazor UI, the admin API and the router. A **node
@@ -11,131 +9,102 @@ native process, MLX on Apple Silicon), checks memory before a start, and reports
 
 ## Architecture
 
-![MirbadLLM system architecture](images/architecture.png)
+![MirbadLLM system architecture](images/architecture.svg)
 
 The master never touches Docker, a GPU or a model file. Every host-specific action goes through the node's agent over
 mutual TLS (`https://<agent>:9443/agent/v1`). A request to `/v1` flows like this:
 
-![Request flow](images/request-flow.png)
+![Request flow](images/request-flow.svg)
 
 1. The router checks the bearer key (when keys are required) and resolves the `model` field against the registry.
 2. The master proxies the request to the model's node agent, `https://<agent>:9443/agent/v1/proxy/{modelId}/v1/...`.
 3. The agent forwards it to the runtime on a loopback or container-network port, adding the per-instance key where
    the runtime has one.
 4. Responses, including server-sent event streams, come back the same way. Bodies up to 64 MiB are accepted, chunked
-   or not; larger ones get 413 `request_too_large`.
+   or not; larger ones get 413 `request_too_large`. Other endpoints keep Kestrel's default limit (30,000,000 bytes).
 
-![Deployment topologies](images/deployment.png)
+![Deployment topologies](images/deployment.svg)
 
-The single-controller build (`deploy/compose.yaml`) is the original one-process layout, kept for the way back. The
-multi-node build (`deploy/compose.multinode.yaml`) runs the master and the machine's own agent as two containers, and
-other machines join as nodes with the Linux, Windows or macOS agent installers.
+`deploy/compose.multinode.yaml` runs the master and the machine's own agent as two containers, so one machine is a
+fleet of one. Other machines join as nodes with the Linux, Windows or macOS agent installers.
 
-### The original single-host layout
+## Master and node agents
 
-The behaviour contracts below were first written for the single-host controller. The diagram is kept because the
-contracts still refer to it:
+**The master** (`MirbadLLM.Web` composition, container `mirbadllm`) keeps the registry, API keys, UI, admin API,
+router, backups, jobs, PKI and fencing. It has no Docker socket, no model folders, no hostd socket and no GPU. It
+reaches every node through that node's agent over mTLS (HTTP/2, `https://<agent>:9443/agent/v1`, operator guide
+`docs/multinode/operations.md`):
 
-```
- VS Code (Cline/Roo/Continue), other agents
-                 │  http://<host>:8080/v1/*   (OpenAI API, optional bearer key)
- ┌───────────────▼────────────────────────────────────────────┐
- │ MirbadLLM.Web  (ASP.NET Core, one process, one container)  │
- │  ├─ Router       /v1/*  → picks upstream by body "model"    │
- │  ├─ Admin API    /api/* → registry + runtime                │
- │  ├─ Blazor UI    /      → dashboard, model editor, logs     │
- │  └─ Orchestration: Docker Engine API over /var/run/docker.sock│
- └───────┬───────────────────────────────┬────────────────────┘
-         │ docker network "mirbadllm"  │ creates/removes
-   http://ss-<id>:8000            http://ss-<id>:8000
-   ┌─────▼──────┐                 ┌──────▼─────┐
-   │ vLLM model │   ...           │ vLLM model │   (sibling containers, --gpus all)
-   └────────────┘                 └────────────┘
-```
+- `RemoteModelRuntime` starts, stops and restarts models; `RemoteTelemetryCollector` and the remote probes read
+  memory, GPU and model metrics.
+- `AgentEndpointResolver` (in `MirbadLLM.Router`) resolves a served name to its node from the registry placement and
+  the node status cache.
+- `RemoteHostUnitBackend`, `RemoteHostContainerBackend` and `RemoteBackupMountClient` serve the Services page and the
+  backup destination.
 
-Single host process on purpose: one image, one port, no inter-service auth. The projects are
-separate so the pieces stay decoupled and could be split later, which is what the multi-node build did.
+**The node agent** (`MirbadLLM.Agent`, `mirbadllm-agent`) creates, adopts and stops the models, runs admission (a
+memory reserve; one start at a time on unified memory; per-GPU budgets on discrete GPUs), downloads, folder listing,
+GGUF header reads, host services, telemetry (memory, `nvidia-smi`, each model's `/metrics`) and a reverse proxy to the
+models. It runs as a container on the DGX Spark, a systemd service on a Linux PC, a Windows service (virtual account
+`NT SERVICE\mirbadllm-agent`, logging to the Event Log) on Windows and the LaunchDaemon `com.mirbadllm.agent` on a Mac.
 
-## Since the multi-node split (P1)
+**Runtimes.** Two drivers implement `IRuntimeDriver` in `MirbadLLM.NodeRuntime`:
 
-This brief describes the single-host controller (`deploy/compose.yaml`). `main` now deploys the multi-node P1 build
-(`deploy/compose.multinode.yaml`; design: `docs/multinode/design.md`, operator guide: `docs/multinode/operations.md`),
-which splits that process. The behaviour contracts below still hold; what changed is **where** they run:
+- The **container driver** (`ContainerRuntimeDriver`) runs vLLM models as Docker containers on Linux nodes; its
+  contracts are under [Orchestration](#orchestration).
+- The **process driver** (`ProcessRuntimeDriver`, `Delivery = Process`) runs llama.cpp's `llama-server` and MLX as
+  native processes on Windows and macOS. It owns the state machine, `processes.json`, port use, health, logs, crash
+  handling and adoption, and calls no OS API itself: that work sits behind `IProcessHost`, implemented by
+  `WindowsProcessHost` (`CreateProcessW` plus a per-instance job object without kill-on-close, so a model outlives an
+  agent restart, upgrade or crash and is adopted by PID, creation time and image path) and `MacProcessHost`.
+  `ExecutableCatalog` maps a logical name and version to a verified path, `IGgufReader` reads GGUF headers and
+  `IInstanceKeyProtector` protects each instance's API key at rest. On the master, `LlamaCppArgsBuilder` and
+  `LlamaCppArgsParser` build and read the argv, `LlamaCppMemoryEstimate` gives the admission estimate and the router
+  emulates `dimensions` for llama.cpp embedding models. Restart-pending for a process model compares execution
+  fingerprints.
 
-- The **master** (`MirbadLLM.Web` composition) has no Docker socket, no `/models`, no hostd socket and no GPU. It
-  keeps the registry, API keys, UI, admin API, router, backups, jobs, PKI and fencing, and reaches each node through
-  its agent over mTLS (HTTP/2, `https://<agent>:9443/agent/v1`).
-- The **node agent** (`MirbadLLM.Agent`, container `mirbadllm-agent` on the DGX) creates, adopts and stops the
-  model containers (`ContainerRuntimeDriver` in `MirbadLLM.NodeRuntime`, same naming, labels and create parameters as
-  below), runs admission (memory reserve, one start at a time on unified memory), downloads, folder listing, hostd
-  calls, telemetry (`/proc/meminfo`, `nvidia-smi`, each model's `/metrics` scrape) and a reverse proxy to the models.
-- Master-side replacements of the single-host types: `RemoteModelRuntime` (for `DockerModelRuntime`),
-  `RemoteTelemetryCollector` and the remote probes (for `MetricsSampler` and the local memory/GPU probes),
-  `AgentEndpointResolver` in `MirbadLLM.Router` (for `ModelEndpointResolver` and `UpstreamUri`), and
-  `RemoteHostUnitBackend` / `RemoteHostContainerBackend` / `RemoteBackupMountClient` (for the local hostd and Docker
-  clients behind the Services page and the backup destination). `DockerModelRuntime`, `MetricsSampler`,
-  `ModelEndpointResolver` and `UpstreamUri` were kept unregistered as parity references until MN-047 and are removed
-  there (D60).
-- The router's `/v1` path is unchanged for clients; the master proxies to
-  `https://<agent>/agent/v1/proxy/{modelId}/v1/...`. Since MN-047 (D70) the master accepts the full 64 MiB per `/v1`
-  request (`Content-Length` or chunked) and answers 413 `request_too_large` above it; other endpoints keep Kestrel's
-  default (30,000,000 bytes).
+**Composition.** One setting, `Agent:Docker:Enabled`, decides what an agent composes:
 
-P2 (live on the DGX from `main`; operator guide `docs/multinode/operations-p2.md`) adds Linux PC agents
-(systemd, `deploy/agent/linux`), discrete GPUs with per-GPU admission and placement by GPU UUID, moves and unplace
-(`MoveService`, `ownership.json`), one job per node with node-scoped maintenance once two nodes are approved, takeover
-with continuation, restore modes and fleet recovery in recovery mode, the audit log (`{DataPath}/audit`) and a manual
-CA rotation. On the single DGX the contracts below are unchanged.
+- **Docker on** (the DGX Spark and Linux PCs): the container driver, with host services through Docker and
+  `mirbadllm-hostd`.
+- **Docker off** (Windows and macOS): the process driver, but only when an `IProcessHost` and an
+  `IInstanceKeyProtector` are available. Windows and macOS register both; tests and the dev setup inject them, so the
+  Linux CI leg exercises the same code. `Agent:CacheRoot` is mandatory, and duplicate `Agent:Executables` names are
+  refused. A Docker-off node that has neither service still starts: it logs one warning, reports an empty runtime list
+  and refuses every launch with 422 `spec_rejected`.
+- On Windows, `WindowsServiceLifetime` reports RUNNING as soon as the host starts, so only the code before
+  `app.RunAsync` counts against the Service Control Manager's 30 s. Long start work (the catalogue's first hashing,
+  Ready probes of adopted processes, the TLS key sweep) runs in a `BackgroundService`, never in a blocking
+  `StartAsync`, which would keep 9443 closed.
 
-P3/P4 (`feature/multinode-p3`, not deployed; design `docs/multinode/design-p3p4.md`, operator guide
-`docs/multinode/operations-p3p4.md`) adds a second runtime kind and a Windows node:
+**Host services** are per platform: `mirbadllm-hostd` under systemd on Linux, the Service Control Manager on Windows
+and `mirbadllm-hostd` under launchd on a Mac ([Services page and host agents](#services-page-and-host-agents)).
 
-- **llama.cpp as a native process.** `ProcessRuntimeDriver` (`MirbadLLM.NodeRuntime/Runtimes/Process`) implements
-  the same `IRuntimeDriver` as the container driver, with `Delivery = Process`. It owns the state machine,
-  `processes.json`, port use, health, logs, crash handling and adoption, and never calls a Win32 API: the OS work is
-  behind `IProcessHost`, implemented by `WindowsProcessHost` (`CreateProcessW` + a per-instance job object without
-  kill-on-close, so a model outlives an agent restart, upgrade or crash and is adopted by PID, creation time and
-  image path). `ExecutableCatalog` maps a logical name and version to a verified path; `IGgufReader` reads GGUF
-  headers; `IInstanceKeyProtector` protects each instance's API key at rest. Master side: `LlamaCppArgsBuilder` and
-  `LlamaCppArgsParser` for the argv, `LlamaCppMemoryEstimate` for the admission estimate, and the router's
-  `dimensions` emulation for llama.cpp embedding models. A llama.cpp model has no legacy config hash: restart-pending
-  compares execution fingerprints alone.
-- **The Windows agent** hosts itself as a Windows service (`MirbadLLM.Agent/Hosting/WindowsServiceHosting`,
-  `Microsoft.Extensions.Hosting.WindowsServices`), logs to the Windows Event Log, and runs under the virtual account
-  `NT SERVICE\mirbadllm-agent` (installer `deploy/agent/windows/install-agent.ps1`). `WindowsServiceLifetime`
-  reports RUNNING when the host starts, so only the code before `app.RunAsync` counts against the SCM's 30 s: long
-  start work (the catalogue's first hashing, Ready probes of adopted processes, the TLS key sweep) belongs in a
-  `BackgroundService`, never in a blocking `StartAsync`, which would keep 9443 closed. Node-local subsystems are
-  Windows ones: `WindowsMemoryProbe`, `nvidia-smi` for discrete GPUs, SCM host services instead of hostd.
-- **The composition gate** is one setting, `Agent:Docker:Enabled`. With Docker on, the agent composes exactly as in
-  P2, registration for registration — which is what `P2CompositionTests` and the pinned DGX capability fixture prove.
-  With Docker off it composes the process half instead, but only when an `IProcessHost` **and** an
-  `IInstanceKeyProtector` are available (Windows registers both itself; a test or the dev setup injects them off
-  Windows, so the Linux CI leg exercises the same code). There is no second `Agent:Runtime` switch. `Agent:CacheRoot`
-  is mandatory with Docker off, duplicate `Agent:Executables` names are refused, and a Docker-off node that supplies
-  neither service still starts — it logs one warning, reports an empty runtime list and refuses every launch 422
-  `spec_rejected`. Two P2 contributors (`GpuSelectionContributor`, `LaunchFeaturesContributor`) read every driver,
-  not only the container one, so a process node reports `gpus.uuids` and `launch.env`; the widening is inert with
-  Docker on.
-- **Protocol 1 is unchanged.** One new route (`GET /model-folders/{folder}/gguf`), new feature flags
-  (`gguf.inspect`, `admission.gpu-budgets`, `downloads.ollama`, plus the P1 constants `runtime.llamacpp.process`,
-  `downloads.hf-native` and `services.scm`, which no P1/P2 agent reports), and additive wire fields omitted at their
-  defaults. The DGX's launch bodies, hashes, fingerprints and capabilities are byte-identical.
+**Protocol.** `MirbadLLM.Agent.Contracts` holds the one master ↔ agent protocol. An agent reports what it supports as
+feature flags (for example `runtime.llamacpp.process`, `gguf.inspect`, `admission.gpu-budgets`, `downloads.hf-native`,
+`downloads.ollama`, `services.scm`); new wire fields are additive and omitted at their defaults.
+
+**Fleet operations.** Placement (by GPU UUID on discrete GPUs), moves and unplace (`MoveService`, `ownership.json`),
+one job per node with node-scoped maintenance, takeover with continuation, restore modes, fleet recovery in recovery
+mode, the audit log (`{DataPath}/audit`) and CA rotation. Operator guides: `docs/multinode/operations-p2.md` (Linux
+nodes and placement) and `docs/multinode/operations-p3p4.md` (Windows and Mac nodes).
 
 ## Projects and ownership
 
 | Project | Owns | Depends on |
 |---|---|---|
 | `src/MirbadLLM.Core` | Contracts only: `ModelDefinition`, `ModelStatus`, `ModelEndpoint`, `MemorySnapshot`, `ModelMetrics`, `RouterModelStats`, the interfaces in `Abstractions.cs`, `MirbadLLMOptions`. Shared by every project, so changes here are reviewed with extra care. | — |
-| `src/MirbadLLM.Orchestration` | Master side: vLLM argument builder, JSON registry, health monitor, metrics history, jobs, backups; since P1 also the node registry and monitor, agent client, `RemoteModelRuntime`, `RemoteTelemetryCollector`, remote probes/storage/host services, certificate rotation, fencing, `AddMirbadLLMOrchestration`. | Core, Agent.Contracts, Pki, NodeRuntime |
-| `src/MirbadLLM.Router` | `/v1/*` proxy (through the agents since P1, `AgentEndpointResolver`), `/v1/models`, API-key check, `IRouterStats`, `AddMirbadLLMRouter` / `MapMirbadLLMRouter`. | Core, Agent.Contracts |
+| `src/MirbadLLM.Orchestration` | Master side: vLLM and llama.cpp argument builders, JSON registry, health monitor, metrics history, jobs, backups, the node registry and monitor, agent client, `RemoteModelRuntime`, `RemoteTelemetryCollector`, remote probes/storage/host services, certificate rotation, fencing, `AddMirbadLLMOrchestration`. | Core, Agent.Contracts, Pki, NodeRuntime |
+| `src/MirbadLLM.Router` | `/v1/*` proxy through the agents (`AgentEndpointResolver`), `/v1/models`, API-key check, `IRouterStats`, `AddMirbadLLMRouter` / `MapMirbadLLMRouter`. | Core, Agent.Contracts |
 | `src/MirbadLLM.Web` | `Program.cs` composition (the master), `/api/*` admin endpoints, Blazor pages, the enroll listener. | all |
-| `src/MirbadLLM.Agent` | The node agent `mirbadllm-agent` (P1). | Core, Agent.Contracts, NodeRuntime, Pki |
-| `src/MirbadLLM.Agent.Contracts` | Master ↔ agent protocol: routes, envelopes, events, error codes (P1). | Core |
-| `src/MirbadLLM.NodeRuntime` | Node-local code the agent uses: Docker Engine client, container driver, Hugging Face downloader, `/proc/meminfo` and `nvidia-smi` probes, hostd client (P1); since P3/P4 also the llama.cpp process driver and its `IProcessHost` (Windows), the executable catalogue, the GGUF reader, the process record store and the instance-key protector. | Core, Agent.Contracts |
-| `src/MirbadLLM.Pki` | CA, certificate issuing from CSRs, SPKI pins, TLS validators (P1). | Agent.Contracts |
+| `src/MirbadLLM.Agent` | The node agent `mirbadllm-agent`. | Core, Agent.Contracts, NodeRuntime, Pki |
+| `src/MirbadLLM.Agent.Contracts` | Master ↔ agent protocol: routes, envelopes, events, error codes, feature flags. | Core |
+| `src/MirbadLLM.NodeRuntime` | Node-local code the agent uses: Docker Engine client, container driver, the process driver and its `IProcessHost` implementations (Windows, macOS), the executable catalogue, the GGUF reader, the process record store, the instance-key protector, the Hugging Face downloader, memory and `nvidia-smi` probes, the hostd client. | Core, Agent.Contracts |
+| `src/MirbadLLM.Pki` | CA, certificate issuing from CSRs, SPKI pins, TLS validators. | Agent.Contracts |
+| `src/MirbadLLM.HostAgent` | `mirbadllm-hostd`, the root daemon behind the Services page on Linux and macOS: unit discovery and control, GPU processes, the backup mount. | — |
 | `tests/MirbadLLM.UnitTests` | One folder per area: `Orchestration/`, `Router/`, `Web/`, `Agent/`, `Multinode/`. | all |
-| `deploy/` | Dockerfiles, `compose.yaml`, `compose.multinode.yaml`, `agent/`, `hostd/`, `k8s/`. | — |
+| `tests/MirbadLLM.FakeLlamaServer` | A stand-in `llama-server` for process-driver tests. | — |
+| `deploy/` | Dockerfiles, `compose.multinode.yaml`, the agent installers (`agent/`), `hostd/`, `k8s/`. | — |
 | `tools/` | `dev-multinode` (a master and two fake-runtime agents on one machine), `perf-multinode` (perf harness). | — |
 
 ## Conventions (all workstreams)
@@ -155,14 +124,14 @@ P3/P4 (`feature/multinode-p3`, not deployed; design `docs/multinode/design-p3p4.
 
 ### Orchestration
 
-Since P1 the container, memory, metrics and endpoint contracts in this section run on the node agent
+The container, memory, metrics and endpoint contracts in this section run on the node agent of a Docker node
 (`MirbadLLM.NodeRuntime` / `MirbadLLM.Agent`); the master reaches them through `RemoteModelRuntime`,
-`RemoteTelemetryCollector` and `AgentEndpointResolver` (see "Since the multi-node split" above).
+`RemoteTelemetryCollector` and `AgentEndpointResolver` (see [Master and node agents](#master-and-node-agents)).
 
 - **Container naming/labels:** container `ss-{Id}`; labels `mirbadllm.model={Id}`,
   `mirbadllm.served-name={ServedName}`, `mirbadllm.port={hostPort}`. State is always derived from
-  Docker (list containers with label filter), never cached as truth — the controller can restart at
-  any time and must adopt running containers.
+  Docker (list containers with label filter), never cached as truth — the agent can restart at any
+  time and must adopt running containers.
 - **State mapping:** no container → `Stopped`; running and `GET http://upstream/health` = 200 →
   `Ready`; running, not healthy yet → `Starting`; exited/dead → `Failed` (with the last 20 log lines
   in `Error`); `Stopping` while a stop is in flight.
@@ -176,10 +145,8 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   `IpcMode: host`, binds `{ModelsHostPath}:/models:ro` and `{CacheHostPath}:/root/.cache`,
   port `8000/tcp` → `127.0.0.1:{hostPort}`, network `{DockerNetwork}` with alias `ss-{Id}`,
   `RestartPolicy: no`, command = vLLM args below. Missing image → pull first. Docker never starts a model on its
-  own: after a reboot only `AutoStart` models come back, through the controller's one-at-a-time boot auto-start
-  (`unless-stopped` let Docker relaunch every model at once on 2026-10-14 and the smallest one ran out of KV-cache
-  memory). A container created before this change keeps its old policy until it is recreated;
-  `docker update --restart=no ss-<id>` switches it in place.
+  own: after a reboot only `AutoStart` models come back, through the master's one-at-a-time boot auto-start, so
+  models never start all at once and run each other out of KV-cache memory.
 - **vLLM args** (entrypoint is `vllm serve`), in this order:
   `--model /models/{ModelPath} --served-model-name {ServedName} [--quantization {Quantization}]
   --kv-cache-dtype {KvCacheDtype} --max-model-len {MaxModelLen} --max-num-seqs {MaxNumSeqs}
@@ -189,7 +156,7 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   [--speculative-config {Speculative as the vLLM object, keys sorted}]
   [--compilation-config {"cudagraph_mode":"…", …CompilationConfig keys}] [--async-scheduling | --no-async-scheduling]
   [--mamba-cache-mode {MambaCacheMode}] --disable-access-log-for-endpoints /health,/metrics {ExtraArgs…}`
-  (the Phase 0 command lines are the golden tests in `VllmArgsBuilderTests`.)
+  (golden command lines in `VllmArgsBuilderTests`.)
 - **Canonical effective configuration** (`VllmArgsNormalizer`): the settings mirbadllm owns — speculative
   config, compilation config, max num seqs, max batched tokens, KV cache dtype, prefix caching, async scheduling,
   mamba cache mode — live only in typed `ModelDefinition` fields and are emitted exactly once. Any of them found in
@@ -201,13 +168,12 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   persisted on the next save), on every save/API upsert (an unreadable owned flag → 400), by the builder, by the
   parser (a container's `Cmd` reads back as what vLLM ran) and by tuning apply.
   - `Speculative` (`SpeculativeDecoding`): typed `method` (empty = inferred from the draft), `num_speculative_tokens`,
-    `model` (draft path) plus `Extra` (every other key). Serialized as the vLLM object; the old
-    `{"Method","NumSpeculativeTokens"}` shape still reads.
+    `model` (draft path) plus `Extra` (every other key). Serialized as the vLLM object; a
+    `{"Method","NumSpeculativeTokens"}` object also reads.
   - `CudaGraphMode` stays the typed owner of `cudagraph_mode`; `CompilationConfig` holds every other
-    `--compilation-config` key (never `cudagraph_mode`); the builder merges both into one argument. This keeps old
-    files and the tuning planner unchanged.
+    `--compilation-config` key (never `cudagraph_mode`); the builder merges both into one argument.
   - `EnablePrefixCaching` and `AsyncScheduling` are tri-state (`null` = vLLM default, nothing emitted). A stored
-    `false` (pre-tri-state files) now means explicit `--no-enable-prefix-caching` (it used to emit nothing).
+    `false` means an explicit `--no-enable-prefix-caching`.
 - **Stop:** `POST /containers/{id}/stop?t=30` then `DELETE /containers/{id}`.
 - **Registry:** `{DataPath}/models.json`, atomic write (temp file + move), `SemaphoreSlim` guarded.
   Validate `Id` (`^[a-z0-9][a-z0-9-]{0,39}$`) and `ServedName` uniqueness; throw `ArgumentException`.
@@ -217,14 +183,12 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
 - **Metrics reader:** scrape `GET upstream/metrics` (Prometheus text). Use
   `vllm:num_requests_running`, `vllm:num_requests_waiting`, `vllm:kv_cache_usage_perc`
   (fallback `vllm:gpu_cache_usage_perc`), and rates from counters `vllm:generation_tokens_total`,
-  `vllm:prompt_tokens_total` (difference between consecutive scrapes / elapsed seconds). Since P1 the agent
-  scrapes each Ready model into its telemetry ring and the master's `RemoteTelemetryCollector` computes the rates
-  (the single-host `MetricsSampler` is removed in MN-047).
+  `vllm:prompt_tokens_total` (difference between consecutive scrapes / elapsed seconds). The agent scrapes each
+  Ready model into its telemetry ring and the master's `RemoteTelemetryCollector` computes the rates.
 - **Endpoint resolver:** `BaseUri` = `http://ss-{Id}:8000/` when `UseContainerNetwork`, else
-  `http://{UpstreamHost}:{hostPort}/`. Resolves by `ServedName` (case-insensitive). Since P1 this upstream rule is
-  the agent's (its proxy reaches the model this way); the master resolves served names with `AgentEndpointResolver`
-  (registry placement + node status cache) and proxies through the agent. `ModelEndpointResolver` and `UpstreamUri`
-  are removed in MN-047.
+  `http://{UpstreamHost}:{hostPort}/`. Resolves by `ServedName` (case-insensitive). This upstream rule is the
+  agent's (its proxy reaches the model this way); the master resolves served names with `AgentEndpointResolver`
+  (registry placement + node status cache) and proxies through the agent.
 - **Health monitor** (`BackgroundService`): every `HealthPollInterval` refresh states; on boot start
   models with `AutoStart`; log state transitions. After a node agent reboot the node's previous running set
   (`ModelRecoveryState`, `{DataPath}/running-models.json`) is relaunched one at a time through the per-node start lane.
@@ -233,7 +197,7 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   restarted through the same lane after a 10 s / 30 s / 60 s backoff, audited as `system:autostart`; models under a
   maintenance window, a tuning run or a job's ownership record are skipped. After `MirbadLLM:CrashRestartLimit`
   (default 3) crashes in a row the monitor stops retrying: the model stays Failed, the pause (model, node, crashes, last
-  error, time) is written to `{DataPath}/restart-pauses.json` so it survives a controller restart, the Models page and
+  error, time) is written to `{DataPath}/restart-pauses.json` so it survives a master restart, the Models page and
   the model's Overview read "Crashed 3 times, automatic restarts paused", and the Dashboard attention list (the
   status-bar badge counts it) says "Automatic restarts paused for <model> after <n> crashes: <cause>". A Start by hand
   (UI or `POST /api/models/{id}/start`) or 10 minutes of Ready clears the counter and the pause.
@@ -259,31 +223,15 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   Razor components (interactive server), map `/api/*`, `MapMirbadLLMRouter`, `/healthz`.
 - Admin API: `GET/POST /api/models`, `GET/PUT/DELETE /api/models/{id}`, `POST /api/models/{id}/start?force=`,
   `POST /api/models/{id}/stop`, `GET /api/models/{id}/logs?tail=` (text/event-stream), `GET /api/status`
-  (memory + all statuses + metrics + router stats). 409 on memory refusal, 404 unknown id. The multi-node master adds
-  409/503/504 answers for node problems (D51, D64, D67; `docs/multinode/operations.md` section 7).
-- UI pages: **Dashboard** (memory bar: used by mirbadllm / other / free; model cards with state
-  badge, served name, port, budget, live running/waiting/tok/s, Start/Stop; auto-refresh 2 s),
-  **Model editor** (create/edit every `ModelDefinition` field, validation, delete), **Logs** (live
-  tail of one model), **Connect** (copy-paste snippets: base URL, model names, Cline/Continue config).
-  Plain Bootstrap that ships with the template; dark/light via `data-bs-theme`.
+  (memory + all statuses + metrics + router stats). 409 on memory refusal, 404 unknown id. Node problems answer
+  409/503/504 (`docs/multinode/operations.md` section 7).
+- UI pages (Blazor, interactive server): **Overview**, **Models** (the model editor, logs, benchmarks and tuning),
+  **Playground**, **Access** (API keys and connection snippets), **Nodes**, **Services**, **Backup & restore** and
+  **Releases**. Light and dark themes via `data-bs-theme`.
 
-## Services page and host agent (`src/MirbadLLM.HostAgent`)
+## Services page and host agents
 
-```
- Browser ──/services, /api/services──► controller (container, uid app + group docker)
-                                         ├─ Docker socket ──► containers: discovery (all) + control (whitelist only)
-                                         │     {DataPath}/host-services.json: container whitelist + remembered restart policies
-                                         ├─ IAdminReauthenticator: authenticated portal-session authorization
-                                         └─ /run/mirbadllm-hostd/hostd.sock (bind mount, ro)
-                                               ▼
-                                   mirbadllm-hostd (host, systemd, root; Kestrel on the Unix socket only)
-                                         ├─ compiled-in deny list (+ root-owned /etc/mirbadllm/hostd-deny.json, add-only)
-                                         ├─ /var/lib/mirbadllm-hostd/whitelist.json (root 0600, StateDirectory)
-                                         │     seeded from /etc/mirbadllm/hostd.json (root 0644)
-                                         ├─ /usr/bin/systemctl [--user -M dgxuser@] list-units|list-unit-files|show (discovery, read-only)
-                                         ├─ /usr/bin/systemctl [--user -M dgxuser@] start|stop|restart|enable|disable -- <whitelisted unit>
-                                         └─ /usr/bin/nvidia-smi --query-compute-apps → /proc/<pid>/cgroup → unit
-```
+![Services page and host agents](images/host-services.svg)
 
 - **Contracts** (`Core/HostServices.cs`): `IHostServiceManager` (list, discover, run, autostart, whitelist
   add/update/remove), `HostServiceStatus`, `DiscoveredService` (managed + denied flags, deny pattern),
@@ -294,7 +242,7 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   users of the seed's user units, i.e. dgxuser), skips templates without an instance (`foo@.service`), aliases,
   masked, transient and not-found units, then reads everything else in batched `systemctl show` calls (state, unit
   file state, `MemoryCurrent`, cgroup → GPU memory, description). Units that are loaded but have no unit file are
-  dropped. The controller adds every Docker container (`GET /containers/json?all=true`, memory from one-shot stats)
+  dropped. The node agent adds every Docker container (`GET /containers/json?all=true`, memory from one-shot stats)
   except `mirbadllm`, containers labelled `mirbadllm.model` and download jobs (`mirbadllm.download`). The page
   loads discovery only while **Discovered** is open (refresh every 30 s) and sorts it by RAM + GPU, largest first.
 - **Security model** (in order, each layer enforced where it runs, never only in the UI):
@@ -305,7 +253,7 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
      `getty*`, `serial-getty*`, `nvidia-persistenced*`, `nvidia-fabricmanager*`, `nvidia-*driver*`, `udev*`, `cron*`,
      `rsyslog*`, `snapd*`, `apparmor*`, `ufw*`, `chrony*`, `auditd*`, `user@*`, `mirbadllm-hostd*`, `gdm*`,
      `display-manager*`, `accounts-daemon*`, `unattended-upgrades*`, `multipathd*`, `lvm2*` (case-insensitive globs;
-     a bare name is also tested with `.service`). Nothing the controller sends can shrink it; a root-owned,
+     a bare name is also tested with `.service`). Nothing the master sends can shrink it; a root-owned,
      not group/other-writable `/etc/mirbadllm/hostd-deny.json` (`{"patterns": [...]}`) can only add to it (the
      agent refuses to start if that file is insecure or malformed). Denied units still appear in discovery,
      read-only, as "System — not manageable" with the matching pattern. Any action (`POST /services/{name}/…`)
@@ -325,31 +273,30 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
      `[{pid, name, usedMiB, containerId?, unit?, displayName?}]` (`HostAgent/GpuProcesses.cs`: nvidia-smi
      `--query-compute-apps=pid,process_name,used_memory` by argv with a 5 s timeout; each PID's owner from
      `/proc/<pid>/cgroup` — `docker-<64hex>.scope` or `/docker/<64hex>` → container id, else the innermost `.service`
-     unit, with the whitelist's display name; 503 when nvidia-smi fails). Telemetry uses it (3 s bound; since P1 the
-     node agent's `HostdGpuProcessProbe`, read by the master's `RemoteTelemetryCollector`) for
+     unit, with the whitelist's display name; 503 when nvidia-smi fails). Telemetry uses it (3 s bound; the node
+     agent's `HostdGpuProcessProbe`, read by the master's `RemoteTelemetryCollector`) for
      the Overview's per-model memory history — each model's container processes summed, named host services kept apart — and
      falls back to each running model's budget when the agent is missing, older (404) or failing; every host sample
      records which source it used. Every change is one journald line with the entry before and
-     after (`whitelist add|update|remove service=… before={…} after={…}`). Containers: the controller keeps the
+     after (`whitelist add|update|remove service=… before={…} after={…}`). Containers: the master keeps the
      container whitelist in `{DataPath}/host-services.json` (`containers`, next to `restartPolicies`), seeded once
      from `MirbadLLM:ManagedContainers` (or the built-in defaults), and refuses start/stop/restart/autostart for
      any container not in it; a corrupt file fails closed instead of re-seeding.
-  4. **Admin session authorization** (controller, `HostServiceManager` + `Web/AdminReauthentication.cs`): adding a
+  4. **Admin session authorization** (master, `HostServiceManager` + `Web/AdminReauthentication.cs`): adding a
      service to the whitelist or unprotecting one uses the signed-in session and typed service name. The server
      resolves the principal from the HTTP request or Blazor authentication state; request JSON cannot supply it.
-     Legacy password fields are ignored. Login still uses constant-time password comparison and its 5-per-minute
+     Password fields in a request are ignored. Login still uses constant-time password comparison and its 5-per-minute
      rate limit; portal actions do not spend login attempts. With admin login disabled, whitelist changes remain
      refused. Protected-service confirmations and the agent's deny list remain enforced.
-  5. **Protected services**: stop/restart/autostart-off need `confirm=<name>` (typed in the dialog), checked in the
-     controller and again in the agent (403 `code: confirm`).
+  5. **Protected services**: stop/restart/autostart-off need `confirm=<name>` (typed in the dialog), checked on the
+     master and again in hostd (403 `code: confirm`).
 - **Actions**: `--no-block` (the page polls status); every call has a timeout (15 s queries, 60 s actions, 10 s
   nvidia-smi). Status comes from `systemctl show --timestamp=unix`; GPU memory is the sum of `nvidia-smi` compute
   processes whose cgroup is the unit's cgroup or below it. Each action/refusal is one journald line
   (`action service=… unit=… action=… result=ok|failed|refused`).
-- **Controller** (`Orchestration/HostServiceManager.cs`; since P1 its unit and container backends are
-  `RemoteHostUnitBackend` / `RemoteHostContainerBackend`, which call the node agent, and the agent uses
-  `NodeRuntime/HostAgentClient.cs` and `DockerServiceClient.cs`; whitelist, confirmations and session authorization stay
-  on the master): units via hostd; containers via Docker (`inspect`, `stats?one-shot=true` memory = usage − inactive_file,
+- **Master** (`Orchestration/HostServiceManager.cs`): its unit and container backends are `RemoteHostUnitBackend` /
+  `RemoteHostContainerBackend`, which call the node agent, and the agent uses `NodeRuntime/HostAgentClient.cs` and
+  `DockerServiceClient.cs`; whitelist, confirmations and session authorization stay on the master. Units via hostd; containers via Docker (`inspect`, `stats?one-shot=true` memory = usage − inactive_file,
   start/stop/restart, autostart = restart policy via `POST /containers/{id}/update`). Turning autostart off
   remembers the old policy in `host-services.json` so turning it on restores `always`; a container that never
   had one gets `unless-stopped`.
@@ -361,7 +308,10 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   in the backup-share test; nothing listens on them), `ReadWritePaths=/etc/systemd/system -/etc/mirbadllm-hostd`
   (the backup mount unit and its credentials), kernel/cgroup/clock protections, `MemoryMax=256M`.
   enable/disable still work because the managers (PID 1, the user manager) write the unit links, not the agent.
-- **Install / migration** (`deploy/hostd/install-hostd.sh`): keeps an existing `/etc/mirbadllm/hostd.json` as
+- **Other platforms**: on Windows the agent manages Windows services through the Service Control Manager; on a Mac,
+  launchd jobs go through `mirbadllm-hostd` running as the LaunchDaemon `com.mirbadllm.hostd`
+  (`deploy/agent/macos`).
+- **Install** (`deploy/hostd/install-hostd.sh`): keeps an existing `/etc/mirbadllm/hostd.json` as
   the seed, installs the unit with `StateDirectory`, tightens an existing `hostd-deny.json` to root/go-w, restarts
   the agent (which writes the whitelist on first start) and prints the whitelist's owner, mode and entries.
 
@@ -370,23 +320,23 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
 - **Launch config + pending restart.** Every vLLM setting is a launch argument. Model containers carry
   `mirbadllm.config-hash` (16 hex of SHA-256 over image + the canonical args, `VllmArgsParser.Canonicalize`:
   parsed, normalized and rebuilt in the builder's order, keeping the budget-derived utilization text) and
-  `mirbadllm.budget-gib`. A builder output is its own canonical form, so hashes of unchanged definitions are
-  what they always were. `ModelStatus.RestartPending` is true for a Starting/Ready container whose hash differs
+  `mirbadllm.budget-gib`. A builder output is its own canonical form, so an unchanged definition keeps its
+  hash. `ModelStatus.RestartPending` is true for a Starting/Ready container whose hash differs
   from the saved definition's; when the label differs, the hash is recomputed from the container's `Cmd` (cached
   per container) so a container launched with a raw override in ExtraArgs matches the normalized definition vLLM
-  effectively ran; no label (older containers) or `mirbadllm.tuning=1` → not pending. `VllmArgsParser` reads a container's `Cmd` back into a definition so
+  effectively ran; no label or `mirbadllm.tuning=1` → not pending. `VllmArgsParser` reads a container's `Cmd` back into a definition so
   the Apply dialog can list "old → new" even for unlabelled containers. Only `AutoStart` applies without restart.
 - **Restart**: `IModelRuntime.RestartAsync` / `POST /api/models/{id}/restart?force=` = stop + remove + create
   with the saved definition; admission counts the running container's budget as released
   (`available + own − reserve`). `IModelLauncher.LaunchAsync` does the same with any definition (tuning).
-- **Jobs** (`ModelJobService`, one at a time box-wide; `JobConflictException` → 409): on-demand benchmark
+- **Jobs** (`ModelJobService`, one at a time per node; `JobConflictException` → 409): on-demand benchmark
   (Ready model, current settings, no restart) and tuning. While a job runs the router is in **maintenance
   mode** (`IMaintenanceMode`, `{DataPath}/maintenance.json`, cleared on boot): every `/v1/*` call gets 503
   `code=maintenance` with `Retry-After` from the job's estimate, before the API-key check; the chat page's
   `IChatClient` throws the same message; `/healthz`, `/metrics`, `/api/*` and the UI keep working. A job first
   drains (Ready models report 0 running/waiting on fresh samples, 120 s timeout → "noisy: in-flight requests at
   start"), then samples `nvidia-smi` for 5 s (> 10 % → "noisy: GPU busy with work outside mirbadllm").
-- **Suite** (`BenchmarkSuite`, port of Phase 0 `bench.py`): streaming chat, fixed prompts, max_tokens =
+- **Suite** (`BenchmarkSuite`): streaming chat, fixed prompts, max_tokens =
   min_tokens = 256, temperature 0, thinking off; warm-up; N = 1/4/8/16 × 3 runs, per-metric median;
   per-request tok/s = tokens ÷ (total − TTFT), aggregate = tokens ÷ wall, TTFT p50/p95 (nearest rank);
   prefill of a min(MaxModelLen, 65,536)-token prompt with a unique prefix, then the same prompt again
@@ -413,7 +363,7 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   baseline +25 %, error rate 0, objective answers ≥ baseline (generation), tool validity 100 % (Agents), embeddings:
   valid vectors, unchanged normalization, latency p95@16 ≤ 2× (Throughput has no latency guards). A non-finite or
   non-positive active measurement rejects. Results carry `SchemaVersion` (absent = 1, the classic suite), `Preset` and
-  `Repetitions`; stored v1 benchmarks and tuning runs load and render as before. `POST /api/models/{id}/benchmark?preset=…`
+  `Repetitions`; v1 benchmarks and tuning runs load and render too. `POST /api/models/{id}/benchmark?preset=…`
   runs a preset (no preset = classic suite); the Benchmark page has a preset picker (plus "Classic suite").
 - **Embeddings suite** (pooling models: `--runner pooling`, `--convert embed`, `--task embed` or the `embedding`
   tag; `PoolingDetection`): warm-up, then N = 1, 16 and the configuration's max num seqs (≤ 64) × 3 runs of
@@ -435,8 +385,7 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   {4, 8, 16, 32, 64}, then max batched tokens {2048 … 32768}; (3) speculative {off, saved, MTP 1/2/3/5 or drafter depths}
   with FULL_AND_PIECEWISE graphs, then PIECEWISE follow-ups only for a full-graph candidate that failed and for the two
   best depths (when CUDA graph mode is selected), then async {on, off}; refinement: neighbours of the winning max num
-  seqs and speculative depth with everything else fixed, then prefix on/off with the winning decode settings. The old
-  forced PIECEWISE-with-MTP rule is gone (also from the classic planner). Coordinate descent with fingerprint de-dup on
+  seqs and speculative depth with everything else fixed, then prefix on/off with the winning decode settings. Coordinate descent with fingerprint de-dup on
   the effective configuration, then the confirmation stage. Quick = {max num seqs, speculative}; Full = every
   dimension (`TuningSearch` in the API body, or explicit `steps`). Pooling models keep the phase-A plan. Each step and
   candidate carries a goal + tradeoff from `TuningDescriptions` (plan preview, live progress
@@ -490,11 +439,10 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   `ModelConfigHash` and `SettingChanges.RestartNeeded` ignore them.
 - **Backups** (`Orchestration/Recovery`): `BackupService` builds a `BackupDocument` (models,
   `HostServicesStore.ExportAsync`, and — with a passphrase — `BackupCrypto`'s AES-256-GCM / PBKDF2-SHA256 (600,000)
-  encrypted `BackupSecrets` with the API key records). The single controller wrote `schemaVersion` 1; the multi-node
-  master writes 2 (`MultiNodeSchemaVersion`), which adds `master` (instance id, epoch), `nodes` (non-secret records),
-  per-node host services and, with a passphrase and `MirbadLLM:Backup:IncludeCa` (default true), the CA in the
-  encrypted section; the secrets are bound to the document version (D50). `Parse` reads versions 1 and 2 and refuses
-  other versions, bad JSON and weakened KDF parameters; `DecryptSecrets` throws `BackupPassphraseException` on a wrong passphrase or tampering.
+  encrypted `BackupSecrets` with the API key records). The master writes `schemaVersion` 2 (`MultiNodeSchemaVersion`):
+  `master` (instance id, epoch), `nodes` (non-secret records), per-node host services and, with a passphrase and
+  `MirbadLLM:Backup:IncludeCa` (default true), the CA in the encrypted section; the secrets are bound to the document
+  version. `Parse` also reads version 1 (a single machine's backup) and refuses other versions, bad JSON and weakened KDF parameters; `DecryptSecrets` throws `BackupPassphraseException` on a wrong passphrase or tampering.
   `BackupScheduler` (hosted) writes one per day to `BackupDirectory` (`MirbadLLM:Backup:Directory`, atomic temp +
   move, prune to `Keep`, never creates the directory, records failures instead of throwing).
   `BackupDownloadTokens`: one-time, two-minute tokens for `GET /api/backup/download/{token}`;
@@ -504,10 +452,10 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   `RestoreJobService` (singleton, one job, in memory): upsert → `IApiKeyStore.ImportAsync` (merge by id/hash) →
   `HostServicesStore.ImportAsync` → per model, sequential `IHuggingFaceDownloader` downloads of missing folders →
   auto-start once all folders are present, retrying `ModelStartConflictException` and reporting
-  `ModelMemoryAdmissionException` (model left stopped). Cancel stops the download in flight. Since P1 a version-1
-  backup's models are placed on the bootstrap node, a version-2 backup keeps its placements, downloads run through the
-  model's node agent and auto-starts run sequentially per node (`PerNodeStartLanes`); the backup's nodes, master
-  identity and CA are never imported (fleet recovery is P2).
+  `ModelMemoryAdmissionException` (model left stopped). Cancel stops the download in flight. A version-1 backup's
+  models are placed on the bootstrap node, a version-2 backup keeps its placements, downloads run through the model's
+  node agent and auto-starts run sequentially per node (`PerNodeStartLanes`). A normal restore never imports the
+  backup's nodes, master identity or CA; fleet recovery in recovery mode does (`docs/multinode/operations-p2.md`).
 
 ## Backup destination (NAS share)
 
@@ -525,8 +473,8 @@ Since P1 the container, memory, metrics and endpoint contracts in this section r
   reload, `reset-failed` → `stat` the local directory and warn if it is not 1654:1654. Status reads
   `/proc/self/mountinfo` (the service namespace is a slave of the host's, so later host mounts show up) and the free
   space with a 3 s cap. File system and processes are behind `IBackupMountHost` / `IProcessRunner` for tests.
-- **Controller** (`Orchestration/Recovery/BackupDestination.cs`): `IBackupDestinationManager` over
-  `IHostAgentBackupMountClient` (`HostAgentClient`; since P1 `RemoteBackupMountClient`, through the DGX agent to hostd). Apply and disconnect authorize the signed-in portal session
+- **Master** (`Orchestration/Recovery/BackupDestination.cs`): `IBackupDestinationManager` over
+  `IHostAgentBackupMountClient` (`RemoteBackupMountClient`, through the agent on the master's machine to its hostd). Apply and disconnect authorize the signed-in portal session
   (`IAdminReauthenticator`) before anything reaches the agent; a test needs none. The share
   password goes to hostd and, after a successful apply, is kept Data-Protection-encrypted on the master
   (`BackupDestinationSecretStore`, `backup-destination.json`) only so passphrase backups can carry it in their encrypted
