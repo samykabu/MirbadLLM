@@ -317,7 +317,7 @@ components:
 
 **Creative North Star: "The Yard"**
 
-MirbadLLM is the yard where a fleet of models is gathered, placed and tended (*mirbad*, مِربد, is the Arabic enclosure where a herd is kept). The console is graphite and warm paper with one amber, like signal lights on a well-run yard. It keeps the structure that makes a fleet readable (a persistent rail and status strip, every model and node one place with its own tabs). Both themes are first-class; the brand is presented light and dark equally.
+MirbadLLM is the yard where a fleet of models is gathered, placed and tended (مربض is the Arabic word for the pen where a flock is kept). The console is graphite and warm paper with one amber, like signal lights on a well-run yard. It keeps the structure that makes a fleet readable (a persistent rail and status strip, every model and node one place with its own tabs). Both themes are first-class; the brand is presented light and dark equally.
 
 Colour carries meaning only. Amber is action, selection, focus and the leading data series; green is Ready; orange is Starting, Stopping and anything that needs the operator; red is Failed and destruction. Everything else is paper, graphite, steel and text. Type splits by job: Plus Jakarta Sans, the face of the wordmark, for the wordmark and headings; Inter for everything else a person reads or operates (prose, navigation, buttons, tabs, labels); Azeret Mono for what the machine measures (figures, identifiers, state readouts, logs, code).
 

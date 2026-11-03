@@ -1,11 +1,12 @@
 # Setup guide
 
-This guide installs MirbadLLM in one of three layouts. Pick the one that matches your hardware:
+This guide installs MirbadLLM in one of three layouts. Most fleets start with the first and grow with the second:
 
 - [Single machine](#single-machine): one Linux machine with an NVIDIA GPU runs the master and its own agent as two
-  containers. This is the layout of a DGX Spark.
-- [Add nodes](#add-nodes): more machines join the master as nodes. Linux PCs run vLLM in containers, Windows PCs and
-  Macs run llama.cpp as native processes, and Macs can also run MLX.
+  containers. It can be an old gaming tower, a GPU workstation or a DGX Spark.
+- [Add nodes](#add-nodes): this is where your spare machines join. A Windows gaming PC or gaming laptop with an
+  NVIDIA card runs llama.cpp as a native process, a Linux PC runs vLLM in containers, and an Apple Silicon Mac or
+  MacBook runs llama.cpp on Metal or MLX. Each one serves the models that fit its memory.
 - [Development fleet](#development-fleet): a master and two fake-runtime agents on one computer, for trying the UI or
   working on the code. No GPU or Docker is needed.
 

@@ -1,5 +1,9 @@
 # MirbadLLM documentation
 
+MirbadLLM gathers the machines you already own, from an old gaming PC to a laptop, a Mac or a DGX Spark, into one
+place that runs AI models and manages them. These guides cover installing it, adding machines, and running it day to
+day.
+
 Start with the [setup guide](setup.md) to install MirbadLLM, then read the [architecture](architecture.md) when you
 want to know how the parts fit together. The design documents further down record why the system is built the way it
 is; they are working documents written phase by phase, so they mention phases (P1 to P4), decision numbers (D-nnn)

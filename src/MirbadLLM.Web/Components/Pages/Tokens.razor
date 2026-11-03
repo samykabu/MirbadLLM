@@ -1,6 +1,7 @@
 @page "/access/tokens"
 @rendermode InteractiveServer
 @inject ITokenStore TokenStore
+@inject IJSRuntime JS
 
 <PageTitle>Tokens · Access · MirbadLLM</PageTitle>
 
@@ -11,50 +12,13 @@
     by name when you download, move or restore a model. Values are encrypted on the master and never shown again.
 </p>
 
-@if (_error is not null)
-{
-    <div class="callout callout--failed page-alert" role="alert" data-testid="tokens-error">
-        <Icon Name="state-failed" />
-        <div class="callout-body">@_error</div>
-    </div>
-}
-
-<div class="tokens-layout">
-<section class="panel panel-body tokens-form" aria-labelledby="token-form-title">
-    <h2 id="token-form-title" class="panel-label">@(_editing is null ? "Add a token" : $"Edit {_editing.Name}")</h2>
-    <EditForm Model="_form" OnValidSubmit="SaveAsync" data-testid="token-form" class="token-form">
-        <DataAnnotationsValidator />
-        <div class="field">
-            <label class="field-label" for="token-name">Name</label>
-            <InputText id="token-name" class="form-control" @bind-Value="_form.Name" data-testid="field-token-name"
-                       placeholder="e.g. hf-personal" autocomplete="off" aria-describedby="token-name-hint token-name-error" />
-            <span class="field-hint" id="token-name-hint">What you pick it by elsewhere, so name the account or the purpose.</span>
-            <div id="token-name-error"><ValidationMessage For="() => _form.Name" /></div>
-        </div>
-        <div class="field">
-            <label class="field-label" for="token-value">Token</label>
-            <input id="token-value" type="password" class="form-control" @bind="_form.Value" data-testid="field-token-value"
-                   placeholder="hf_…" autocomplete="off" spellcheck="false" aria-describedby="token-value-hint" />
-            <span class="field-hint" id="token-value-hint">
-                @(_editing is null ? "Pasted once; only its last four characters are shown after this." : "Leave empty to keep the current value.")
-            </span>
-        </div>
-        <div class="token-form-actions">
-            <button type="submit" class="btn btn-primary" data-testid="token-save"><Icon Name="lock" /> @(_editing is null ? "Save token" : "Save changes")</button>
-            @if (_editing is not null)
-            {
-                <button type="button" class="btn btn-outline-secondary" data-testid="token-cancel" @onclick="CancelEdit">Cancel</button>
-            }
-        </div>
-    </EditForm>
-</section>
-
 <section class="section" aria-labelledby="tokens-title">
     <div class="section-head">
         <h2 id="tokens-title">Tokens</h2>
         @if (_tokens.Count > 0)
         {
             <span class="section-note num">@_tokens.Count saved</span>
+            <button type="button" class="btn btn-sm btn-primary tokens-add" data-testid="add-token" @ref="_addButton" @onclick="OpenAdd"><Icon Name="lock" /> Add token</button>
         }
     </div>
     @if (_tokens.Count == 0)
@@ -63,6 +27,9 @@
             <ChildContent>
                 <p>Public repos download without one. Add a Hugging Face token here to download gated or private repos.</p>
             </ChildContent>
+            <Actions>
+                <button type="button" class="btn btn-sm btn-primary" data-testid="add-token" @ref="_addButton" @onclick="OpenAdd"><Icon Name="lock" /> Add token</button>
+            </Actions>
         </EmptyState>
     }
     else
@@ -102,7 +69,43 @@
         </div>
     }
 </section>
-</div>
+
+<dialog @ref="_dialog" class="ss-dialog token-dialog" aria-labelledby="token-form-title" data-testid="token-dialog"
+        data-open="@(_formOpen ? "true" : "false")" @oncancel="OnDialogCancel" @onclick="CloseForm">
+    @* A click inside never reaches the dialog element; one on the backdrop does, and closes it. *@
+    <div class="ss-dialog-inner" @onclick:stopPropagation="true">
+        <h2 id="token-form-title">@(_editing is null ? "Add a token" : $"Edit {_editing.Name}")</h2>
+        @if (_error is not null)
+        {
+            <div class="callout callout--failed" role="alert" data-testid="token-form-error">
+                <Icon Name="state-failed" />
+                <div class="callout-body">@_error</div>
+            </div>
+        }
+        <EditForm Model="_form" OnValidSubmit="SaveAsync" data-testid="token-form" class="token-form">
+            <DataAnnotationsValidator />
+            <div class="field">
+                <label class="field-label" for="token-name">Name</label>
+                <InputText id="token-name" class="form-control" @bind-Value="_form.Name" data-testid="field-token-name" autofocus
+                           placeholder="e.g. hf-personal" autocomplete="off" aria-describedby="token-name-hint token-name-error" />
+                <span class="field-hint" id="token-name-hint">What you pick it by elsewhere, so name the account or the purpose.</span>
+                <div id="token-name-error"><ValidationMessage For="() => _form.Name" /></div>
+            </div>
+            <div class="field">
+                <label class="field-label" for="token-value">Token</label>
+                <input id="token-value" type="password" class="form-control" @bind="_form.Value" data-testid="field-token-value"
+                       placeholder="hf_…" autocomplete="off" spellcheck="false" aria-describedby="token-value-hint" />
+                <span class="field-hint" id="token-value-hint">
+                    @(_editing is null ? "Pasted once; only its last four characters are shown after this." : "Leave empty to keep the current value.")
+                </span>
+            </div>
+            <div class="ss-dialog-actions">
+                <button type="button" class="btn btn-outline-secondary" data-testid="token-cancel" @onclick="CloseForm">Cancel</button>
+                <button type="submit" class="btn btn-primary" data-testid="token-save"><Icon Name="lock" /> @(_editing is null ? "Save token" : "Save changes")</button>
+            </div>
+        </EditForm>
+    </div>
+</dialog>
 
 <ConfirmDialog @bind-Open="_deleteOpen" Title="@($"Delete {_deleteTarget?.Name}?")" ConfirmLabel="Delete token" Destructive="true"
                OnConfirm="ConfirmDeleteAsync" TestId="delete-token-dialog" ConfirmTestId="@($"confirm-delete-token-{_deleteTarget?.Id}")">
@@ -114,12 +117,70 @@
     private readonly TokenForm _form = new();
     private SavedToken? _editing;
     private string? _error;
+    private bool _formOpen;
+    private bool _formShown;
+    private ElementReference _dialog;
+    private ElementReference _addButton;
     private bool _deleteOpen;
     private SavedToken? _deleteTarget;
+    private IJSObjectReference? _module;
 
     protected override async Task OnInitializedAsync() => await LoadAsync();
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_formOpen == _formShown)
+        {
+            return;
+        }
+
+        bool closing = _formShown;
+        _formShown = _formOpen;
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./interop.js");
+            await _module.InvokeVoidAsync(_formOpen ? "showDialog" : "closeDialog", _dialog);
+            if (closing)
+            {
+                await _addButton.FocusAsync(); // back to Add token; the Edit button may have moved after a rename
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            // Circuit gone; nothing to show.
+        }
+    }
+
     private async Task LoadAsync() => _tokens = (await TokenStore.ListAsync()).ToList();
+
+    private void OpenAdd() => OpenForm(null);
+
+    private void StartEdit(SavedToken token) => OpenForm(token);
+
+    private void OpenForm(SavedToken? token)
+    {
+        _editing = token;
+        _form.Name = token?.Name ?? "";
+        _form.Value = "";
+        _error = null;
+        _formOpen = true;
+    }
+
+    private void CloseForm()
+    {
+        _formOpen = false;
+        _editing = null;
+        _form.Name = "";
+        _form.Value = "";
+        _error = null;
+    }
+
+    // Esc: the browser closes the dialog itself; keep the state in step.
+    private void OnDialogCancel()
+    {
+        _formShown = true; // so the next render still returns focus to the button
+        CloseForm();
+    }
 
     private async Task SaveAsync()
     {
@@ -133,9 +194,11 @@
             else if (await TokenStore.UpdateAsync(_editing.Id, _form.Name, _form.Value) is null)
             {
                 _error = $"{_editing.Name} was deleted meanwhile.";
+                await LoadAsync();
+                return;
             }
 
-            CancelEdit();
+            CloseForm();
             await LoadAsync();
         }
         catch (ArgumentException ex)
@@ -146,21 +209,6 @@
         {
             _form.Value = ""; // never kept in the form or rendered back into it
         }
-    }
-
-    private void StartEdit(SavedToken token)
-    {
-        _editing = token;
-        _form.Name = token.Name;
-        _form.Value = "";
-        _error = null;
-    }
-
-    private void CancelEdit()
-    {
-        _editing = null;
-        _form.Name = "";
-        _form.Value = "";
     }
 
     private void AskDelete(SavedToken token)
@@ -177,11 +225,6 @@
         }
 
         await TokenStore.DeleteAsync(_deleteTarget.Id);
-        if (_editing?.Id == _deleteTarget.Id)
-        {
-            CancelEdit();
-        }
-
         await LoadAsync();
     }
 

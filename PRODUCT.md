@@ -8,16 +8,17 @@ web
 
 ## Users
 
-People who run LLMs on their own hardware: an NVIDIA DGX Spark, Linux or Windows PCs with NVIDIA GPUs, Apple
-Silicon Macs, and the few technical people they share those machines with. They know LLMs, vLLM, Docker and OpenAI-style APIs. They open the UI to put models on the box, start
+People who want to run LLMs on hardware they already own: an old gaming PC or gaming laptop with an NVIDIA card,
+an Apple Silicon Mac or MacBook, a Linux PC, sometimes a DGX Spark, and the few technical people they share those
+machines with. They know LLMs, vLLM, Docker and OpenAI-style APIs. They open the UI to put models on the box, start
 and stop them, check whether a model is up and how busy the machine is, try a model in a quick chat,
 and hand out API access. Other people, coding agents (Cline, Roo Code, Continue) and subagents never
 see the UI; they only call the `/v1` API.
 
 ## Product Purpose
 
-MirbadLLM serves local LLMs on a small fleet of machines behind a single OpenAI-compatible endpoint, and gives the operators a browser UI to
-manage and watch them. A typical master is a DGX Spark that also runs vLLM models in containers. Worker nodes run
+MirbadLLM reuses spare and older machines to serve small and medium local LLMs, puts them behind a single
+OpenAI-compatible endpoint, and gives the operators one browser UI to manage and watch all of them. A typical master is a DGX Spark that also runs vLLM models in containers. Worker nodes run
 vLLM in containers on Linux, or llama.cpp models as native processes on Windows and macOS; an Apple Silicon Mac also
 runs MLX models. The master's router sends each request to the node that serves the model. It exists because a
 single-slot server (Ollama at the time) made parallel agents queue behind each other. Success: models are easy to add and run, many clients are served at once, and the operator can
@@ -62,8 +63,8 @@ service.
   status and the primary action, tabular monospace numerals for measurements.
 - Craft bar (products it should sit alongside): Vercel / Linear, Grafana, Portainer / Proxmox.
 - Both light and dark themes are required.
-- Name and identity (2026-10-16, renamed 2026-11-01): the product is **MirbadLLM** (from *mirbad*, مِربد, the Arabic
-  enclosure where a herd is gathered and tended), with the graphite-and-amber brand: the isometric cube
+- Name and identity (2026-10-16, renamed 2026-11-01): the product is **MirbadLLM** (from مربض, the Arabic word for
+  the pen where a flock is gathered and looked after), with the graphite-and-amber brand: the isometric cube
   "M" mark, Plus Jakarta Sans for the wordmark and headings, Inter for the interface, Azeret Mono for measurements.
   It replaced an earlier working name that was too close to the unrelated Mesh LLM project and to several existing
   packages. The mark is always shown exactly as delivered (transparent, never filtered, recoloured or backed).
