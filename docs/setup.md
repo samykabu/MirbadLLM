@@ -10,7 +10,7 @@ This guide installs MirbadLLM in one of three layouts. Most fleets start with th
 - [Development fleet](#development-fleet): a master and two fake-runtime agents on one computer, for trying the UI or
   working on the code. No GPU or Docker is needed.
 
-![Deployment topologies](images/deployment.png)
+![Deployment topologies](images/deployment.svg)
 
 ## Ports
 

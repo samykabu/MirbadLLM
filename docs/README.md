@@ -56,10 +56,12 @@ Diagrams and screenshots live in [images/](images/):
 
 | Image | Shows |
 |---|---|
-| [images/architecture.png](images/architecture.png) | System architecture: clients, master, agents, runtimes |
-| [images/request-flow.png](images/request-flow.png) | A `/v1` request from the client to the runtime and back |
-| [images/deployment.png](images/deployment.png) | Single-machine and multi-node deployments |
-| [images/repo-structure.png](images/repo-structure.png) | The projects in `src/` and how they depend on each other |
+| [images/architecture.svg](images/architecture.svg) | System architecture: clients, master, agents, runtimes |
+| [images/request-flow.svg](images/request-flow.svg) | A `/v1` request from the client to the runtime and back |
+| [images/deployment.svg](images/deployment.svg) | Single-machine and multi-node deployments |
+| [images/repo-structure.svg](images/repo-structure.svg) | The projects in `src/` and how they depend on each other |
+| [images/host-services.svg](images/host-services.svg) | The Services page: master, node agents, Docker, `mirbadllm-hostd`, SCM and launchd |
+| [images/source/](images/source/) | The diagrams' HTML sources and how to export them |
 | [images/screenshots/](images/screenshots/) | UI screenshots from the development fleet |
 
 Each diagram also has an SVG version next to the PNG.
