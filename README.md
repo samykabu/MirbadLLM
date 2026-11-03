@@ -5,8 +5,8 @@
 <h1 align="center">MirbadLLM</h1>
 
 <p align="center">
-  Self-hosted control plane for local LLMs: one OpenAI-compatible endpoint in front of vLLM, llama.cpp and MLX
-  models running across your own machines.
+  Put your spare machines to work. MirbadLLM runs small and medium AI models on the old gaming PC, the laptop
+  and the Mac you already own, and manages all of them from one place behind one OpenAI-compatible endpoint.
 </p>
 
 <p align="center">
@@ -28,31 +28,67 @@
 
 ## What MirbadLLM is
 
-MirbadLLM runs the models you choose on the machines you own and puts all of them behind one OpenAI-compatible
-`/v1` endpoint. Your coding agents, chat clients and scripts keep one base URL and pick a model by name. A browser
-UI lets you add models, place them on a machine, start and stop them, watch throughput and memory, benchmark and
-tune them, and hand out API keys.
+Most homes and small offices own more compute than they use. There is the gaming PC that was replaced two upgrades
+ago, the laptop with an RTX card that now spends its days closed, the Apple Silicon Mac that sits idle every
+evening, and sometimes one serious GPU box. Each of them can run a useful language model. The trouble is that each
+one becomes its own small project: its own runtime, its own flags, its own port, and no single place that shows what
+is running where.
+
+MirbadLLM turns those machines into one service. You install a small agent on each machine, approve it from the
+browser, and decide which model runs where. Every model then sits behind one OpenAI-compatible `/v1` endpoint, so
+your coding agents, chat clients and scripts keep one base URL and pick a model by name. They never need to know
+which machine answered. The same browser UI downloads models, checks that a model fits in memory before it starts,
+watches throughput and memory, benchmarks and tunes models, hands out API keys and backs everything up.
 
 It has two parts. The **master** holds the model registry, API keys, the UI, the admin API and the router. A **node
 agent** runs on every machine that serves models. It starts each model with that machine's runtime, checks memory
 before a start, and reports GPU, memory and throughput telemetry. The master reaches every agent over mutual TLS and
 never touches a GPU or a model file itself.
 
-The name comes from *mirbad* (مِربد), the Arabic word for the enclosure where a herd is gathered and tended.
+The name comes from the Arabic word مربض, the pen where a flock is gathered, kept and looked after. MirbadLLM does
+the same for models scattered across your machines.
+
+### What your old machines can run
+
+The memory on the GPU, or the unified memory on a Mac, decides how large a model a machine can serve. As a rough
+guide for 4-bit GGUF models with a moderate context window:
+
+| Machine you may already have | Memory for the model | Comfortable model size |
+|---|---|---|
+| Gaming PC or gaming laptop with an 8 GB NVIDIA card (RTX 2070, 3060 Ti, 4060) | 8 GB | 7B to 8B |
+| Gaming PC with a 12 to 16 GB card (RTX 3060 12 GB, 4070, 4080) | 12 to 16 GB | up to about 14B |
+| Gaming PC with a 24 GB card (RTX 3090, 4090) | 24 GB | up to about 32B |
+| Apple Silicon MacBook or Mac with 16 GB | shared with macOS | 7B to 8B |
+| Apple Silicon Mac with 32 GB or more | shared with macOS | 14B to 32B |
+| A DGX Spark or a large GPU workstation | 128 GB unified, or several cards | large models on vLLM |
+
+These are rules of thumb, not guarantees. Context length, quantization and how many requests run at once all move
+them. You do not have to do the arithmetic yourself, though: the agent reads each GGUF header, estimates the memory a
+model needs, and refuses a start that would not fit, with the reason.
+
+Two limits to know today. A PC node needs an NVIDIA GPU, on Windows 11 (llama.cpp) or on Linux (vLLM in Docker), and a
+Mac node needs Apple Silicon. AMD GPUs and CPU-only machines are not supported yet.
 
 ### Why it exists
 
-The project started on an NVIDIA DGX Spark. The box has 128 GB of unified memory shared by CPU and GPU, and a
-single-slot model server made every parallel coding agent queue behind the others. vLLM fixed throughput, but it
-brought a new job: one container per model, flags to get right, memory to budget, and nothing to show what was
-running. MirbadLLM does that job, and it grew from one box to a small fleet of Linux, Windows and macOS machines.
+The project started on a single NVIDIA DGX Spark, where a single-slot model server made every parallel coding agent
+queue behind the others. vLLM fixed the throughput, but it brought a new job: one container per model, flags to get
+right, memory to budget, and nothing to show what was running.
 
-It is a control plane for a handful of machines. It is not a general cluster scheduler and not a hosted service.
+Once that job was done for one box, the next question was obvious. Why stop at one? The older gaming PC and the Mac
+in the next room could serve the smaller models, and the coding agents did not care which machine answered. That is
+the shape MirbadLLM has today: one place to manage every machine you are willing to lend to AI, whether it cost a lot
+or was about to be thrown out.
+
+It is a control plane for a handful of machines you own. It is not a general cluster scheduler, and it is not a
+hosted service.
 
 ### Who it is for
 
-- **Homelab and AI enthusiasts** with a DGX Spark, a GPU workstation or an Apple Silicon Mac who want their models
-  available to every tool in the house through one endpoint.
+- **Anyone with spare hardware**: an old gaming PC, a gaming laptop, a MacBook that is no longer the daily machine.
+  Instead of gathering dust, each one serves a model to every tool in the house.
+- **Homelab and AI enthusiasts** who already run models on more than one machine and are tired of managing each one
+  by hand.
 - **Small teams** that self-host an OpenAI-compatible API for coding agents (Cline, Roo Code, Continue and others)
   and need API keys, per-machine memory rules and a clear view of what is running.
 - **Platform and DevOps engineers** who want model lifecycle, placement, backups and agent updates handled the same
@@ -123,10 +159,11 @@ Open `http://127.0.0.1:5080/`. The script builds the solution, enrolls agent `dg
 `dev-b` (a PC with two fake 16 GiB GPUs), adds a fake model on each and sends chat requests through `/v1`. Stop it
 with `pwsh tools/dev-multinode/stop.ps1` or `tools/dev-multinode/stop.sh`.
 
-### Run it on a Linux GPU machine
+### Run the master and your first node
 
-This is the layout of a DGX Spark: the master and the machine's own agent as two containers. You need Docker Engine
-with the NVIDIA Container Toolkit, and a vLLM image the machine can run.
+Pick the machine that stays on: the master runs there, together with that machine's own agent, as two containers.
+Any Linux PC with an NVIDIA GPU works, from an old gaming tower to a DGX Spark. You need Docker Engine with the
+NVIDIA Container Toolkit, and a vLLM image the machine can run.
 
 ```bash
 git clone https://github.com/samykabu/MirbadLLM.git && cd MirbadLLM
@@ -143,6 +180,13 @@ docker compose -f deploy/compose.multinode.yaml --env-file deploy/.env up -d --b
 Open `http://<host>:8080/`, sign in, and add a model on **Models**. The compose file treats the machine as one
 unified memory pool, as on a DGX Spark. On a PC with discrete NVIDIA GPUs, join the PC as a node with the Linux agent
 installer instead, so admission works per GPU; the [setup guide](docs/setup.md) covers both.
+
+### Add your other machines
+
+On the master, open **Nodes > Add node** and copy the one-line command for Windows, Linux or macOS. Run it on the
+gaming PC, the laptop or the Mac. The command installs the agent as a service and enrolls it; you approve the machine
+in the browser after comparing its key fingerprint. From then on, its models appear on the same `/v1` endpoint as
+everything else.
 
 ### Call a model
 

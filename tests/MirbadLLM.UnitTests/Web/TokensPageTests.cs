@@ -10,7 +10,7 @@ using MirbadLLM.Web.Components.Pages;
 
 namespace MirbadLLM.UnitTests.Web;
 
-/// <summary>Access > Tokens: saving a token by name, never rendering its value, renaming, replacing and deleting it.</summary>
+/// <summary>Access > Tokens: saving a token by name from the Add/Edit dialog, never rendering its value, renaming, replacing and deleting it.</summary>
 public sealed class TokensPageTests : IDisposable
 {
     private const string Value = "hf_pageTokenSecret0123456789abcd";
@@ -49,6 +49,8 @@ public sealed class TokensPageTests : IDisposable
         var cut = ctx.Render<Tokens>();
         cut.WaitForElement("[data-testid=tokens-empty]", Wait);
 
+        cut.Find("[data-testid=add-token]").Click();
+        Assert.Equal("true", cut.Find("[data-testid=token-dialog]").GetAttribute("data-open"));
         cut.Find("[data-testid=field-token-name]").Change("hf-personal");
         cut.Find("[data-testid=field-token-value]").Change(Value);
         cut.Find("[data-testid=token-form]").Submit();
@@ -59,6 +61,7 @@ public sealed class TokensPageTests : IDisposable
         Assert.Contains("…abcd", row.TextContent, StringComparison.Ordinal);
         Assert.DoesNotContain(Value, cut.Markup, StringComparison.Ordinal);
         Assert.Equal("", cut.Find("[data-testid=field-token-value]").GetAttribute("value") ?? "");
+        Assert.Equal("false", cut.Find("[data-testid=token-dialog]").GetAttribute("data-open"));
     }
 
     [Fact]
@@ -68,11 +71,13 @@ public sealed class TokensPageTests : IDisposable
         using var ctx = Context();
         var cut = ctx.Render<Tokens>();
 
+        cut.WaitForElement("[data-testid=add-token]", Wait).Click();
         cut.Find("[data-testid=field-token-name]").Change("HF");
         cut.Find("[data-testid=field-token-value]").Change("hf_otherValue000000000000wxyz");
         cut.Find("[data-testid=token-form]").Submit();
 
-        Assert.Contains("already exists", cut.WaitForElement("[data-testid=tokens-error]", Wait).TextContent, StringComparison.Ordinal);
+        Assert.Contains("already exists", cut.WaitForElement("[data-testid=token-form-error]", Wait).TextContent, StringComparison.Ordinal);
+        Assert.Equal("true", cut.Find("[data-testid=token-dialog]").GetAttribute("data-open")); // stays open to fix the name
         Assert.Single(await _store.ListAsync(Ct));
     }
 
@@ -84,6 +89,7 @@ public sealed class TokensPageTests : IDisposable
         var cut = ctx.Render<Tokens>();
 
         cut.WaitForElement($"[data-testid=edit-token-{saved.Id}]", Wait).Click();
+        Assert.Equal("hf", cut.Find("[data-testid=field-token-name]").GetAttribute("value"));
         cut.Find("[data-testid=field-token-name]").Change("hf-work");
         cut.Find("[data-testid=token-form]").Submit();
 
