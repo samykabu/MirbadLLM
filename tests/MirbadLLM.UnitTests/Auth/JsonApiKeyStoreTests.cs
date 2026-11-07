@@ -279,6 +279,28 @@ public sealed class JsonApiKeyStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task McpScopes_AreIsolated_AndEverConfiguredSurvivesDeletionAndReload()
+    {
+        var store = CreateStore();
+        var read = await store.CreateAsync("reader", ApiKeyScope.McpRead);
+        var op = await store.CreateAsync("operator", ApiKeyScope.McpOperator);
+
+        Assert.True(await store.HasAnyKeyAsync(ApiKeyScope.McpRead));
+        Assert.True(await store.HasAnyKeyAsync(ApiKeyScope.McpOperator));
+        Assert.False(await store.HasAnyKeyAsync(ApiKeyScope.Inference));
+        Assert.False(await store.HasAnyKeyAsync(ApiKeyScope.Metrics));
+        Assert.Equal(ApiKeyScope.McpRead, (await store.FindByPresentedKeyAsync(read.FullKey))!.Scope);
+        Assert.Equal(ApiKeyScope.McpOperator, (await store.FindByPresentedKeyAsync(op.FullKey))!.Scope);
+
+        await store.RevokeAsync(read.Record.Id);
+        await store.DeleteAsync(read.Record.Id);
+        var reloaded = CreateStore();
+        Assert.True(await reloaded.HasAnyKeyAsync(ApiKeyScope.McpRead));
+        Assert.True(await reloaded.HasAnyKeyAsync(ApiKeyScope.McpOperator));
+        Assert.False(await reloaded.HasAnyKeyAsync(ApiKeyScope.Inference));
+    }
+
+    [Fact]
     public async Task LegacyBareArrayFile_MigratesToFlaggedFormat_PreservingTheGate()
     {
         Directory.CreateDirectory(_dataDir);

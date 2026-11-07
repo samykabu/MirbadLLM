@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using MirbadLLM.Core;
 using MirbadLLM.Orchestration;
+using MirbadLLM.Web.Mcp;
+using ModelContextProtocol.AspNetCore;
 using MirbadLLM.Orchestration.Audit;
 using MirbadLLM.Orchestration.Fencing;
 using MirbadLLM.Orchestration.Multinode;
@@ -106,6 +108,7 @@ builder.Services.AddDataProtection()
     .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(dataPath, "dataprotection-keys")));
 
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddScheme<AuthenticationSchemeOptions, McpApiKeyAuthenticationHandler>(McpApiKeyAuthenticationHandler.AuthenticationScheme, _ => { })
     .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options =>
     {
         options.LoginPath = "/login";
@@ -143,6 +146,11 @@ builder.Services.AddCascadingAuthenticationState();
 // while builder.Configuration is still being built up here.
 builder.Services.AddSingleton<IAuthorizationHandler, AdminLoginRequirementHandler>();
 builder.Services.AddAuthorizationBuilder()
+    .AddPolicy(McpApiKeyAuthenticationHandler.Policy, policy =>
+    {
+        policy.AddAuthenticationSchemes(McpApiKeyAuthenticationHandler.AuthenticationScheme);
+        policy.RequireAuthenticatedUser();
+    })
     .SetFallbackPolicy(new AuthorizationPolicyBuilder().AddRequirements(new AdminLoginRequirement()).Build());
 
 builder.Services.AddRateLimiter(options =>
@@ -158,6 +166,13 @@ builder.Services.AddRateLimiter(options =>
     };
     // 5 attempts/minute per client IP, shared with the Services page's admin re-authentication (AdminPasswordGuard).
     options.AddAdminPasswordPolicy(LoginRateLimiterPolicy);
+    options.AddFixedWindowLimiter("mcp", limiter =>
+    {
+        limiter.PermitLimit = 120;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+        limiter.AutoReplenishment = true;
+    });
 });
 
 // Enums as their names in the admin API, non-finite doubles as null (ApiJson).
@@ -173,6 +188,10 @@ builder.Services.AddRazorComponents()
 // One shared 5 s refresh per circuit for the status bar and the live pages (see LiveDataService).
 builder.Services.AddScoped<LiveDataService>();
 builder.Services.AddSingleton<ModelStartService>();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddMcpServer()
+    .WithHttpTransport(options => options.SessionMode = HttpServerSessionMode.Stateless)
+    .WithTools<MirbadMcpTools>();
 // The release notes this build carries (docs/multinode/agent-updates.md U1): What's new, Releases, agent updates.
 builder.Services.AddSingleton(_ => ReleaseNotes.Load(Path.Combine(AppContext.BaseDirectory, ReleaseNotes.FileName)));
 
@@ -242,6 +261,10 @@ app.MapAuditApi();
 app.MapReleaseNotes();
 app.MapMirbadLLMRouter();
 app.MapMirbadLLMMetrics();
+app.MapMcp("/mcp")
+    .RequireAuthorization(McpApiKeyAuthenticationHandler.Policy)
+    .RequireRateLimiting("mcp")
+    .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(256 * 1024));
 app.MapEnrollEndpoint();
 
 // A distinct path from the "/login" GET page (mapped by MapRazorComponents, above): Blazor's own enhanced-

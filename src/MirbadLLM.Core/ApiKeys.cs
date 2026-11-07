@@ -8,6 +8,12 @@ public enum ApiKeyScope
 
     /// <summary>Grants <c>/metrics</c> only.</summary>
     Metrics,
+
+    /// <summary>Grants read-only MirbadLLM MCP tools at <c>/mcp</c>.</summary>
+    McpRead,
+
+    /// <summary>Grants all MirbadLLM MCP tools at <c>/mcp</c>.</summary>
+    McpOperator,
 }
 
 /// <summary>

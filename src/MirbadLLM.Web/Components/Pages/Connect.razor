@@ -198,6 +198,21 @@
     <p class="visually-hidden" role="status">@(_copied is null ? "" : "Copied to the clipboard")</p>
 </section>
 
+<section class="panel panel-body" aria-labelledby="mcp-connect-title" data-testid="mcp-connect">
+    <h2 id="mcp-connect-title" class="panel-label">Remote MCP</h2>
+    <p>Endpoint: <code>@_mcpUrl</code>. Create an <strong>MCP Read</strong> or <strong>MCP Operator</strong> key on <a href="access/keys">API keys</a>. Never put it in a URL or commit it.</p>
+    <h3>Codex</h3>
+    <pre tabindex="0">[mcp_servers.mirbad]
+url = "@_mcpUrl"
+bearer_token_env_var = "MIRBAD_MCP_KEY"</pre>
+    <h3>Claude Code</h3>
+    <pre tabindex="0">claude mcp add --transport http mirbad @_mcpUrl --header "Authorization: Bearer $MIRBAD_MCP_KEY"</pre>
+    <p class="field-hint">Expand the environment variable in your shell; do not paste a key into checked-in configuration.</p>
+    <h3>Claude Desktop</h3>
+    <p>Use <strong>Settings → Connectors</strong> to add the remote URL and enter the bearer credential in the connector UI when supported. Current Desktop local JSON configuration does not provide a documented, safe environment-variable bearer-header form, so no direct JSON form is shown.</p>
+    <p class="callout callout--warning">Plain LAN HTTP exposes bearer keys and MCP operations to network interception. Keep it on a trusted LAN; for wider access, terminate TLS at an authenticated reverse proxy and use the HTTPS <code>/mcp</code> URL.</p>
+</section>
+
 </div></div>
 
 @code {
@@ -206,6 +221,7 @@
 
     private string _baseUrl = "/v1";
     private string _metricsUrl = "/metrics";
+    private string _mcpUrl = "/mcp";
     private bool _apiKeyConfigured;
     private int? _activeKeyCount;
     private IReadOnlyDictionary<string, string> _colors = new Dictionary<string, string>();
@@ -222,6 +238,7 @@
             : new Uri(Nav.BaseUri).GetLeftPart(UriPartial.Authority);
         _baseUrl = $"{origin}/v1";
         _metricsUrl = $"{origin}/metrics";
+        _mcpUrl = $"{origin}/mcp";
 
         // Resolved via the service provider (not @inject) so this page keeps working in tests/hosts that
         // don't register IApiKeyStore/IOptions<AuthOptions> — it then falls back to the legacy ApiKey option.

@@ -9,8 +9,8 @@
 <AccessHeader Current="AccessPage.Keys" KeyCount="@_keys.Count(k => k.IsActive)" />
 
 <p class="keys-intro" data-testid="keys-intro">
-    Inference keys call the models on <code>/v1</code>; metrics keys only read <code>/metrics</code> for Prometheus.
-    A key is shown once, when it is created, so copy it straight into the client.
+    Inference keys call models on <code>/v1</code>; metrics keys read <code>/metrics</code>. MCP Read and MCP Operator keys authenticate remote clients at <code>/mcp</code>.
+    MCP Read cannot mutate state. A key is shown once, so copy it straight into the client.
 </p>
 
 @if (_error is not null)
@@ -124,9 +124,11 @@
                         <InputRadioGroup @bind-Value="_newKey.Scope">
                             <label class="segmented-option"><InputRadio Value="ApiKeyScope.Inference" data-testid="key-scope-inference" /><span>Inference</span></label>
                             <label class="segmented-option"><InputRadio Value="ApiKeyScope.Metrics" data-testid="key-scope-metrics" /><span>Metrics</span></label>
+                            <label class="segmented-option"><InputRadio Value="ApiKeyScope.McpRead" data-testid="key-scope-mcp-read" /><span>MCP Read</span></label>
+                            <label class="segmented-option"><InputRadio Value="ApiKeyScope.McpOperator" data-testid="key-scope-mcp-operator" /><span>MCP Operator</span></label>
                         </InputRadioGroup>
                     </div>
-                    <span class="field-hint" id="key-scope-hint">Inference keys call the models; metrics keys only read Prometheus metrics.</span>
+                    <span class="field-hint" id="key-scope-hint">MCP Read lists fleet state; MCP Operator also deploys, starts, stops, deletes, benchmarks and tunes through /mcp.</span>
                 </div>
                 <div class="ss-dialog-actions">
                     <button type="button" class="btn btn-outline-secondary" data-testid="add-key-cancel" @onclick="CloseAddAsync">Cancel</button>
@@ -160,7 +162,7 @@
                OnConfirm="ConfirmRevokeAsync" TestId="revoke-dialog" ConfirmTestId="@($"confirm-revoke-{_revokeTarget?.Id}")">
     <p>
         Clients using <code class="num">ssk_@(_revokeTarget?.Prefix)&hellip;</code> start getting <strong>401 Unauthorized</strong> on
-        @(_revokeTarget?.Scope == ApiKeyScope.Metrics ? "/metrics" : "/v1") immediately. This can't be undone; create a new key to restore access.
+        @EndpointFor(_revokeTarget?.Scope) immediately. This can't be undone; create a new key to restore access.
     </p>
 </ConfirmDialog>
 
@@ -320,6 +322,13 @@
             _copied = await (await ModuleAsync()).InvokeAsync<bool>("copyText", _createdKey);
         }
     }
+
+    private static string EndpointFor(ApiKeyScope? scope) => scope switch
+    {
+        ApiKeyScope.Metrics => "/metrics",
+        ApiKeyScope.McpRead or ApiKeyScope.McpOperator => "/mcp",
+        _ => "/v1",
+    };
 
     private sealed class NewKeyModel
     {

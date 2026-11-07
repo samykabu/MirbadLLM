@@ -94,6 +94,21 @@ public sealed class ApiKeysPageTests
     }
 
     [Fact]
+    public async Task ScopeSegments_CreateMcpOperatorKey_AndDescribeMcpEndpoint()
+    {
+        var store = new FakeApiKeyStore();
+        using var ctx = MakeContext(store);
+        var cut = ctx.Render<ApiKeys>();
+        cut.Find("[data-testid=add-key]").Click();
+        cut.Find("[data-testid=field-key-name]").Change("automation");
+        cut.Find("[data-testid=key-scope-mcp-operator]").Change("McpOperator");
+        cut.Find("[data-testid=create-key-form]").Submit();
+
+        Assert.Equal(ApiKeyScope.McpOperator, Assert.Single(await store.ListAsync(Xunit.TestContext.Current.CancellationToken)).Scope);
+        Assert.Contains("/mcp", cut.Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RevokeConfirmButton_RevokesTheKey_WithoutWindowConfirm()
     {
         var store = new FakeApiKeyStore();

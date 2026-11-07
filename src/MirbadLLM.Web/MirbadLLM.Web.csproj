@@ -3,6 +3,9 @@
     <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\MirbadLLM.Core\MirbadLLM.Core.csproj" />
     <ProjectReference Include="..\MirbadLLM.Agent.Contracts\MirbadLLM.Agent.Contracts.csproj" />
     <ProjectReference Include="..\MirbadLLM.Pki\MirbadLLM.Pki.csproj" />

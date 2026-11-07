@@ -5,6 +5,7 @@
     <PackageVersion Include="xunit.v3" Version="4.0.1" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
     <PackageVersion Include="bunit" Version="2.11.3" />
+    <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.4.0" />
   </ItemGroup>
   <ItemGroup>
     <!-- Owner decision O1 (design D107, MN-202): approved for the Windows service host. Version entry only; the Windows

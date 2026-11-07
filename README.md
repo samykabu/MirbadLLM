@@ -119,7 +119,7 @@ hosted service.
 - **Benchmark and tune.** Workload presets (interactive chat, agents and tools, throughput, long documents,
   embeddings) measure a running model. The tuner searches vLLM settings phase by phase and re-measures the leaders
   before it names a winner; nothing changes until you choose **Apply**.
-- **Access control.** An admin login for the UI and the admin API, API keys for `/v1` and `/metrics`, and a Connect
+- **Access control.** An admin login for the UI and the admin API, isolated API-key scopes for `/v1`, `/metrics`, and the protected stateless Streamable HTTP MCP endpoint at `/mcp`, and a Connect
   page with ready-to-paste settings for common clients, including a VS Code configuration export.
 - **Back up and restore everything.** Model definitions, running models, node settings, managed host services,
   history, API keys and saved tokens (encrypted with your passphrase), on a schedule to a local folder or an SMB or
@@ -230,6 +230,18 @@ Joining a machine takes one command. On the master, **Nodes > Add node** creates
 Windows or macOS. The command downloads the agent bundle from the master, checks its SHA-256, installs the agent as a
 service and enrolls it. You then approve the node after comparing the key fingerprint it printed. The master dials
 agents on TCP 9443, and agents reach the master's enroll listener on TCP 8443. Keep both on the LAN.
+
+## Remote MCP
+
+Create an **MCP Read** or **MCP Operator** key under **Access → API keys**, then use `http://<host>:8080/mcp`. MCP keys are intentionally isolated: inference, metrics, and admin-cookie credentials cannot authenticate this endpoint. Read keys cannot invoke mutations.
+
+```toml
+[mcp_servers.mirbad]
+url = "http://HOST:8080/mcp"
+bearer_token_env_var = "MIRBAD_MCP_KEY"
+```
+
+Claude Code: `claude mcp add --transport http mirbad http://HOST:8080/mcp --header "Authorization: Bearer $MIRBAD_MCP_KEY"`. Claude Desktop users should use **Settings → Connectors**; no undocumented JSON bearer-header form is recommended. Plain HTTP is suitable only on a trusted LAN. Put a TLS reverse proxy in front and use an HTTPS URL for wider access. Never place keys in URLs or source control.
 
 ## Configuration
 

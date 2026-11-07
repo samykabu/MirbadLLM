@@ -1,5 +1,7 @@
 # Setup guide
 
+> MirbadLLM's HTTP endpoints, including `/mcp`, are intended for a trusted LAN. Use a TLS reverse proxy and network access controls before exposing them more widely; bearer keys must never travel over untrusted plain HTTP.
+
 This guide installs MirbadLLM in one of three layouts. Most fleets start with the first and grow with the second:
 
 - [Single machine](#single-machine): one Linux machine with an NVIDIA GPU runs the master and its own agent as two

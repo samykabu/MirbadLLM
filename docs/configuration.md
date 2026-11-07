@@ -19,7 +19,7 @@ Copy `deploy/.env.example` to `deploy/.env` and adjust it. The compose files rea
 | Variable | Default | What it does |
 |---|---|---|
 | `DOCKER_GID` | none, required | Group id of `/var/run/docker.sock` (`stat -c %g /var/run/docker.sock`); the agent container joins this group to start model containers |
-| `MIRBADLLM_PORT` | `8080` | Host port of the UI, `/api`, `/v1`, `/metrics` and `/healthz` |
+| `MIRBADLLM_PORT` | `8080` | Host port of the UI, `/api`, `/v1`, `/metrics`, `/mcp` and `/healthz` |
 | `MIRBADLLM_ENROLL_PORT` | `8443` | Host port of the enroll listener that joining nodes use (multi-node compose file) |
 | `MIRBADLLM_DATA` | `/srv/mirbadllm/data` | Master state: the registry, API keys, nodes, the CA, history. Owned by uid 1654 |
 | `MIRBADLLM_MODELS` | `/srv/mirbadllm/models` | Checkpoints root, mounted at `/models` in the agent and the model containers |
@@ -54,6 +54,14 @@ property.
 | `MirbadLLM:Backup:IncludeCa` | `true` | Put the master's CA into the encrypted section of a backup |
 | `MirbadLLM:NodeApi:EnrollUrl` | the browser's host on port 8443 | Enroll listener URL written into join commands; set it when nodes reach the master by another name or port |
 | `MirbadLLM:NodeApi:AgentBundleUrl` | the address the browser used | Base URL that join commands download agent bundles from |
+
+## MCP clients
+
+The master exposes a stateless Streamable HTTP endpoint at `/mcp`. It has no environment-variable key setting: create revocable **MCP Read** or **MCP Operator** keys in **Access → API keys**. Inference, metrics, and browser credentials do not authenticate MCP. Requests are limited to 256 KiB and 120 per minute per server instance; tool pagination is capped at 100 items.
+
+Use `bearer_token_env_var = "MIRBAD_MCP_KEY"` in Codex rather than static headers. For Claude Code, pass `--transport http` and an `Authorization: Bearer $MIRBAD_MCP_KEY` header expanded by the shell. Claude Desktop users should configure a supported remote connector in its UI; do not invent or persist an undocumented JSON header. Never put credentials in query strings.
+
+MirbadLLM serves plain HTTP for trusted LAN deployment. Bearer credentials are visible to anyone able to intercept that traffic. For access beyond a trusted LAN, terminate TLS at a reverse proxy, restrict source networks, and configure clients with the resulting HTTPS `/mcp` URL.
 
 ## Node agent settings
 

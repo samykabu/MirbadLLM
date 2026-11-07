@@ -15,12 +15,10 @@ namespace MirbadLLM.Orchestration;
 /// in an in-memory cache after the first load — required so <see cref="ApiKeyRecord.LastUsedAt"/> can be
 /// updated on every hit without a disk write on every hit (writes are throttled to once a minute).
 ///
-/// The file is an object, not a bare array: <c>{ "inferenceKeyEverCreated": bool, "metricsKeyEverCreated":
-/// bool, "keys": [...] }</c>. The two flags back <see cref="HasAnyKeyAsync"/> — they are set once, on the
-/// first key of that scope ever created, and never cleared, so deleting every key of a scope (see
-/// <see cref="DeleteAsync"/>) cannot silently reopen its gate. A pre-existing file written as a bare array
-/// (the old format) is migrated on first load: the flags are derived from whatever scopes are present, and
-/// the file is rewritten in the new format on the next flush.
+/// The file is an object with an <c>everConfiguredScopes</c> set and the original inference/metrics booleans.
+/// The generalized set backs <see cref="HasAnyKeyAsync"/> for every scope and is never cleared, so deleting
+/// every key of a scope (see <see cref="DeleteAsync"/>) cannot silently reopen its gate. The original fields
+/// remain for downgrade compatibility. A pre-existing bare array or two-boolean object is migrated on load.
 /// </summary>
 public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
 {
@@ -39,8 +37,7 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     private List<ApiKeyRecord> _keys = [];
-    private bool _inferenceKeyEverCreated;
-    private bool _metricsKeyEverCreated;
+    private readonly HashSet<ApiKeyScope> _everConfiguredScopes = [];
     private bool _initialized;
     private DateTimeOffset _lastFlushedAt;
 
@@ -90,14 +87,7 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
         {
             await EnsureInitializedAsync(ct).ConfigureAwait(false);
             _keys.Add(record);
-            if (scope == ApiKeyScope.Inference)
-            {
-                _inferenceKeyEverCreated = true;
-            }
-            else
-            {
-                _metricsKeyEverCreated = true;
-            }
+            _everConfiguredScopes.Add(scope);
 
             await FlushUnlockedAsync(ct).ConfigureAwait(false);
         }
@@ -180,7 +170,7 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
         try
         {
             await EnsureInitializedAsync(ct).ConfigureAwait(false);
-            return scope == ApiKeyScope.Inference ? _inferenceKeyEverCreated : _metricsKeyEverCreated;
+            return _everConfiguredScopes.Contains(scope);
         }
         finally
         {
@@ -265,14 +255,7 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
 
                 _keys.Add(record with { KeyHash = record.KeyHash.ToLowerInvariant() });
                 added++;
-                if (record.Scope == ApiKeyScope.Inference)
-                {
-                    _inferenceKeyEverCreated = true;
-                }
-                else
-                {
-                    _metricsKeyEverCreated = true;
-                }
+                _everConfiguredScopes.Add(record.Scope);
             }
 
             if (added > 0)
@@ -314,15 +297,24 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
                 // Legacy format: a bare array of records. Derive the "ever created" flags from what is
                 // present (a revoked-only file still counts — the key existed) and migrate on next flush.
                 _keys = JsonSerializer.Deserialize<List<ApiKeyRecord>>(raw, JsonOptions) ?? [];
-                _inferenceKeyEverCreated = _keys.Exists(k => k.Scope == ApiKeyScope.Inference);
-                _metricsKeyEverCreated = _keys.Exists(k => k.Scope == ApiKeyScope.Metrics);
+                _everConfiguredScopes.UnionWith(_keys.Select(k => k.Scope));
                 needsMigrationFlush = true;
             }
             else if (node is JsonObject obj)
             {
-                _inferenceKeyEverCreated = obj["InferenceKeyEverCreated"]?.GetValue<bool>() ?? false;
-                _metricsKeyEverCreated = obj["MetricsKeyEverCreated"]?.GetValue<bool>() ?? false;
                 _keys = obj["Keys"]?.Deserialize<List<ApiKeyRecord>>(JsonOptions) ?? [];
+                var configured = obj["EverConfiguredScopes"]?.Deserialize<List<ApiKeyScope>>(JsonOptions) ?? [];
+                _everConfiguredScopes.UnionWith(configured);
+                if (obj["InferenceKeyEverCreated"]?.GetValue<bool>() == true)
+                {
+                    _everConfiguredScopes.Add(ApiKeyScope.Inference);
+                }
+                if (obj["MetricsKeyEverCreated"]?.GetValue<bool>() == true)
+                {
+                    _everConfiguredScopes.Add(ApiKeyScope.Metrics);
+                }
+                // A partially migrated document remains fail-closed for every scope represented by a record.
+                _everConfiguredScopes.UnionWith(_keys.Select(k => k.Scope));
             }
             else
             {
@@ -348,8 +340,10 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
     {
         var payload = new StoredFile
         {
-            InferenceKeyEverCreated = _inferenceKeyEverCreated,
-            MetricsKeyEverCreated = _metricsKeyEverCreated,
+            // Keep the original fields so older MirbadLLM versions can still read their two scopes.
+            InferenceKeyEverCreated = _everConfiguredScopes.Contains(ApiKeyScope.Inference),
+            MetricsKeyEverCreated = _everConfiguredScopes.Contains(ApiKeyScope.Metrics),
+            EverConfiguredScopes = _everConfiguredScopes.OrderBy(scope => scope).ToList(),
             Keys = _keys,
         };
 
@@ -396,6 +390,8 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
         public bool InferenceKeyEverCreated { get; set; }
 
         public bool MetricsKeyEverCreated { get; set; }
+
+        public List<ApiKeyScope> EverConfiguredScopes { get; set; } = [];
 
         public List<ApiKeyRecord> Keys { get; set; } = [];
     }
