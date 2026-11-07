@@ -177,6 +177,10 @@ else
                     {
                         <p data-testid="mlx-checkpoint-hint">mlx_lm.server serves an MLX checkpoint folder under the node's models root: a <code>config.json</code> with <code>*.safetensors</code> and the tokenizer, e.g. a download of <code>mlx-community/Qwen3-0.6B-4bit</code>.</p>
                     }
+                    else if (IsSharedContainer)
+                    {
+                        <p>@LlamaCppEditing.RuntimeName(_runtime) uses a checkpoint folder under the node's models root.</p>
+                    }
                     else
                     {
                         <p>vLLM serves a checkpoint folder under the @(_multiNode ? "node's " : "")models root, mounted at <code>/models</code> in every container.</p>
@@ -690,6 +694,22 @@ else
                 {
                     @mlx
                 }
+            }
+            else if (IsSharedContainer)
+            {
+                <section class="panel form-section" aria-labelledby="sec-container-runtime" data-wizard-step="@WizardAttr(WizardStep.Memory)" hidden="@StepHidden(WizardStep.Memory)" data-testid="container-runtime-settings">
+                    <div class="form-section-intro">
+                        <h2 id="sec-container-runtime">@LlamaCppEditing.RuntimeName(_runtime) container</h2>
+                        <p>Use an explicit image. MirbadLLM owns the model path, served name, host and port; extra arguments are appended last.</p>
+                    </div>
+                    <div class="field-grid">
+                        <div class="field"><FieldHelp Label="Memory budget (GiB)" For="field-memory-budget" Help="@ModelFieldHelp.MemoryBudgetGiB" /><InputNumber class="form-control num" id="field-memory-budget" @bind-Value="_model.MemoryBudgetGiB" /></div>
+                        <div class="field field--wide"><label class="field-label" for="field-image">Image</label><InputText class="form-control num" id="field-image" data-testid="field-image" @bind-Value="_model.Image" /></div>
+                        <div class="field field--wide"><label class="field-label" for="field-image-digest">Image digest</label><InputText class="form-control num" id="field-image-digest" data-testid="field-image-digest" @bind-Value="_model.ImageDigest" placeholder="@(_runtime == RuntimeKind.Nim ? "sha256:… (required)" : "sha256:…")" /></div>
+                        <div class="field field--wide"><label class="field-label" for="field-extra-args">Extra args (one per line)</label><InputTextArea class="form-control num" id="field-extra-args" data-testid="field-extra-args" rows="4" @bind-Value="_model.ExtraArgsText" /></div>
+                        <div class="field field--wide"><label class="form-check"><InputCheckbox class="form-check-input" @bind-Value="_model.AutoStart" /><span>Start automatically</span></label></div>
+                    </div>
+                </section>
             }
             else
             {
@@ -1628,6 +1648,14 @@ else
             {
                 _runtime = RuntimeKind.Mlx;
                 _mlx = MlxForm.From(existing.Mlx ?? new MlxSettings { ModelFolder = existing.ModelPath });
+                _budgetTouched = true;
+            }
+            else if (existing.Runtime is RuntimeKind.Sglang or RuntimeKind.Nim)
+            {
+                _runtime = existing.Runtime;
+                _model.Image = existing.Container?.Image ?? "";
+                _model.ImageDigest = existing.Container?.ImageDigest ?? "";
+                _model.ExtraArgsText = string.Join(Environment.NewLine, existing.Container?.ExtraArgs ?? []);
                 _budgetTouched = true;
             }
 
@@ -2933,10 +2961,33 @@ else
 
     private bool IsLlamaCpp => _runtime == RuntimeKind.LlamaCpp;
 
+    private bool IsSharedContainer => _runtime is RuntimeKind.Sglang or RuntimeKind.Nim;
+
     /// <summary>The model the form describes: the vLLM fields on <paramref name="baseline"/>, plus the llama.cpp settings for a llama.cpp model.</summary>
     private ModelDefinition Draft(string id, ModelDefinition? baseline)
     {
         var definition = _model.ToDefinition(id, baseline);
+        if (IsSharedContainer)
+        {
+            return definition with
+            {
+                Runtime = _runtime,
+                Container = new ContainerRuntimeSettings
+                {
+                    Image = (_model.Image ?? "").Trim(),
+                    ImageDigest = string.IsNullOrWhiteSpace(_model.ImageDigest) ? null : _model.ImageDigest.Trim(),
+                    ExtraArgs = _model.ExtraArgsText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                },
+                LlamaCpp = null,
+                Mlx = null,
+                Image = null,
+                ImageDigest = null,
+                ExtraArgs = [],
+                ToolCallParser = null,
+                ReasoningParser = null,
+            };
+        }
+
         if (IsMlx)
         {
             // mlx_lm.server reads none of the vLLM fields: no parsers and no vLLM extra args are stored for it.
@@ -3023,8 +3074,8 @@ else
         // The vLLM parsers mean nothing to llama-server (its template decides): a new llama.cpp model stores none; back on
         // vLLM the editor's defaults return.
         var defaults = new ModelDefinition { Id = "x", ServedName = "x", ModelPath = "x" };
-        _model.ToolCallParser = IsLlamaCpp || IsMlx ? null : defaults.ToolCallParser;
-        _model.ReasoningParser = IsLlamaCpp || IsMlx ? null : defaults.ReasoningParser;
+        _model.ToolCallParser = IsLlamaCpp || IsMlx || IsSharedContainer ? null : defaults.ToolCallParser;
+        _model.ReasoningParser = IsLlamaCpp || IsMlx || IsSharedContainer ? null : defaults.ReasoningParser;
         _selectedFolder = "";
         _inspection = null;
         _suggestionFormula = null;

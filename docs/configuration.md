@@ -67,7 +67,9 @@ Each agent reads its own `agent.json` (section `Agent`), written by the installe
 
 In the agent container, environment variables with the prefix `MIRBADLLM_AGENT_` override `agent.json`, for example
 `MIRBADLLM_AGENT_Agent__MemoryReserveGiB=8`. The operator guides explain the node settings that the master manages
-from the node's page, such as the memory reserve and approved images.
+from the node's page, such as the memory reserve and approved images. `Agent:EnableNim=true` opts a Linux/DGX agent
+into NIM capability reporting only when `ApprovedImages` also contains at least one pinned repository digest; NIM
+launches always require an explicit model image and matching approved digest.
 
 ## Development settings
 

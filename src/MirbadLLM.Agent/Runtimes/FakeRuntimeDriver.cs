@@ -217,6 +217,7 @@ internal sealed partial class FakeRuntimeDriver : IRuntimeDriver, IAsyncDisposab
         return Task.FromResult<LaunchConfig?>(new LaunchConfig
         {
             Kind = LaunchDelivery.Container,
+            Runtime = instance.Plan.Runtime,
             Image = instance.Plan.Image,
             ImageDigest = instance.Labels.GetValueOrDefault(ContainerLaunchValidator.ImageDigestLabel),
             Argv = instance.Plan.Cmd,

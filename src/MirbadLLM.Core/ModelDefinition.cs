@@ -135,6 +135,10 @@ public sealed record ModelDefinition
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MlxSettings? Mlx { get; init; }
 
+    /// <summary>Shared settings for SGLang and NIM container runtimes. Null for all existing runtime kinds.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ContainerRuntimeSettings? Container { get; init; }
+
     /// <summary>
     /// Host RAM this model needs besides its GPU budget on discrete nodes (design §5.1, §6.1). Null = the runtime's
     /// default estimate. Unified nodes have one pool and ignore it.
@@ -226,6 +230,28 @@ public enum RuntimeKind
     /// <summary>MLX <c>mlx_lm.server</c> on Apple Silicon (macOS Phase 3), always a native process.</summary>
     [JsonStringEnumMemberName("mlx")]
     Mlx,
+
+    /// <summary>SGLang's OpenAI-compatible server in a Linux container.</summary>
+    [JsonStringEnumMemberName("sglang")]
+    Sglang,
+
+    /// <summary>NVIDIA NIM in an approved container on configured nodes.</summary>
+    [JsonStringEnumMemberName("nim")]
+    Nim,
+}
+
+/// <summary>Minimal settings shared by the additional container runtimes.</summary>
+public sealed record ContainerRuntimeSettings
+{
+    /// <summary>Explicit container image.</summary>
+    public required string Image { get; init; }
+
+    /// <summary>Approved image digest. Required for NIM and on nodes enforcing digest pinning.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ImageDigest { get; init; }
+
+    /// <summary>Validated runtime arguments appended after arguments owned by mirbadllm.</summary>
+    public IReadOnlyList<string> ExtraArgs { get; init; } = [];
 }
 
 /// <summary>
@@ -290,6 +316,10 @@ public sealed record LlamaCppSettings
 
     /// <summary>Container image for container delivery. Null = the node's default llama.cpp image.</summary>
     public string? Image { get; init; }
+
+    /// <summary>Approved digest of <see cref="Image"/>. Null uses the node default image digest.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ImageDigest { get; init; }
 
     /// <summary>
     /// Additional raw <c>llama-server</c> arguments, appended last. The flags in <see cref="LlamaCppFlags.RefusedInExtraArgs"/>

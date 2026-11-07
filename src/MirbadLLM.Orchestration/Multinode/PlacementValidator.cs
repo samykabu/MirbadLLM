@@ -140,7 +140,8 @@ public sealed class PlacementValidator : IModelDefinitionValidator
             || stored.Runtime != proposed.Runtime
             || Delivery(stored) != Delivery(proposed)
             || (stored.LlamaCpp is null) != (proposed.LlamaCpp is null)
-            || (stored.Mlx is null) != (proposed.Mlx is null);
+            || (stored.Mlx is null) != (proposed.Mlx is null)
+            || (stored.Container is null) != (proposed.Container is null);
 
         // A llama.cpp model's own settings (MN-224) are checked on every save: they do not depend on the node's report, and
         // the save is the only place ExtraArgs, budgets and the split mode are refused before a launch.
@@ -153,6 +154,7 @@ public sealed class PlacementValidator : IModelDefinitionValidator
             {
                 CheckLlamaCppSettings(proposed, problems);
                 CheckMlxSettings(proposed, problems);
+                CheckContainerSettings(proposed, problems);
                 if (placement is not null)
                 {
                     placement = await ValidatePlacementAsync(proposed, placement, newOnNode, problems, ct).ConfigureAwait(false);
@@ -528,7 +530,40 @@ public sealed class PlacementValidator : IModelDefinitionValidator
         }
     }
 
-    /// <summary>How the model is delivered: llama.cpp's setting, MLX always as a native process, vLLM in a container.</summary>
+    private static void CheckContainerSettings(ModelDefinition model, List<PlacementProblem> problems)
+    {
+        bool sharedContainer = model.Runtime is RuntimeKind.Sglang or RuntimeKind.Nim;
+        if (sharedContainer && model.Container is null)
+        {
+            problems.Add(new PlacementProblem(
+                PlacementProblemCodes.ContainerSettingsMismatch, $"A {RuntimeName(model.Runtime)} model needs container settings."));
+            return;
+        }
+
+        if (!sharedContainer && model.Container is not null)
+        {
+            problems.Add(new PlacementProblem(
+                PlacementProblemCodes.ContainerSettingsMismatch,
+                $"Container runtime settings are given but the runtime is {RuntimeName(model.Runtime)}; remove them."));
+            return;
+        }
+
+        if (model.Container is not { } settings)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.Image) ||
+            model.Runtime == RuntimeKind.Nim && string.IsNullOrWhiteSpace(settings.ImageDigest) ||
+            !LlamaCppArgsBuilder.IsRelativePath(model.ModelPath))
+        {
+            problems.Add(new PlacementProblem(
+                PlacementProblemCodes.ContainerSettingsInvalid,
+                $"{RuntimeName(model.Runtime)} needs a relative model path, an explicit image{(model.Runtime == RuntimeKind.Nim ? " and approved digest" : string.Empty)}."));
+        }
+    }
+
+    /// <summary>How the model is delivered: llama.cpp's setting, MLX always as a native process, all others in containers.</summary>
     private static LaunchDelivery Delivery(ModelDefinition model) => model.Runtime switch
     {
         RuntimeKind.LlamaCpp => model.LlamaCpp?.Delivery ?? LaunchDelivery.Container,
@@ -541,6 +576,8 @@ public sealed class PlacementValidator : IModelDefinitionValidator
         RuntimeKind.Vllm => "vLLM",
         RuntimeKind.LlamaCpp => "llama.cpp",
         RuntimeKind.Mlx => "MLX",
+        RuntimeKind.Sglang => "SGLang",
+        RuntimeKind.Nim => "NIM",
         _ => kind.ToString(),
     };
 

@@ -158,6 +158,21 @@ public sealed class ContainerRuntimeDriverTests
     }
 
     [Fact]
+    public async Task Get_NimContainer_PreservesRuntimeAndUsesApprovedReadinessPath()
+    {
+        var h = new Harness();
+        h.Docker.Add("container-m1", "m1", "running", Labels("m1", extra:
+            [(ContainerLabels.Runtime, "nim"), (ContainerLabels.HealthPath, "/v1/health/ready")]));
+
+        var status = await h.Driver.GetAsync("m1");
+        var config = await h.Driver.GetLaunchConfigAsync("m1");
+
+        Assert.Equal(RuntimeKind.Nim, status!.Runtime);
+        Assert.Equal(RuntimeKind.Nim, config!.Runtime);
+        Assert.Equal("http://ss-m1:8000/v1/health/ready", Assert.Single(h.Upstream.Requests).RequestUri!.ToString());
+    }
+
+    [Fact]
     public async Task Get_WithoutContainerNetwork_ProbesTheLoopbackPort()
     {
         var h = new Harness(new ContainerRuntimeOptions { NodeId = NodeId, UseContainerNetwork = false });

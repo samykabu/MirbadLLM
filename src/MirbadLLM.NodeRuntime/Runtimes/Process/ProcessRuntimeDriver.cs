@@ -548,6 +548,7 @@ public sealed partial class ProcessRuntimeDriver : IRuntimeDriver, IAsyncDisposa
         return new LaunchConfig
         {
             Kind = LaunchDelivery.Process,
+            Runtime = record.Spec.Runtime,
             Executable = record.ExecutableName,
             ExecutableVersion = record.ExecutableVersion,
             Argv = [.. record.Spec.Argv],

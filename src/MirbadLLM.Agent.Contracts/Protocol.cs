@@ -247,6 +247,12 @@ public static class ContainerLabels
     /// <summary>Execution fingerprint, 16 hex of SHA-256 (design §5.1).</summary>
     public const string ExecutionFingerprint = "mirbadllm.exec-fingerprint";
 
+    /// <summary>Runtime kind recorded by the container driver for truthful read-back.</summary>
+    public const string Runtime = "mirbadllm.runtime";
+
+    /// <summary>Runtime-approved readiness path recorded by the container driver.</summary>
+    public const string HealthPath = "mirbadllm.health-path";
+
     /// <summary>Ordered GPU UUIDs, comma-separated (design §5.1 read-back).</summary>
     public const string GpuUuids = "mirbadllm.gpu-uuids";
 
@@ -277,6 +283,12 @@ public static class AgentFeatures
     /// with a <c>{kind: mlx, delivery: process}</c> runtime when at least one <c>mlx-lm-server</c> version is installed.
     /// </summary>
     public const string RuntimeMlxProcess = "runtime.mlx.process";
+
+    /// <summary>SGLang in a Linux container.</summary>
+    public const string RuntimeSglangContainer = "runtime.sglang.container";
+
+    /// <summary>NVIDIA NIM in a container on a node explicitly configured for it.</summary>
+    public const string RuntimeNimContainer = "runtime.nim.container";
 
     /// <summary>Hugging Face downloads through the container helper.</summary>
     public const string DownloadsHfContainer = "downloads.hf-container";
@@ -374,6 +386,9 @@ public static class AgentFeatures
 
     /// <summary>Features added by P3/P4 (design D116). <see cref="P3Reported"/> lists every flag a P3/P4 agent can newly report.</summary>
     public static IReadOnlyList<string> P3 { get; } = [DownloadsOllama, GgufInspect, AdmissionGpuBudgets];
+
+    /// <summary>Container runtimes added by the runtime expansion.</summary>
+    public static IReadOnlyList<string> RuntimeExpansion { get; } = [RuntimeSglangContainer, RuntimeNimContainer];
 
     /// <summary>
     /// Every flag a P3/P4 agent may report that no P1/P2 agent reports: <see cref="P3"/> plus the three P1 constants first

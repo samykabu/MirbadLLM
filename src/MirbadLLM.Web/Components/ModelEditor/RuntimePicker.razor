@@ -35,7 +35,9 @@ else if (Node is not null)
     @* MLX (docs/macos/implementation-plan.md, Phase 3) is offered only by a node that reports it (an Apple Silicon node),
        or kept by a model that already is one; every other node renders exactly as before. *@
     bool offerMlx = mlx is not null || IsMlx;
-    bool offerChoice = offerLlamaCpp || offerMlx;
+    bool offerSglang = Node.RuntimeKinds.Contains(RuntimeKind.Sglang) || IsSglang;
+    bool offerNim = Node.RuntimeKinds.Contains(RuntimeKind.Nim) || IsNim;
+    bool offerChoice = offerLlamaCpp || offerMlx || offerSglang || offerNim;
     <div class="field">
         <FieldHelp Label="Runtime" For="placement-runtime" ShowLabel="false" Help="@(offerMlx ? MlxFieldHelp.Runtime : offerLlamaCpp ? LlamaCppFieldHelp.Runtime : ModelFieldHelp.Runtime)">
             <Leading><span class="field-label" id="placement-runtime-label">Runtime</span></Leading>
@@ -72,6 +74,22 @@ else if (Node is not null)
                         MLX
                     </label>
                 }
+                @if (offerSglang)
+                {
+                    <label class="segmented-option @(RuntimeLocked && !IsSglang ? "segmented-option--disabled" : null)">
+                        <input type="radio" name="placement-runtime" value="sglang" data-testid="placement-runtime-sglang"
+                               checked="@IsSglang" disabled="@(RuntimeLocked && !IsSglang)" @onchange="() => SetRuntimeAsync(RuntimeKind.Sglang)" />
+                        SGLang
+                    </label>
+                }
+                @if (offerNim)
+                {
+                    <label class="segmented-option @(RuntimeLocked && !IsNim ? "segmented-option--disabled" : null)">
+                        <input type="radio" name="placement-runtime" value="nim" data-testid="placement-runtime-nim"
+                               checked="@IsNim" disabled="@(RuntimeLocked && !IsNim)" @onchange="() => SetRuntimeAsync(RuntimeKind.Nim)" />
+                        NIM
+                    </label>
+                }
             }
         </div>
         @if (offerChoice)
@@ -85,7 +103,15 @@ else if (Node is not null)
                 {
                     <span>mlx_lm.server serves an MLX checkpoint folder, as a native process on @Node.Id.</span>
                 }
-                else if (!offerMlx)
+                else if (IsSglang)
+                {
+                    <span>SGLang serves an OpenAI-compatible endpoint in a Linux container on @Node.Id.</span>
+                }
+                else if (IsNim)
+                {
+                    <span>NIM serves an OpenAI-compatible endpoint from an approved NVIDIA container on @Node.Id.</span>
+                }
+                else if (!offerMlx && !offerSglang && !offerNim)
                 {
                     <span>@Node.Id also runs llama.cpp@(llamaCpp?.Delivery == LaunchDelivery.Process ? " (native process)" : "").</span>
                 }
@@ -130,11 +156,16 @@ else if (Node is not null)
     /// </summary>
     public static bool Offers(PlacementNode? node, RuntimeKind runtime) =>
         node is not null && (LlamaCppEditing.Runtime(node) is not null || MlxEditing.Runtime(node) is not null ||
-            runtime is RuntimeKind.LlamaCpp or RuntimeKind.Mlx);
+            node.RuntimeKinds.Contains(RuntimeKind.Sglang) || node.RuntimeKinds.Contains(RuntimeKind.Nim) ||
+            runtime is RuntimeKind.LlamaCpp or RuntimeKind.Mlx or RuntimeKind.Sglang or RuntimeKind.Nim);
 
     private bool IsLlamaCpp => Runtime == RuntimeKind.LlamaCpp;
 
     private bool IsMlx => Runtime == RuntimeKind.Mlx;
+
+    private bool IsSglang => Runtime == RuntimeKind.Sglang;
+
+    private bool IsNim => Runtime == RuntimeKind.Nim;
 
     /// <summary>An existing model keeps its runtime (its settings belong to it); a new one picks it.</summary>
     private bool RuntimeLocked => !IsNew;

@@ -168,6 +168,9 @@ public sealed partial class AgentOptions
     /// </summary>
     public bool AllowTagPulls { get; set; }
 
+    /// <summary>Advertise NIM container delivery on this configured Linux/DGX node.</summary>
+    public bool EnableNim { get; set; }
+
     // ---- Host services (today's HostAgentSocket) ----
 
     /// <summary>mirbadllm-hostd's Unix socket (bind-mounted read-only into the agent container).</summary>

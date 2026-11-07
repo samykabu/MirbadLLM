@@ -455,4 +455,82 @@ public sealed class LaunchSpecBuilderLlamaCppTests
         var stray = vllm with { LlamaCpp = new LlamaCppSettings { ModelFile = "x/x.gguf", GpuBudgetsGiB = [36] } };
         Assert.Null(LaunchSpecBuilder.Admission(stray, node, false, p3).GpuBudgetsGiB);
     }
+
+    [Fact]
+    public void LlamaCppContainer_UsesNodeImageDigest_AndTranslatesProcessTokens()
+    {
+        var node = ContainerNode() with
+        {
+            DefaultLlamaCppImage = "ghcr.io/example/llama:1",
+            DefaultLlamaCppImageDigest = Digest,
+        };
+        var model = ContainerModel(RuntimeKind.LlamaCpp) with
+        {
+            LlamaCpp = new LlamaCppSettings { ModelFile = "repo/model.gguf", Delivery = LaunchDelivery.Container },
+        };
+
+        var built = LaunchSpecBuilder.Build(model, node, "unused", 120, false,
+            nodeFeatures: [AgentFeatures.RuntimeLlamaCppContainer]);
+
+        Assert.Equal(RuntimeKind.LlamaCpp, built.Spec.Runtime);
+        Assert.Equal("ghcr.io/example/llama:1", built.Spec.Image);
+        Assert.Equal(Digest, built.Spec.ImageDigest);
+        Assert.Contains("/models/repo/model.gguf", built.Spec.Argv);
+        Assert.Contains("0.0.0.0", built.Spec.Argv);
+        Assert.DoesNotContain(built.Spec.Argv, arg => arg.Contains(ProcessArgvTokens.Models, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SglangContainer_OwnsOpenAiRoutingArguments()
+    {
+        var model = ContainerModel(RuntimeKind.Sglang) with
+        {
+            Container = new ContainerRuntimeSettings { Image = "lmsysorg/sglang:1", ImageDigest = Digest, ExtraArgs = ["--tp", "2"] },
+        };
+        var built = LaunchSpecBuilder.Build(model, ContainerNode(), "unused", 120, false,
+            nodeFeatures: [AgentFeatures.RuntimeSglangContainer]);
+
+        Assert.Equal(8000, built.Spec.ContainerPort);
+        Assert.Equal("/health", built.Spec.HealthPath);
+        Assert.Contains("/models/repo/model", built.Spec.Argv);
+        Assert.Contains("served", built.Spec.Argv);
+        Assert.Equal(["--tp", "2"], built.Spec.Argv.TakeLast(2));
+    }
+
+    [Fact]
+    public void NimContainer_RequiresDigest_UsesSecretsAndCacheReadiness()
+    {
+        var model = ContainerModel(RuntimeKind.Nim) with
+        {
+            Container = new ContainerRuntimeSettings { Image = "nvcr.io/nim/model:1", ImageDigest = Digest },
+        };
+        var environment = new LaunchEnvironment(
+            new Dictionary<string, string> { ["NGC_API_KEY"] = "secret" }, ["NGC_API_KEY"]);
+        var built = LaunchSpecBuilder.Build(model, ContainerNode(), "unused", 120, false, environment,
+            [AgentFeatures.RuntimeNimContainer, AgentFeatures.LaunchEnv]);
+
+        Assert.Equal("/v1/health/ready", built.Spec.HealthPath);
+        Assert.Equal(["NGC_API_KEY"], built.Spec.SecretEnvNames);
+        Assert.Single(built.Spec.Mounts);
+        Assert.Equal(LogicalVolumes.Cache, built.Spec.Mounts[0].Volume);
+    }
+
+    private const string Digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    private static ModelDefinition ContainerModel(RuntimeKind runtime) => new()
+    {
+        Id = "runtime-model",
+        ServedName = "served",
+        ModelPath = "repo/model",
+        Runtime = runtime,
+        MemoryBudgetGiB = 16,
+    };
+
+    private static NodeRecord ContainerNode() => new()
+    {
+        Id = "linux-1",
+        Uid = "uid-linux-1",
+        Address = "https://linux-1:9443",
+        Approved = true,
+    };
 }

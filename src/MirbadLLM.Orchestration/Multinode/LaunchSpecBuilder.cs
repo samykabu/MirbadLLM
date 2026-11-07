@@ -246,6 +246,11 @@ public static class LaunchSpecBuilder
             return BuildMlx(model, node, tuning, environment, nodeFeatures);
         }
 
+        if (model.Runtime is RuntimeKind.Sglang or RuntimeKind.Nim)
+        {
+            return BuildAdditionalContainer(model, node, tuning, environment, nodeFeatures);
+        }
+
         if (model.Runtime != RuntimeKind.Vllm)
         {
             throw new NotSupportedException($"Model '{model.Id}' uses runtime {model.Runtime}, which this master cannot launch yet.");
@@ -543,17 +548,15 @@ public static class LaunchSpecBuilder
             throw new ArgumentException($"Model '{model.Id}' is not a llama.cpp model.", nameof(model));
         }
 
-        if (!NodeReports(node, AgentFeatures.RuntimeLlamaCppProcess, nodeFeatures))
+        var settings = model.LlamaCpp ?? throw new ArgumentException($"Model '{model.Id}' has no llama.cpp settings.", nameof(model));
+        string feature = settings.Delivery == LaunchDelivery.Container
+            ? AgentFeatures.RuntimeLlamaCppContainer
+            : AgentFeatures.RuntimeLlamaCppProcess;
+        if (!NodeReports(node, feature, nodeFeatures))
         {
             throw new NotSupportedException(
-                $"Model '{model.Id}' is a llama.cpp model, but node '{node.Id}' cannot run llama.cpp processes " +
-                $"(feature '{AgentFeatures.RuntimeLlamaCppProcess}'); place it on a node that reports it or upgrade its agent.");
-        }
-
-        if (model.LlamaCpp is { Delivery: not LaunchDelivery.Process })
-        {
-            throw new NotSupportedException(
-                $"Model '{model.Id}' asks for llama.cpp in a container, which this master cannot launch yet; set its delivery to process.");
+                $"Model '{model.Id}' is a llama.cpp model, but node '{node.Id}' cannot run llama.cpp as a {settings.Delivery} " +
+                $"(feature '{feature}'); place it on a node that reports it or upgrade its agent.");
         }
 
         environment ??= LaunchEnvironment.None;
@@ -563,10 +566,12 @@ public static class LaunchSpecBuilder
                 $"Model '{model.Id}' sets environment variables, but node '{node.Id}' does not support them (feature '{AgentFeatures.LaunchEnv}'); upgrade its agent.");
         }
 
-        var reserved = environment.Variables.Keys.Concat(environment.SecretNames)
-            .Where(ProcessEnvironment.IsReserved)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var reserved = settings.Delivery == LaunchDelivery.Process
+            ? environment.Variables.Keys.Concat(environment.SecretNames)
+                .Where(ProcessEnvironment.IsReserved)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList()
+            : [];
         if (reserved.Count > 0)
         {
             throw Refusal(node, ErrorCodes.SpecRejected,
@@ -577,24 +582,40 @@ public static class LaunchSpecBuilder
         var gpuUuids = PlacedGpuUuids(model);
         ThrowOnBudgetProblems(model, gpuUuids.Count);
         IReadOnlyList<string> argv = LlamaCppArgsBuilder.Build(model, gpuUuids.Count, TensorSplitWeights(model, node));
-        string version = ResolveExecutableVersion(model, node);
+        string? version = settings.Delivery == LaunchDelivery.Process ? ResolveExecutableVersion(model, node) : null;
+        string? image = null;
+        string? imageDigest = null;
+        IReadOnlyList<MountSpec> mounts = [];
+        if (settings.Delivery == LaunchDelivery.Container)
+        {
+            image = string.IsNullOrWhiteSpace(settings.Image) ? node.DefaultLlamaCppImage : settings.Image;
+            if (string.IsNullOrWhiteSpace(image))
+            {
+                throw new NotSupportedException($"Model '{model.Id}' needs a llama.cpp container image; configure it on the model or node '{node.Id}'.");
+            }
+
+            imageDigest = string.IsNullOrWhiteSpace(settings.Image) ? node.DefaultLlamaCppImageDigest : settings.ImageDigest;
+            argv = ContainerLlamaCppArgs(argv);
+            mounts = [new MountSpec(LogicalVolumes.Models, null, LogicalVolumes.ModelsTarget, ReadOnly: true)];
+        }
 
         var spec = new LaunchSpec
         {
-            Kind = LaunchDelivery.Process,
+            Kind = settings.Delivery,
             Runtime = RuntimeKind.LlamaCpp,
-            Image = null,
-            ImageDigest = null,
-            Executable = ExecutableNames.LlamaServer,
+            Image = image,
+            ImageDigest = imageDigest,
+            Executable = settings.Delivery == LaunchDelivery.Process ? ExecutableNames.LlamaServer : null,
             ExecutableVersion = version,
             Argv = argv,
             Env = new Dictionary<string, string>(environment.Variables, StringComparer.Ordinal),
             SecretEnvNames = [.. environment.SecretNames],
-            Mounts = [],
+            ContainerPort = VllmContainerPort,
+            Mounts = mounts,
             Gpus = gpuUuids.Count > 0
                 ? new GpuSelection { Mode = GpuSelectionMode.Uuids, Uuids = [.. gpuUuids] }
                 : new GpuSelection { Mode = GpuSelectionMode.All },
-            IpcHost = false,
+            IpcHost = settings.Delivery == LaunchDelivery.Container,
             HealthPath = "/health",
         };
 
@@ -610,7 +631,131 @@ public static class LaunchSpecBuilder
             labels[ContainerLabels.Tuning] = "1";
         }
 
-        return new BuiltLaunchSpec(spec with { Labels = labels }, string.Empty, string.Empty, fingerprint);
+        return new BuiltLaunchSpec(spec with { Labels = labels }, image ?? string.Empty, string.Empty, fingerprint);
+    }
+
+    private static List<string> ContainerLlamaCppArgs(IReadOnlyList<string> argv)
+    {
+        var translated = argv.Select(arg => arg.StartsWith(ProcessArgvTokens.Models + "/", StringComparison.Ordinal)
+                ? LogicalVolumes.ModelsTarget + arg[ProcessArgvTokens.Models.Length..]
+                : arg == ProcessArgvTokens.Port ? VllmContainerPort.ToString(CultureInfo.InvariantCulture) : arg)
+            .ToList();
+        int host = translated.FindIndex(arg => string.Equals(arg, "--host", StringComparison.Ordinal));
+        if (host >= 0 && host + 1 < translated.Count)
+        {
+            translated[host + 1] = "0.0.0.0";
+        }
+
+        return translated;
+    }
+
+    /// <summary>Builds an SGLang or NIM container launch using the shared container settings.</summary>
+    public static BuiltLaunchSpec BuildAdditionalContainer(
+        ModelDefinition model,
+        NodeRecord node,
+        bool tuning,
+        LaunchEnvironment? environment = null,
+        IReadOnlyList<string>? nodeFeatures = null)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(node);
+        if (model.Runtime is not (RuntimeKind.Sglang or RuntimeKind.Nim))
+        {
+            throw new ArgumentException($"Model '{model.Id}' is not an SGLang or NIM model.", nameof(model));
+        }
+
+        string feature = model.Runtime == RuntimeKind.Sglang
+            ? AgentFeatures.RuntimeSglangContainer
+            : AgentFeatures.RuntimeNimContainer;
+        if (!NodeReports(node, feature, nodeFeatures))
+        {
+            throw new NotSupportedException($"Node '{node.Id}' does not report {feature} for model '{model.Id}'.");
+        }
+
+        var settings = model.Container ?? throw new ArgumentException($"Model '{model.Id}' has no container runtime settings.", nameof(model));
+        if (string.IsNullOrWhiteSpace(settings.Image))
+        {
+            throw new ArgumentException($"Model '{model.Id}' needs an explicit {model.Runtime} image.", nameof(model));
+        }
+
+        if (model.Runtime == RuntimeKind.Nim && string.IsNullOrWhiteSpace(settings.ImageDigest))
+        {
+            throw new ArgumentException($"NIM model '{model.Id}' needs an approved image digest.", nameof(model));
+        }
+
+        if (!LlamaCppArgsBuilder.IsRelativePath(model.ModelPath))
+        {
+            throw new ArgumentException($"Model path '{model.ModelPath}' must be relative to the models root.", nameof(model));
+        }
+
+        ValidateContainerExtraArgs(model.Runtime, settings.ExtraArgs);
+        environment ??= LaunchEnvironment.None;
+        if (!environment.IsEmpty && !NodeReports(node, AgentFeatures.LaunchEnv, nodeFeatures))
+        {
+            throw new NotSupportedException(
+                $"Model '{model.Id}' sets environment variables, but node '{node.Id}' does not support them (feature '{AgentFeatures.LaunchEnv}').");
+        }
+
+        var gpuUuids = PlacedGpuUuids(model);
+        if (gpuUuids.Count > 0 && !NodeReports(node, AgentFeatures.GpuSelectionUuids, nodeFeatures))
+        {
+            throw new NotSupportedException($"Node '{node.Id}' cannot select the GPUs placed for model '{model.Id}'.");
+        }
+
+        IReadOnlyList<string> argv = model.Runtime == RuntimeKind.Sglang
+            ? ["python3", "-m", "sglang.launch_server", "--model-path", $"{LogicalVolumes.ModelsTarget}/{model.ModelPath}",
+                "--served-model-name", model.ServedName, "--host", "0.0.0.0", "--port", VllmContainerPort.ToString(CultureInfo.InvariantCulture),
+                .. settings.ExtraArgs]
+            : [.. settings.ExtraArgs];
+        var spec = new LaunchSpec
+        {
+            Kind = LaunchDelivery.Container,
+            Runtime = model.Runtime,
+            Image = settings.Image,
+            ImageDigest = settings.ImageDigest,
+            Argv = argv,
+            Env = new Dictionary<string, string>(environment.Variables, StringComparer.Ordinal),
+            SecretEnvNames = [.. environment.SecretNames],
+            ContainerPort = VllmContainerPort,
+            Mounts = model.Runtime == RuntimeKind.Sglang
+                ? [new MountSpec(LogicalVolumes.Models, null, LogicalVolumes.ModelsTarget, ReadOnly: true),
+                    new MountSpec(LogicalVolumes.Cache, null, LogicalVolumes.CacheTarget, ReadOnly: false)]
+                : [new MountSpec(LogicalVolumes.Cache, null, LogicalVolumes.CacheTarget, ReadOnly: false)],
+            Gpus = gpuUuids.Count > 0
+                ? new GpuSelection { Mode = GpuSelectionMode.Uuids, Uuids = [.. gpuUuids] }
+                : new GpuSelection { Mode = GpuSelectionMode.All },
+            IpcHost = true,
+            HealthPath = model.Runtime == RuntimeKind.Nim ? "/v1/health/ready" : "/health",
+        };
+        string fingerprint = Multinode.ExecutionFingerprint.Compute(spec, node.Uid, [.. gpuUuids], legacyConfigHash: null);
+        var labels = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [ContainerLabels.ServedName] = model.ServedName,
+            [ContainerLabels.ExecutionFingerprint] = fingerprint,
+            [ContainerLabels.BudgetGiB] = model.MemoryBudgetGiB.ToString("0.###", CultureInfo.InvariantCulture),
+        };
+        if (tuning)
+        {
+            labels[ContainerLabels.Tuning] = "1";
+        }
+
+        return new BuiltLaunchSpec(spec with { Labels = labels }, settings.Image, string.Empty, fingerprint);
+    }
+
+    private static void ValidateContainerExtraArgs(RuntimeKind runtime, IReadOnlyList<string> args)
+    {
+        string[] owned = runtime == RuntimeKind.Sglang
+            ? ["--model", "--model-path", "--served-model-name", "--served-model", "--host", "--port", "-p"]
+            : ["--host", "--port", "-p"];
+        foreach (string arg in args)
+        {
+            if (string.IsNullOrWhiteSpace(arg) || arg.Any(char.IsControl) || arg.Contains('\\') ||
+                arg.StartsWith(ProcessArgvTokens.Models, StringComparison.Ordinal) ||
+                owned.Any(flag => arg == flag || arg.StartsWith(flag + "=", StringComparison.Ordinal)))
+            {
+                throw new ArgumentException($"Extra argument '{arg}' is not allowed for {runtime}; mirbadllm owns paths, served name, host and port.", nameof(args));
+            }
+        }
     }
 
     // ---------------------------------------------------------------- MLX process specs (docs/macos/implementation-plan.md, Phase 3)

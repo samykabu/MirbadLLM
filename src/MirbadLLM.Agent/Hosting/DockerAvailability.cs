@@ -43,6 +43,8 @@ public sealed class DockerAvailability
     [
         AgentFeatures.RuntimeVllmContainer,
         AgentFeatures.RuntimeLlamaCppContainer,
+        AgentFeatures.RuntimeSglangContainer,
+        AgentFeatures.RuntimeNimContainer,
         AgentFeatures.DownloadsHfContainer,
         AgentFeatures.ServicesDocker,
         AgentFeatures.ImagesDigestPinned,

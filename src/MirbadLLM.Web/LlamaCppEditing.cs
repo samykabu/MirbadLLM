@@ -573,6 +573,8 @@ public static class LlamaCppEditing
     {
         RuntimeKind.LlamaCpp => "llama.cpp",
         RuntimeKind.Mlx => "MLX",
+        RuntimeKind.Sglang => "SGLang",
+        RuntimeKind.Nim => "NIM",
         _ => "vLLM",
     };
 

@@ -285,7 +285,8 @@ public static class AgentServiceCollectionExtensions
         if (docker.Enabled)
         {
             services.TryAddSingleton<DockerProbe>();
-            services.TryAddSingleton<RuntimeCapabilityContributor>();
+            services.TryAddSingleton(sp => new RuntimeCapabilityContributor(
+                sp.GetRequiredService<DockerProbe>(), options.EnableNim && options.ApprovedImages.Count > 0));
             services.AddSingleton<ICapabilityContributor>(sp => sp.GetRequiredService<RuntimeCapabilityContributor>());
             services.AddSingleton<IHealthContributor>(sp => sp.GetRequiredService<RuntimeCapabilityContributor>());
         }
@@ -848,21 +849,41 @@ internal sealed partial class DockerProbe(DockerEngineClient docker, TimeProvide
 /// The container driver's part of the capability report (design §3.3: <c>runtime.vllm.container</c>, the vLLM container
 /// runtime, available while Docker answers) and its Degraded reason (§3.5 <c>docker_unreachable</c>).
 /// </summary>
-internal sealed class RuntimeCapabilityContributor(DockerProbe docker) : ICapabilityContributor, IHealthContributor
+internal sealed class RuntimeCapabilityContributor(DockerProbe docker, bool enableNim = false) : ICapabilityContributor, IHealthContributor
 {
     public async Task<NodeCapabilities> ContributeAsync(NodeCapabilities current, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(current);
         bool up = await docker.CheckAsync(ct).ConfigureAwait(false) is null;
-        var features = current.Features.Contains(AgentFeatures.RuntimeVllmContainer, StringComparer.Ordinal)
-            ? current.Features
-            : [AgentFeatures.RuntimeVllmContainer, .. current.Features];
-        RuntimeCapability vllm = new() { Kind = RuntimeKind.Vllm, Delivery = LaunchDelivery.Container, Available = up };
-        return current with
+        var kinds = new List<(RuntimeKind Kind, string Feature)>
         {
-            Features = features,
-            Runtimes = [.. current.Runtimes.Where(r => !(r.Kind == RuntimeKind.Vllm && r.Delivery == LaunchDelivery.Container)), vllm],
+            (RuntimeKind.Vllm, AgentFeatures.RuntimeVllmContainer),
         };
+        if (OperatingSystem.IsLinux())
+        {
+            kinds.Add((RuntimeKind.LlamaCpp, AgentFeatures.RuntimeLlamaCppContainer));
+            kinds.Add((RuntimeKind.Sglang, AgentFeatures.RuntimeSglangContainer));
+            if (enableNim)
+            {
+                kinds.Add((RuntimeKind.Nim, AgentFeatures.RuntimeNimContainer));
+            }
+        }
+
+        var features = current.Features.ToList();
+        foreach (var (_, feature) in kinds)
+        {
+            if (!features.Contains(feature, StringComparer.Ordinal))
+            {
+                features.Add(feature);
+            }
+        }
+
+        var runtimeKinds = kinds.Select(k => k.Kind).ToHashSet();
+        var runtimes = current.Runtimes
+            .Where(r => r.Delivery != LaunchDelivery.Container || !runtimeKinds.Contains(r.Kind))
+            .Concat(kinds.Select(k => new RuntimeCapability { Kind = k.Kind, Delivery = LaunchDelivery.Container, Available = up }))
+            .ToList();
+        return current with { Features = features, Runtimes = runtimes };
     }
 
     public async Task<IReadOnlyList<HealthReason>> CheckAsync(CancellationToken ct = default)

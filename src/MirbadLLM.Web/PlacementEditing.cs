@@ -44,7 +44,8 @@ public sealed record PlacementNode(NodeRecord Record, NodeLiveStatus? Live)
 
     /// <summary>The runtime kinds the node reports (vLLM when it reports none).</summary>
     public IReadOnlyList<RuntimeKind> RuntimeKinds =>
-        ((Record.LastCapabilities ?? Live?.Capabilities)?.Runtimes ?? []).Select(r => r.Kind).Distinct().DefaultIfEmpty(RuntimeKind.Vllm).ToList();
+        ((Record.LastCapabilities ?? Live?.Capabilities)?.Runtimes ?? []).Select(r => r.Kind).Distinct()
+            .DefaultIfEmpty(RuntimeKind.Vllm).ToList();
 }
 
 /// <summary>A message for the editor's callouts: one sentence plus, when there are several causes, one line each.</summary>

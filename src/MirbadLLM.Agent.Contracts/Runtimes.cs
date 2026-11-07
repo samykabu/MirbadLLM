@@ -292,6 +292,10 @@ public sealed record LaunchConfig
     /// <summary>Container or process.</summary>
     public LaunchDelivery Kind { get; init; } = LaunchDelivery.Container;
 
+    /// <summary>Runtime kind; absent in older read-backs means vLLM.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public RuntimeKind Runtime { get; init; } = RuntimeKind.Vllm;
+
     /// <summary>Image reference (container).</summary>
     public string? Image { get; init; }
 

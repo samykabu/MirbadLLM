@@ -339,6 +339,12 @@ public static class PlacementProblemCodes
     /// template arguments that are not a JSON object, or ExtraArgs that <see cref="MlxFlags.RefusedExtraArgs"/> refuses.
     /// </summary>
     public const string MlxSettingsInvalid = "mlx_settings_invalid";
+
+    /// <summary>Shared container settings are missing or attached to the wrong runtime.</summary>
+    public const string ContainerSettingsMismatch = "container_settings_mismatch";
+
+    /// <summary>Shared container image, digest, model path or extra arguments are invalid.</summary>
+    public const string ContainerSettingsInvalid = "container_settings_invalid";
 }
 
 /// <summary>One validation problem of a placement (design §5.1).</summary>

@@ -18,9 +18,11 @@ see the UI; they only call the `/v1` API.
 ## Product Purpose
 
 MirbadLLM reuses spare and older machines to serve small and medium local LLMs, puts them behind a single
-OpenAI-compatible endpoint, and gives the operators one browser UI to manage and watch all of them. A typical master is a DGX Spark that also runs vLLM models in containers. Worker nodes run
-vLLM in containers on Linux, or llama.cpp models as native processes on Windows and macOS; an Apple Silicon Mac also
-runs MLX models. The master's router sends each request to the node that serves the model. It exists because a
+OpenAI-compatible endpoint, and gives the operators one browser UI to manage and watch all of them. A typical master is a DGX Spark that also runs container models. Linux and DGX agents run
+vLLM, llama.cpp and SGLang containers; NIM is exposed only on explicitly configured nodes with an approved image digest.
+Windows and macOS agents preserve native llama.cpp, and Apple Silicon Macs also run native MLX. Windows support for
+SGLang or NIM means enrolling a separate Linux agent inside WSL2; a native Windows agent never controls that Docker runtime.
+The master's router sends each OpenAI-compatible request to the node that serves the model. It exists because a
 single-slot server (Ollama at the time) made parallel agents queue behind each other. Success: models are easy to add and run, many clients are served at once, and the operator can
 see at a glance what is running, how fast, and how much of the shared machine it uses.
 
@@ -53,7 +55,7 @@ service.
   `nvidia-smi` or IOKit for an Apple GPU, and vLLM's or llama.cpp's Prometheus metrics), sampled every 5 s and kept for one hour in
   memory.
 - Terminology: *model* (a registered definition), *served name* (what API clients send as `model`),
-  *budget* (memory reserved for a model), *node* (a machine in the fleet), *runtime* (vLLM, llama.cpp or MLX),
+  *budget* (memory reserved for a model), *node* (a machine in the fleet), *runtime* (vLLM, llama.cpp, MLX, SGLang or NIM),
   *placement* (the node and GPUs a model runs on), states *Stopped, Starting, Ready, Stopping, Failed*.
 - Access: admin login for the UI; API keys for `/v1` and `/metrics`.
 

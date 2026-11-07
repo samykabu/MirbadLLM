@@ -188,9 +188,13 @@ own install guide with every option, upgrades and removal:
 
 | Node | Runtime | Service | Guide |
 |---|---|---|---|
-| Linux PC with NVIDIA GPUs | vLLM in Docker containers | systemd unit `mirbadllm-agent` | [deploy/agent/linux/README.md](../deploy/agent/linux/README.md) |
+| Linux PC with NVIDIA GPUs | vLLM, llama.cpp and SGLang in Docker; NIM when explicitly enabled with an approved digest | systemd unit `mirbadllm-agent` | [deploy/agent/linux/README.md](../deploy/agent/linux/README.md) |
+| DGX Spark | vLLM, llama.cpp and SGLang in Docker; capability-gated NIM | agent container | [Single machine](#single-machine) |
 | Windows 11 PC with an NVIDIA GPU | llama.cpp (`llama-server.exe`) as native processes | Windows service `mirbadllm-agent` | [deploy/agent/windows/README.md](../deploy/agent/windows/README.md) |
 | Apple Silicon Mac | llama.cpp with Metal, MLX through `mlx_lm.server` | LaunchDaemon | [deploy/agent/macos/README.md](../deploy/agent/macos/README.md) |
+
+SGLang and NIM are not controlled by a native Windows agent. On Windows, run and enroll a separate Linux agent in
+WSL2; it is a distinct node with its own roots, Docker access, identity and lifecycle.
 
 Once a second node is approved, the model editor shows a **Placement** section: pick the node and, on a PC, the GPUs.
 The operator guides describe placement, moves, per-node jobs and node states in depth:

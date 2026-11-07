@@ -23,6 +23,8 @@ namespace MirbadLLM.NodeRuntime.Runtimes;
 /// </param>
 public sealed record ContainerLaunchPlan(
     string ModelId,
+    RuntimeKind Runtime,
+    string HealthPath,
     string Image,
     string? ImageDigest,
     IReadOnlyList<string> Cmd,
@@ -143,7 +145,8 @@ public static partial class ContainerLaunchValidator
     /// the read-back always names the GPUs Docker was given).
     /// </summary>
     public static IReadOnlyList<string> DriverLabels { get; } =
-        [.. ContainerLabels.Reserved, ContainerLabels.Port, ImageDigestLabel, ImageLabel, EnvNamesLabel, SecretEnvNamesLabel, ContainerLabels.GpuUuids];
+        [.. ContainerLabels.Reserved, ContainerLabels.Port, ContainerLabels.Runtime, ContainerLabels.HealthPath,
+            ImageDigestLabel, ImageLabel, EnvNamesLabel, SecretEnvNamesLabel, ContainerLabels.GpuUuids];
 
     /// <summary>
     /// Validates <paramref name="spec"/> for <paramref name="modelId"/>. Throws <see cref="AgentException"/> 422
@@ -180,6 +183,25 @@ public static partial class ContainerLaunchValidator
         }
 
         CheckImageDigest(spec.Image, spec.ImageDigest, options);
+        if (spec.Runtime == RuntimeKind.Nim)
+        {
+            if (spec.ImageDigest is null)
+            {
+                throw Rejected("NIM requires an approved image digest");
+            }
+
+            string repository = Repository(spec.Image);
+            bool approved = options.ApprovedImages.Any(entry =>
+            {
+                int separator = entry.IndexOf('@', StringComparison.Ordinal);
+                return separator > 0 && string.Equals(entry[..separator], repository, StringComparison.Ordinal) &&
+                    string.Equals(entry[(separator + 1)..], spec.ImageDigest, StringComparison.Ordinal);
+            });
+            if (!approved)
+            {
+                throw Rejected($"NIM image '{spec.Image}' with digest '{spec.ImageDigest}' is not approved on this node");
+            }
+        }
 
         if (spec.Executable is not null)
         {
@@ -200,9 +222,15 @@ public static partial class ContainerLaunchValidator
 
         var gpuUuids = CheckGpuSelection(spec.Gpus);
 
-        if (!string.Equals(spec.HealthPath, "/health", StringComparison.Ordinal))
+        string approvedHealthPath = spec.Runtime switch
         {
-            throw Rejected("the health path is fixed to /health");
+            RuntimeKind.Vllm or RuntimeKind.LlamaCpp or RuntimeKind.Sglang => "/health",
+            RuntimeKind.Nim => "/v1/health/ready",
+            _ => throw Rejected($"runtime '{spec.Runtime}' is not approved for container delivery"),
+        };
+        if (!string.Equals(spec.HealthPath, approvedHealthPath, StringComparison.Ordinal))
+        {
+            throw Rejected($"the health path for {spec.Runtime} is fixed to {approvedHealthPath}");
         }
 
         foreach (string key in spec.Labels.Keys)
@@ -216,6 +244,8 @@ public static partial class ContainerLaunchValidator
 
         return new ContainerLaunchPlan(
             modelId,
+            spec.Runtime,
+            approvedHealthPath,
             spec.Image,
             spec.ImageDigest,
             [.. spec.Argv],

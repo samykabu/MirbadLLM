@@ -258,6 +258,8 @@ public sealed class P3ContractTests
             Assert.Equal("\"huggingface\"", JsonSerializer.Serialize(ModelSourceKind.HuggingFace, options));
             Assert.Equal("\"layer\"", JsonSerializer.Serialize(LlamaCppSplitMode.Layer, options));
             Assert.Equal("\"none\"", JsonSerializer.Serialize(LlamaCppSplitMode.None, options));
+            Assert.Equal("\"sglang\"", JsonSerializer.Serialize(RuntimeKind.Sglang, options));
+            Assert.Equal("\"nim\"", JsonSerializer.Serialize(RuntimeKind.Nim, options));
         }
     }
 
@@ -273,7 +275,8 @@ public sealed class P3ContractTests
         // macOS Phase 3: the flags only a Mac reports are a list of their own, disjoint from the phases'.
         Assert.Empty(AgentFeatures.MacOS.Intersect(AgentFeatures.P1.Concat(AgentFeatures.P2).Concat(AgentFeatures.P3), StringComparer.Ordinal));
         Assert.Equal(["runtime.mlx.process", "services.launchd"], AgentFeatures.MacOS);
-        Assert.Equal(all.Order(StringComparer.Ordinal), AgentFeatures.P1.Concat(AgentFeatures.P2).Concat(AgentFeatures.P3).Concat(AgentFeatures.MacOS).Concat(AgentFeatures.Updates).Order(StringComparer.Ordinal));
+        Assert.Equal(all.Order(StringComparer.Ordinal), AgentFeatures.P1.Concat(AgentFeatures.P2).Concat(AgentFeatures.P3)
+            .Concat(AgentFeatures.RuntimeExpansion).Concat(AgentFeatures.MacOS).Concat(AgentFeatures.Updates).Order(StringComparer.Ordinal));
         Assert.Equal(
             ["admission.gpu-budgets", "downloads.hf-native", "downloads.ollama", "gguf.inspect", "runtime.llamacpp.process", "services.scm"],
             AgentFeatures.P3Reported.Order(StringComparer.Ordinal));

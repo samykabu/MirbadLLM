@@ -103,8 +103,9 @@ hosted service.
 - **One OpenAI-compatible endpoint.** `/v1/models` lists every model on every node. Every other `/v1` path the
   runtime supports (chat completions, completions, embeddings), streaming included, is proxied to the node that
   serves the model named in the request.
-- **Three runtimes, three operating systems.** vLLM in Docker containers on Linux (including the DGX Spark),
-  llama.cpp as a native process on Windows and macOS (Metal), and MLX (`mlx_lm.server`) on Apple Silicon.
+- **Runtimes follow node capabilities.** Linux and DGX agents run vLLM, llama.cpp and SGLang containers, with NIM only
+  when explicitly enabled and digest-approved. Windows and macOS keep native llama.cpp, and Apple Silicon also runs MLX
+  (`mlx_lm.server`). SGLang/NIM on Windows require a separately enrolled Linux agent in WSL2, not native-agent control.
 - **Models from Hugging Face.** Download a repository or pick a single GGUF variant; the agent downloads on its own
   node, reads the GGUF header and estimates the memory a model needs. Saved Hugging Face tokens are picked by name.
 - **Memory admission and placement.** Every model has a memory budget. A start is refused with a reason when the

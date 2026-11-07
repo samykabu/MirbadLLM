@@ -296,6 +296,7 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
         return new LaunchConfig
         {
             Kind = LaunchDelivery.Container,
+            Runtime = ReadRuntime(container.Labels),
             // The spec's reference (a tag) when the container was created from repo@digest, so the master's
             // ModelConfigHash over image + Cmd recomputes unchanged; else what Docker recorded (today's containers).
             Image = container.Labels.GetValueOrDefault(ContainerLaunchValidator.ImageLabel) ?? launch.Image,
@@ -558,6 +559,12 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
         labels[ContainerLabels.Port] = hostPort.ToString(CultureInfo.InvariantCulture);
         labels[ContainerLabels.Node] = _options.NodeId;
         labels[ContainerLabels.Operation] = launch.OperationId;
+        if (plan.Runtime != RuntimeKind.Vllm)
+        {
+            labels[ContainerLabels.Runtime] = RuntimeName(plan.Runtime);
+            labels[ContainerLabels.HealthPath] = plan.HealthPath;
+        }
+
         if (plan.ImageDigest is not null)
         {
             labels[ContainerLaunchValidator.ImageDigestLabel] = plan.ImageDigest;
@@ -663,7 +670,7 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
         switch (container.State)
         {
             case "running":
-                var running = await ProbeHealthAsync(modelId, hostPort, ct).ConfigureAwait(false);
+                var running = await ProbeHealthAsync(modelId, hostPort, container.Labels, ct).ConfigureAwait(false);
                 if (running == ModelState.Starting)
                 {
                     int restarts = await RestartCountAsync(container.Id, ct).ConfigureAwait(false);
@@ -744,10 +751,27 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
             ExecutionFingerprint = labels.GetValueOrDefault(ContainerLabels.ExecutionFingerprint),
             Tuning = labels.TryGetValue(ContainerLabels.Tuning, out string? tuning) && tuning == "1",
             OperationId = labels.GetValueOrDefault(ContainerLabels.Operation),
-            Runtime = RuntimeKind.Vllm,
+            Runtime = ReadRuntime(labels),
             Delivery = LaunchDelivery.Container,
         };
     }
+
+    private static string RuntimeName(RuntimeKind runtime) => runtime switch
+    {
+        RuntimeKind.LlamaCpp => "llamacpp",
+        RuntimeKind.Sglang => "sglang",
+        RuntimeKind.Nim => "nim",
+        _ => "vllm",
+    };
+
+    private static RuntimeKind ReadRuntime(IReadOnlyDictionary<string, string> labels) =>
+        labels.GetValueOrDefault(ContainerLabels.Runtime) switch
+        {
+            "llamacpp" => RuntimeKind.LlamaCpp,
+            "sglang" => RuntimeKind.Sglang,
+            "nim" => RuntimeKind.Nim,
+            _ => RuntimeKind.Vllm,
+        };
 
     private Uri? UpstreamUri(string modelId, int? hostPort)
     {
@@ -759,7 +783,8 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
         return hostPort is { } port ? new Uri($"http://{_options.UpstreamHost}:{port.ToString(CultureInfo.InvariantCulture)}/") : null;
     }
 
-    private async Task<ModelState> ProbeHealthAsync(string modelId, int? hostPort, CancellationToken ct)
+    private async Task<ModelState> ProbeHealthAsync(
+        string modelId, int? hostPort, IReadOnlyDictionary<string, string> labels, CancellationToken ct)
     {
         var uri = UpstreamUri(modelId, hostPort);
         if (uri is null)
@@ -771,7 +796,8 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(3));
-            using var response = await _upstreamHttp.GetAsync(new Uri(uri, "health"), cts.Token).ConfigureAwait(false);
+            string healthPath = labels.GetValueOrDefault(ContainerLabels.HealthPath) ?? "/health";
+            using var response = await _upstreamHttp.GetAsync(new Uri(uri, healthPath.TrimStart('/')), cts.Token).ConfigureAwait(false);
             return response.IsSuccessStatusCode ? ModelState.Ready : ModelState.Starting;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or OperationCanceledException)

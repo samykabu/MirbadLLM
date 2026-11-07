@@ -216,6 +216,8 @@ public static class ExecutionFingerprint
         RuntimeKind.Vllm => "vllm",
         RuntimeKind.LlamaCpp => "llamacpp",
         RuntimeKind.Mlx => "mlx",
+        RuntimeKind.Sglang => "sglang",
+        RuntimeKind.Nim => "nim",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown runtime kind."),
     };
 

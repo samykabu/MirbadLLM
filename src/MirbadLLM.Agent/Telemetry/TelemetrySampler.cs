@@ -187,9 +187,9 @@ public sealed partial class TelemetrySampler(
 
             foreach (var instance in instances)
             {
-                // mlx_lm.server has no /metrics (spike S4): an MLX model is not scraped, so Monitoring shows "—" for its
-                // engine figures instead of a scrape failure every interval.
-                if (instance.State == ModelState.Ready && instance.Runtime != RuntimeKind.Mlx)
+                // Only vLLM and llama.cpp have confirmed metric-family mappings. Other runtimes intentionally leave
+                // engine KPIs absent rather than treating similarly named vendor metrics as equivalent.
+                if (instance.State == ModelState.Ready && instance.Runtime is RuntimeKind.Vllm or RuntimeKind.LlamaCpp)
                 {
                     ready.TryAdd(instance.ModelId, driver);
                 }
