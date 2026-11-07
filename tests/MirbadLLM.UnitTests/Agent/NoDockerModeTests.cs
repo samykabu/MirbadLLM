@@ -103,8 +103,15 @@ public sealed class NoDockerModeTests : IDisposable
         Assert.True(gated.Calls > 0);
         Assert.Contains(AgentFeatures.RuntimeVllmContainer, withSwitch.Features);
         Assert.Contains(AgentFeatures.DownloadsHfContainer, withSwitch.Features);
-        var vllm = Assert.Single(withSwitch.Runtimes);
-        Assert.True(vllm.Available);
+        RuntimeKind[] expected = OperatingSystem.IsLinux()
+            ? [RuntimeKind.Vllm, RuntimeKind.LlamaCpp, RuntimeKind.Sglang]
+            : [RuntimeKind.Vllm];
+        Assert.Equal(expected, withSwitch.Runtimes.Select(runtime => runtime.Kind));
+        Assert.All(withSwitch.Runtimes, runtime =>
+        {
+            Assert.Equal(LaunchDelivery.Container, runtime.Delivery);
+            Assert.True(runtime.Available);
+        });
         Assert.Equal(
             JsonSerializer.Serialize(without, AgentJson.Options),
             JsonSerializer.Serialize(withSwitch, AgentJson.Options));
