@@ -277,6 +277,56 @@ public sealed class McpEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task Deploy_StoresExtraArgs_WhereEachRuntimeReadsThem_AndRefusesReservedFlags()
+    {
+        using var client = Client();
+        string key = await NodeReporting(Capabilities(Vllm) with
+        {
+            Runtimes =
+            [
+                Vllm,
+                LlamaCppProcess,
+                new RuntimeCapability { Kind = RuntimeKind.Mlx, Delivery = LaunchDelivery.Process, Available = true },
+                new RuntimeCapability { Kind = RuntimeKind.Sglang, Delivery = LaunchDelivery.Container, Available = true },
+                new RuntimeCapability { Kind = RuntimeKind.Nim, Delivery = LaunchDelivery.Container, Available = true },
+            ],
+        });
+        string[] args = ["--some-flag", "2"];
+        const string Digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+        await Deploy("a-vllm", "vllm");
+        await Deploy("a-sglang", "sglang", image: "sglang:1");
+        await Deploy("a-nim", "nim", image: "nim:1", imageDigest: Digest);
+        await Deploy("a-llama", "llamacpp", modelFile: "m.gguf");
+        Assert.Equal(args, (await Models().GetAsync("a-vllm"))!.ExtraArgs);
+        Assert.Equal(args, (await Models().GetAsync("a-sglang"))!.Container!.ExtraArgs);
+        Assert.Equal(args, (await Models().GetAsync("a-nim"))!.Container!.ExtraArgs);
+        Assert.Equal(args, (await Models().GetAsync("a-llama"))!.LlamaCpp!.ExtraArgs);
+
+        // MLX accepts only a fixed list of flags (MlxFlags.AllowedInExtraArgs).
+        args = ["--temp", "0.5"];
+        await Deploy("a-mlx", "mlx");
+        Assert.Equal(args, (await Models().GetAsync("a-mlx"))!.Mlx!.ExtraArgs);
+
+        string reserved = await CallTool(client, key, "mirbad_deploy_model", new
+        {
+            modelId = "reserved", servedName = "r", repoId = "org/r", folder = "r", nodeId = "dgx", runtime = "sglang", image = "sglang:1", extraArgs = ReservedPort,
+        });
+        Assert.Contains("\"isError\":true", reserved, StringComparison.Ordinal);
+        Assert.Contains("--port", reserved, StringComparison.Ordinal);
+        Assert.Null(await Models().GetAsync("reserved"));
+
+        async Task Deploy(string id, string runtime, string? image = null, string? imageDigest = null, string? modelFile = null)
+        {
+            string result = await CallTool(client, key, "mirbad_deploy_model", new
+            {
+                modelId = id, servedName = id, repoId = "org/" + id, folder = id, nodeId = "dgx", runtime, image, imageDigest, modelFile, extraArgs = args,
+            });
+            Assert.DoesNotContain("\"isError\":true", result, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task PlanningLimits_ReachTheCallingModel_OnConnectAndInTheDeployAnswer()
     {
         using var client = Client();
@@ -332,6 +382,7 @@ public sealed class McpEndpointTests : IDisposable
     }
 
     private static readonly int[] FirstGpu = [0];
+    private static readonly string[] ReservedPort = ["--port", "9000"];
     private static readonly RuntimeCapability Vllm = new() { Kind = RuntimeKind.Vllm, Delivery = LaunchDelivery.Container, Available = true };
     private static readonly RuntimeCapability LlamaCppProcess = new() { Kind = RuntimeKind.LlamaCpp, Delivery = LaunchDelivery.Process, Available = true };
 

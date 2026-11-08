@@ -6,6 +6,7 @@ private development history.
 
 ## Unreleased
 
+- MCP: `mirbad_deploy_model` accepts `extraArgs`, stored as the container, llama.cpp, MLX or vLLM extra arguments
 - Moving a model pulls the image its runtime actually uses, and a native-process model no longer waits on a node without Docker
 - SGLang and NIM settings are checked on every save, and a flag with its value on one line of Extra args now works
 - `PUT /api/models` keeps `mlx`, `container` and `speculative` when the body leaves them out
