@@ -134,7 +134,11 @@ internal static class RemoteAgentErrors
                 Reason = NodeUnavailableReason.NotServing,
                 NodeId = nodeId,
             },
-            KeyNotFoundException missing => new InvalidOperationException($"Node {nodeId} has no agent client: {missing.Message}", missing),
+            KeyNotFoundException missing => new NodeUnavailableException($"Node {nodeId} has no agent client: {missing.Message}", missing)
+            {
+                Reason = NodeUnavailableReason.NodeNotRegistered,
+                NodeId = nodeId,
+            },
             _ => exception,
         };
     }

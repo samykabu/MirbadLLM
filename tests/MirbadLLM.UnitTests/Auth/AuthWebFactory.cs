@@ -143,6 +143,15 @@ public sealed class AuthWebFactory : WebApplicationFactory<Program>
             || (declaring?.StartsWith("MirbadLLM", StringComparison.Ordinal) ?? false);
     }
 
+    /// <summary>Stops the agent, so the master sees a node that no longer answers.</summary>
+    internal async Task StopAgentAsync()
+    {
+        if (Interlocked.Exchange(ref _agent, null) is { } agent)
+        {
+            await agent.DisposeAsync();
+        }
+    }
+
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);

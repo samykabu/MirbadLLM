@@ -241,7 +241,11 @@ url = "http://HOST:8080/mcp"
 bearer_token_env_var = "MIRBAD_MCP_KEY"
 ```
 
-Claude Code: `claude mcp add --transport http mirbad http://HOST:8080/mcp --header "Authorization: Bearer $MIRBAD_MCP_KEY"`. Claude Desktop users should use **Settings → Connectors**; no undocumented JSON bearer-header form is recommended. Plain HTTP is suitable only on a trusted LAN. Put a TLS reverse proxy in front and use an HTTPS URL for wider access. Never place keys in URLs or source control.
+Claude Code: `claude mcp add --transport http --scope user mirbad http://HOST:8080/mcp --header 'Authorization: Bearer ${MIRBAD_MCP_KEY}'`. The single quotes save a reference to the variable, not the key.
+
+Claude Desktop connectors connect from Anthropic's cloud, so they need a public HTTPS URL. On a private network, use the `mcp-remote` bridge. **Access → MCP** has the steps for each client, the full tool list and a prompt that asks your agent to configure itself, all filled in with your address.
+
+Plain HTTP is suitable only on a trusted LAN. Put a TLS reverse proxy in front and use an HTTPS URL for wider access. Never place keys in URLs or source control.
 
 ## Configuration
 

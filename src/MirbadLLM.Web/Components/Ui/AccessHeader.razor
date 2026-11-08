@@ -1,6 +1,6 @@
 @namespace MirbadLLM.Web.Components.Ui
-@* The shared header of the Access area: one job, handing out access, split over three pages. Connect (/access) says
-   where clients point and what to paste; API keys (/access/keys) issues and revokes the keys they send; Tokens (/access/tokens) keeps the outside credentials
+@* The shared header of the Access area: one job, handing out access, split over four pages. Connect (/access) says
+   where clients point and what to paste; MCP (/access/mcp) documents the MCP tools and client setup; API keys (/access/keys) issues and revokes the keys they send; Tokens (/access/tokens) keeps the outside credentials
    (Hugging Face) that downloads, moves and restores pick by name. The tabs are
    links (each is its own page and route), drawn as Line tabs with aria-current on the page you are on. *@
 <PageHeader Title="Access">
@@ -10,6 +10,9 @@
 <nav class="access-tabs" aria-label="Access" data-testid="access-tabs">
     <a href="access" aria-current="@(Current == AccessPage.Connect ? "page" : null)" data-testid="access-tab-connect">
         <Icon Name="plug" /> Connect
+    </a>
+    <a href="access/mcp" aria-current="@(Current == AccessPage.Mcp ? "page" : null)" data-testid="access-tab-mcp">
+        <Icon Name="terminal" /> MCP
     </a>
     <a href="access/keys" aria-current="@(Current == AccessPage.Keys ? "page" : null)" data-testid="access-tab-keys" data-tour="access-keys-tab">
         <Icon Name="key" /> API keys

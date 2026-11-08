@@ -6,6 +6,9 @@ private development history.
 
 ## Unreleased
 
+- Access > MCP: a new tab lists every MCP tool, gives setup steps for Codex, Claude Code and Claude Desktop, and has a prompt that asks an agent to configure itself; the Remote MCP panel moved here from Connect
+- Fix MCP tool output schemas so Claude Code can load the tools; `structuredContent` now holds the result directly instead of under a `result` property
+- MCP health and download tools report a node that can't be reached instead of failing, and fleet health counts downloads on every node; the downloads API answers 503, not 500, for a node with no agent connection
 - Access > API keys: **Add key** opens the create form in a dialog that also reveals the new key once; the keys table spans the page, and the VS Code block (also on Connect) is gone
 - Removed the fleet level, XP and quests from the Overview; the fleet counters and service levels stay
 - Rename SparkServe to MirbadLLM everywhere; a deployment, its backups and its agents from before the rename upgrade in place (docs/setup.md, "Upgrading from a pre-rename install")

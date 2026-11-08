@@ -59,7 +59,9 @@ property.
 
 The master exposes a stateless Streamable HTTP endpoint at `/mcp`. It has no environment-variable key setting: create revocable **MCP Read** or **MCP Operator** keys in **Access → API keys**. Inference, metrics, and browser credentials do not authenticate MCP. Requests are limited to 256 KiB and 120 per minute per server instance; tool pagination is capped at 100 items.
 
-Use `bearer_token_env_var = "MIRBAD_MCP_KEY"` in Codex rather than static headers. For Claude Code, pass `--transport http` and an `Authorization: Bearer $MIRBAD_MCP_KEY` header expanded by the shell. Claude Desktop users should configure a supported remote connector in its UI; do not invent or persist an undocumented JSON header. Never put credentials in query strings.
+**Access → MCP** lists every tool and gives setup steps filled in with your address, plus a prompt that asks an agent to configure itself.
+
+Use `bearer_token_env_var = "MIRBAD_MCP_KEY"` in Codex rather than static headers. For Claude Code, pass `--transport http` and a single-quoted `'Authorization: Bearer ${MIRBAD_MCP_KEY}'` header, so the saved configuration holds a reference to the variable, not the key. Claude Desktop connectors connect from Anthropic's cloud, so they need a public HTTPS URL and a `Bearer` value under **Request headers**, which is in beta. On a private network, use the `mcp-remote` community bridge in `claude_desktop_config.json`; that file then holds the key as plain text. Never put credentials in query strings.
 
 MirbadLLM serves plain HTTP for trusted LAN deployment. Bearer credentials are visible to anyone able to intercept that traffic. For access beyond a trusted LAN, terminate TLS at a reverse proxy, restrict source networks, and configure clients with the resulting HTTPS `/mcp` URL.
 

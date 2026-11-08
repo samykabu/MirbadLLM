@@ -1,0 +1,284 @@
+@page "/access/mcp"
+@rendermode InteractiveServer
+@using MirbadLLM.Web.Mcp
+@inject IJSRuntime JS
+@inject NavigationManager Nav
+
+<PageTitle>MCP · Access · MirbadLLM</PageTitle>
+
+<AccessHeader Current="AccessPage.Mcp" />
+
+<div class="mcp-layout">
+<div class="mcp-column">
+    <section class="panel panel-body" aria-labelledby="mcp-endpoint-title">
+        <h2 id="mcp-endpoint-title" class="panel-label">Endpoint</h2>
+        <dl class="kv kv--wide">
+            <dt>URL</dt>
+            <dd class="copy-row">
+                <code data-testid="mcp-url">@foreach (var part in Connect.WordBreakParts(_mcpUrl)) { @part.Text if (part.BreakAfter) { <wbr /> } }</code>
+                <button type="button" class="btn btn-sm btn-ghost" aria-label="Copy MCP URL" @onclick="@(() => CopyAsync(_mcpUrl, "url"))">
+                    <Icon Name="@(_copied == "url" ? "check" : "copy")" /> @(_copied == "url" ? "Copied" : "Copy")
+                </button>
+            </dd>
+            <dt>Transport</dt>
+            <dd>Streamable HTTP, stateless</dd>
+            <dt>Sign-in</dt>
+            <dd>Send <code>Authorization: Bearer &lt;key&gt;</code> with an MCP key. Inference keys, metrics keys and the admin login do not work here.</dd>
+            <dt>Limits</dt>
+            <dd>256 KiB per request, 120 requests per minute, 100 items per page</dd>
+        </dl>
+    </section>
+
+    <section class="panel panel-body" aria-labelledby="mcp-keys-title">
+        <h2 id="mcp-keys-title" class="panel-label">Choose a key</h2>
+        <dl class="kv kv--wide">
+            <dt>MCP Read</dt>
+            <dd>Looks at nodes, models, downloads, jobs and results. Start with this one.</dd>
+            <dt>MCP Operator</dt>
+            <dd>Also deploys, starts, stops and deletes models, and runs benchmarks and tuning.</dd>
+        </dl>
+        <p class="field-hint mcp-note">Create either one on <a href="access/keys">API keys</a>. A key is shown once and can be revoked there.</p>
+    </section>
+
+    <section class="panel panel-body" aria-labelledby="mcp-prompt-title">
+        <h2 id="mcp-prompt-title" class="panel-label">Ask your agent to set it up</h2>
+        <p class="mcp-note">Paste this into Codex, Claude Code or Claude Desktop. For Codex and Claude Code, set <code>MIRBAD_MCP_KEY</code> first. The agent adds the server and checks the connection without seeing your key.</p>
+        @Snippet("prompt", "Setup prompt", PromptText())
+    </section>
+</div>
+
+<section class="panel panel-body mcp-column" aria-labelledby="mcp-clients-title">
+    <h2 id="mcp-clients-title" class="panel-label">Set up a client</h2>
+    @* One tab per client (?mcp-client=codex|claude-code|claude-desktop), like the client tabs on Connect. *@
+    <Tabs Items="ClientTabs" SelectedId="@_client" SelectedIdChanged="id => _client = id" QueryKey="mcp-client"
+          AriaLabel="MCP client setup" TestId="mcp-client-tabs">
+        <ChildContent Context="client">
+            @switch (client)
+            {
+                case "claude-code":
+                    <ol class="snippet-steps mcp-steps">
+                        <li>Set the environment variable, then open a new terminal.</li>
+                    </ol>
+                    @Snippet("env", "Environment variable", EnvText)
+                    <ol class="snippet-steps mcp-steps" start="2">
+                        <li>Add the server. The single quotes save a reference to the variable, not your key, and work in bash, zsh and PowerShell.</li>
+                    </ol>
+                    @Snippet("claude-code", "Claude Code command", ClaudeCodeText())
+                    <ol class="snippet-steps mcp-steps" start="3">
+                        <li>Run <code>claude mcp list</code>. <code>mirbad</code> should show as connected. Inside Claude Code, <code>/mcp</code> shows the same status.</li>
+                    </ol>
+                    break;
+                case "claude-desktop":
+                    <p class="callout callout--warning mcp-note"><span>Claude Desktop connectors connect from Anthropic's cloud, not from your computer. They cannot reach a private address or a plain HTTP URL, so choose the path that matches your network.</span></p>
+                    <h3 class="mcp-subhead">On a private network</h3>
+                    <ol class="snippet-steps mcp-steps">
+                        <li>Install <a href="https://nodejs.org/" target="_blank" rel="noopener">Node.js</a>. Claude Desktop uses it to run <code>mcp-remote</code>, a community bridge not made by Anthropic or MirbadLLM. It runs on your computer and holds your key.</li>
+                        <li>In Claude Desktop, open <strong>Settings → Developer → Edit Config</strong>. The file is <code>~/Library/Application Support/Claude/claude_desktop_config.json</code> on macOS and <code>%APPDATA%\Claude\claude_desktop_config.json</code> on Windows.</li>
+                        <li>Add this <code>mirbad</code> entry under <code>mcpServers</code>, keeping any servers already there, and replace the placeholder with your key.</li>
+                    </ol>
+                    @Snippet("claude-desktop", "claude_desktop_config.json", DesktopText())
+                    <ol class="snippet-steps mcp-steps" start="4">
+                        <li>Quit Claude Desktop completely and reopen it, then ask a new chat to list the <code>mirbad</code> nodes.</li>
+                    </ol>
+                    <p class="field-hint mcp-note">This file stores the key as plain text. Keep it out of synced folders and version control.</p>
+                    <h3 class="mcp-subhead">On a public HTTPS address</h3>
+                    <ol class="snippet-steps mcp-steps">
+                        <li>Put a TLS reverse proxy in front of MirbadLLM so <code>/mcp</code> is reachable from the internet.</li>
+                        <li>Go to <strong>Customize → Connectors → Add custom connector</strong> and enter the HTTPS <code>/mcp</code> URL. On Team and Enterprise plans, an Owner adds it under <strong>Organization settings → Connectors</strong>.</li>
+                        <li>Under <strong>Authentication</strong>, choose <strong>No sign-in</strong>.</li>
+                        <li>Under <strong>Request headers</strong>, add <code>authorization</code> with the value <code>Bearer &lt;your MCP key&gt;</code>, and mark it Required.</li>
+                    </ol>
+                    <p class="field-hint mcp-note">Request headers are in beta for a limited set of organizations. If you don't see that section, use the private network path. <a href="https://claude.com/docs/connectors/custom" target="_blank" rel="noopener">Connector docs</a></p>
+                    break;
+                default:
+                    <ol class="snippet-steps mcp-steps">
+                        <li>Set the environment variable, then open a new terminal.</li>
+                    </ol>
+                    @Snippet("env", "Environment variable", EnvText)
+                    <ol class="snippet-steps mcp-steps" start="2">
+                        <li>Add this to <code>~/.codex/config.toml</code>. The Codex CLI and IDE extension share this file, and it holds only the variable's name.</li>
+                    </ol>
+                    @Snippet("codex", "config.toml", CodexText())
+                    <ol class="snippet-steps mcp-steps" start="3">
+                        <li>Run <code>codex mcp list</code>. <code>mirbad</code> should be listed. Inside Codex, <code>/mcp</code> shows its tools.</li>
+                    </ol>
+                    break;
+            }
+        </ChildContent>
+    </Tabs>
+    <p class="callout callout--warning mcp-note"><span>Plain HTTP exposes MCP keys to anyone who can intercept the traffic. Use it only on a trusted LAN. For wider access, put a TLS reverse proxy in front and use its HTTPS <code>/mcp</code> URL. Never put a key in a URL.</span></p>
+    <p class="visually-hidden" role="status">@(_copied is null ? "" : "Copied to the clipboard")</p>
+</section>
+</div>
+
+<section class="section" aria-labelledby="mcp-tools-title">
+    <div class="section-head">
+        <h2 id="mcp-tools-title">Tools</h2>
+        <span class="section-note"><span class="num" data-testid="mcp-tool-count">@McpToolCatalog.All.Count</span> tools. Both key types can list them all, but an MCP Read key gets an error from Operator tools and nothing changes.</span>
+    </div>
+    <div class="panel panel--scroll-x">
+        <table class="data-table data-table--stack data-table--stack-wide" data-testid="mcp-tools">
+            <caption class="visually-hidden">MCP tools</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Tool</th>
+                    <th scope="col">What it does</th>
+                    <th scope="col">Arguments</th>
+                    <th scope="col">Key</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var tool in McpToolCatalog.All)
+                {
+                    <tr data-testid="@($"mcp-tool-{tool.Name}")">
+                        <td class="col-primary"><code class="mcp-tool-name">@tool.Name</code></td>
+                        <td data-label="What it does">@tool.Description</td>
+                        <td data-label="Arguments">
+                            @if (tool.Arguments.Count == 0)
+                            {
+                                <span class="muted">None</span>
+                            }
+                            else
+                            {
+                                <code class="mcp-tool-args">@string.Join(", ", tool.Arguments)</code>
+                            }
+                        </td>
+                        <td data-label="Key">
+                            <span class="tag-chip">@(tool.ReadOnly ? "MCP Read" : "MCP Operator")</span>
+                            @if (tool.Destructive)
+                            {
+                                <span class="tag-chip">Destructive</span>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="field-hint mcp-note">A <code>?</code> marks an optional argument. Long work such as a download, start, benchmark or tuning run returns straight away; poll the matching list or get tool for progress.</p>
+</section>
+
+@code {
+    // Pinned because this package holds the key: a later release should be reviewed before the page offers it.
+    private const string McpRemotePackage = "mcp-remote@0.1.38";
+
+    private const string EnvText = """
+        # macOS and Linux: add to ~/.zshrc or ~/.bashrc
+        export MIRBAD_MCP_KEY="<your MCP key>"
+
+        # Windows PowerShell
+        [Environment]::SetEnvironmentVariable("MIRBAD_MCP_KEY", "<your MCP key>", "User")
+        """;
+
+    private static readonly IReadOnlyList<TabItem> ClientTabs =
+    [
+        new("codex", "Codex"),
+        new("claude-code", "Claude Code"),
+        new("claude-desktop", "Claude Desktop"),
+    ];
+
+    [CascadingParameter]
+    private HttpContext? HttpContext { get; set; }
+
+    private string _mcpUrl = "/mcp";
+    private string _client = "codex";
+    private string? _copied;
+    private IJSObjectReference? _module;
+
+    protected override void OnInitialized()
+    {
+        // Prerender has the HttpContext; the interactive render (no HttpContext) uses the page's own origin.
+        string origin = HttpContext is not null
+            ? $"{HttpContext.Request.Scheme}://{HttpContext.Request.Host}"
+            : new Uri(Nav.BaseUri).GetLeftPart(UriPartial.Authority);
+        _mcpUrl = $"{origin}/mcp";
+    }
+
+    private RenderFragment Snippet(string id, string label, string text) =>
+        @<div class="snippet mcp-snippet">
+            <div class="snippet-head">
+                <h3>@label</h3>
+                <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="@($"Copy {label}")" data-testid="@($"copy-mcp-{id}")" @onclick="@(() => CopyAsync(text, id))">
+                    <Icon Name="@(_copied == id ? "check" : "copy")" /> @(_copied == id ? "Copied" : "Copy")
+                </button>
+            </div>
+            <pre tabindex="0" aria-label="@label" data-testid="@($"mcp-{id}-snippet")">@foreach (var part in Connect.WordBreakParts(text)) { @part.Text if (part.BreakAfter) { <wbr /> } }</pre>
+        </div>;
+
+    private string CodexText() => $"""
+        [mcp_servers.mirbad]
+        url = "{_mcpUrl}"
+        bearer_token_env_var = "MIRBAD_MCP_KEY"
+        """;
+
+    private string ClaudeCodeText() =>
+        $"claude mcp add --transport http --scope user mirbad {_mcpUrl} --header 'Authorization: Bearer ${{MIRBAD_MCP_KEY}}'";
+
+    // mcp-remote refuses plain HTTP without --allow-http. The header value lives in env because Claude Desktop on
+    // Windows does not escape spaces inside args.
+    private string DesktopText()
+    {
+        string allowHttp = _mcpUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ? "\n        \"--allow-http\"," : "";
+        return $$"""
+            {
+              "mcpServers": {
+                "mirbad": {
+                  "command": "npx",
+                  "args": [
+                    "-y",
+                    "{{McpRemotePackage}}",
+                    "{{_mcpUrl}}",{{allowHttp}}
+                    "--transport",
+                    "http-only",
+                    "--header",
+                    "Authorization:${MIRBAD_AUTH}"
+                  ],
+                  "env": {
+                    "MIRBAD_AUTH": "Bearer <your MCP key>"
+                  }
+                }
+              }
+            }
+            """;
+    }
+
+    private string PromptText()
+    {
+        string allowHttp = _mcpUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ? " --allow-http" : "";
+        return $$"""
+            Set up the MirbadLLM MCP server in this client.
+
+            Server name: mirbad
+            URL: {{_mcpUrl}}
+            Transport: Streamable HTTP
+            Auth header: Authorization: Bearer <key>
+            Key: in the environment variable MIRBAD_MCP_KEY
+
+            Rules:
+            1. Use this client's own documented way to add an MCP server. Check its --help or official docs if you are unsure.
+            2. Never ask me to paste the key into this chat, never print it, and never put it in a URL or a file under version control. Save a reference to the environment variable, not its value, wherever the client supports that.
+            3. Unless this client is Claude Desktop, check that MIRBAD_MCP_KEY is set without showing its value. If it is not set, stop and tell me how to set it.
+            4. Keep every other MCP server and setting. Show me the change before you save it.
+            5. If this client is Claude Desktop, its connectors connect from Anthropic's cloud and cannot reach a private address or a plain HTTP URL. For such a URL, add a local server to claude_desktop_config.json that runs: npx -y {{McpRemotePackage}} {{_mcpUrl}}{{allowHttp}} --transport http-only --header Authorization:${MIRBAD_AUTH}. Set MIRBAD_AUTH in that entry's env block to "Bearer <your MCP key>" and leave that placeholder for me to replace myself.
+            6. If you cannot edit this client's configuration, give me the exact steps instead.
+
+            Then test it. Reconnect the server, and tell me if the client must be restarted first. Call only mirbad_list_nodes. Do not call any other mirbad tool, because some of them deploy, stop or delete models. Report whether it connected and which nodes it lists.
+            """;
+    }
+
+    private async Task CopyAsync(string text, string target)
+    {
+        _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./interop.js");
+        bool ok = await _module.InvokeAsync<bool>("copyText", text);
+        _copied = ok ? target : null;
+        if (ok)
+        {
+            StateHasChanged();
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            if (_copied == target)
+            {
+                _copied = null;
+            }
+        }
+    }
+}

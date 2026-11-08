@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using MirbadLLM.Core;
 using MirbadLLM.Orchestration;
@@ -11,6 +12,7 @@ using ModelContextProtocol.Server;
 
 namespace MirbadLLM.Web.Mcp;
 
+// OutputSchemaType: a method returning object otherwise publishes a boolean subschema, and Claude Code then rejects all of tools/list.
 [McpServerToolType]
 public sealed partial class MirbadMcpTools(
     IModelRegistry models,
@@ -29,24 +31,49 @@ public sealed partial class MirbadMcpTools(
     private const int DefaultPageSize = 50;
     private const int MaximumPageSize = 100;
 
-    [McpServerTool(Name = "mirbad_get_fleet_health", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_get_fleet_health", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Summarize controller, node, model, download, and job health.")]
     public async Task<object> GetFleetHealth(CancellationToken ct)
     {
         var definitions = await models.ListAsync(ct).ConfigureAwait(false);
         var statuses = await runtime.ListStatusAsync(ct).ConfigureAwait(false);
-        var downloads = await downloader.ListAsync(ct).ConfigureAwait(false);
+        var live = nodeStatus.ListNodes();
+        var reads = await Task.WhenAll(live.Select(n => ReadDownloads(n, ct))).ConfigureAwait(false);
+        var downloads = reads.SelectMany(r => r.Downloads ?? []).ToList();
+        var unavailable = reads.Where(r => r.Downloads is null).Select(r => r.NodeId).ToList();
         return new
         {
-            status = nodeStatus.ListNodes().All(n => n.IsServing) ? "healthy" : "degraded",
-            nodes = nodeStatus.ListNodes(),
+            status = live.Count > 0 && unavailable.Count == 0 ? "healthy" : "degraded",
+            nodes = live,
             models = new { total = definitions.Count, ready = statuses.Count(s => s.State == ModelState.Ready) },
-            downloads = new { total = downloads.Count, active = downloads.Count(d => d.State is DownloadState.Downloading or DownloadState.Queued) },
+            downloads = new
+            {
+                total = downloads.Count,
+                active = downloads.Count(d => d.State is DownloadState.Downloading or DownloadState.Queued),
+                unavailableNodes = unavailable,
+            },
             jobs = new { running = jobs.Running.Count, limit = jobs.MaxConcurrent },
         };
     }
 
-    [McpServerTool(Name = "mirbad_list_nodes", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    // A health check has to answer while a node is down, so a node it can't read is reported instead of failing the call.
+    private async Task<(string NodeId, IReadOnlyList<DownloadStatus>? Downloads)> ReadDownloads(NodeLiveStatus node, CancellationToken ct)
+    {
+        if (!node.IsServing) return (node.NodeId, null);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(3));
+        try
+        {
+            var selected = DownloadApiEndpoints.DownloaderFor(services, downloader, new ApiNodeScope { NodeId = node.NodeId });
+            return (node.NodeId, await selected.ListAsync(timeout.Token).ConfigureAwait(false));
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException && !ct.IsCancellationRequested)
+        {
+            return (node.NodeId, null);
+        }
+    }
+
+    [McpServerTool(Name = "mirbad_list_nodes", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("List registered fleet nodes and their current live status.")]
     public async Task<object> ListNodes(int offset = 0, int limit = DefaultPageSize, CancellationToken ct = default)
     {
@@ -56,7 +83,7 @@ public sealed partial class MirbadMcpTools(
         return Page(items, offset, limit, registered.Count);
     }
 
-    [McpServerTool(Name = "mirbad_list_models", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_list_models", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("List registered models with current runtime state.")]
     public async Task<object> ListModels(int offset = 0, int limit = DefaultPageSize, CancellationToken ct = default)
     {
@@ -67,7 +94,7 @@ public sealed partial class MirbadMcpTools(
         return Page(items, offset, limit, definitions.Count);
     }
 
-    [McpServerTool(Name = "mirbad_get_model", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_get_model", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Get one registered model and its current runtime state.")]
     public async Task<object> GetModel([Description("Stable model id.")] string modelId, CancellationToken ct = default)
     {
@@ -75,28 +102,42 @@ public sealed partial class MirbadMcpTools(
         return new { model, status = await runtime.GetStatusAsync(modelId, ct).ConfigureAwait(false) };
     }
 
-    [McpServerTool(Name = "mirbad_list_downloads", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_list_downloads", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("List Hugging Face downloads on a selected node.")]
     public async Task<object> ListDownloads(string? nodeId = null, int offset = 0, int limit = DefaultPageSize, CancellationToken ct = default)
     {
         (offset, limit) = PageArgs(offset, limit);
         var selected = await Downloader(nodeId, ct).ConfigureAwait(false);
-        var all = await selected.Value.ListAsync(ct).ConfigureAwait(false);
-        return new { nodeId = selected.NodeId, page = Page(all.Skip(offset).Take(limit).ToList(), offset, limit, all.Count) };
+        try
+        {
+            var all = await selected.Value.ListAsync(ct).ConfigureAwait(false);
+            return new { nodeId = selected.NodeId, available = true, page = Page(all.Skip(offset).Take(limit).ToList(), offset, limit, all.Count) };
+        }
+        catch (NodeUnavailableException ex)
+        {
+            return new { nodeId = selected.NodeId, available = false, reason = ex.Message, page = Page<DownloadStatus>([], offset, limit, 0) };
+        }
     }
 
-    [McpServerTool(Name = "mirbad_get_download", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_get_download", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Get one download by its safe models-root folder name.")]
     public async Task<object> GetDownload(string folder, string? nodeId = null, CancellationToken ct = default)
     {
         ValidateFolder(folder);
         var selected = await Downloader(nodeId, ct).ConfigureAwait(false);
-        var status = await selected.Value.GetAsync(folder, ct).ConfigureAwait(false)
-            ?? throw new McpException($"Download '{folder}' was not found on node '{selected.NodeId}'.");
-        return new { nodeId = selected.NodeId, download = status };
+        try
+        {
+            var status = await selected.Value.GetAsync(folder, ct).ConfigureAwait(false)
+                ?? throw new McpException($"Download '{folder}' was not found on node '{selected.NodeId}'.");
+            return new { nodeId = selected.NodeId, download = status };
+        }
+        catch (NodeUnavailableException ex)
+        {
+            throw new McpException(ex.Message, ex);
+        }
     }
 
-    [McpServerTool(Name = "mirbad_list_jobs", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_list_jobs", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("List active benchmark and tuning jobs across nodes.")]
     public async Task<object> ListJobs(int offset = 0, int limit = DefaultPageSize, CancellationToken ct = default)
     {
@@ -105,7 +146,7 @@ public sealed partial class MirbadMcpTools(
         return Page(all.Skip(offset).Take(limit).ToList(), offset, limit, all.Count);
     }
 
-    [McpServerTool(Name = "mirbad_get_job", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_get_job", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Get an active job by job id.")]
     public object GetJob(string jobId)
     {
@@ -114,7 +155,7 @@ public sealed partial class MirbadMcpTools(
         return new { job };
     }
 
-    [McpServerTool(Name = "mirbad_list_benchmarks", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_list_benchmarks", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("List persisted benchmark runs for a model, newest first.")]
     public async Task<object> ListBenchmarks(string modelId, int offset = 0, int limit = DefaultPageSize, CancellationToken ct = default)
     {
@@ -124,7 +165,7 @@ public sealed partial class MirbadMcpTools(
         return Page(all.Skip(offset).Take(limit).ToList(), offset, limit, all.Count);
     }
 
-    [McpServerTool(Name = "mirbad_list_tuning_runs", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_list_tuning_runs", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("List persisted tuning runs for a model, newest first.")]
     public async Task<object> ListTuningRuns(string modelId, int offset = 0, int limit = DefaultPageSize, CancellationToken ct = default)
     {
@@ -134,7 +175,7 @@ public sealed partial class MirbadMcpTools(
         return Page(all.Skip(offset).Take(limit).ToList(), offset, limit, all.Count);
     }
 
-    [McpServerTool(Name = "mirbad_deploy_model", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_deploy_model", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Register a validated model and immediately start its Hugging Face download; returns without waiting for completion.")]
     public async Task<object> DeployModel(
         string modelId,
@@ -182,7 +223,7 @@ public sealed partial class MirbadMcpTools(
         }
     }
 
-    [McpServerTool(Name = "mirbad_start_model", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_start_model", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Start a registered model using existing placement, ownership, and admission checks.")]
     public async Task<object> StartModel(string modelId, bool force = false, CancellationToken ct = default)
     {
@@ -192,7 +233,7 @@ public sealed partial class MirbadMcpTools(
         return new { modelId, status, nextAction = "Poll mirbad_get_model until the state is Ready." };
     }
 
-    [McpServerTool(Name = "mirbad_stop_model", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_stop_model", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Stop a model after enforcing ownership checks; also cancels a queued manual start.")]
     public async Task<object> StopModel(string modelId, CancellationToken ct = default)
     {
@@ -205,7 +246,7 @@ public sealed partial class MirbadMcpTools(
         return new { modelId, state = "stopped" };
     }
 
-    [McpServerTool(Name = "mirbad_delete_model", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_delete_model", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Delete a model registration; files in the models root are not deleted.")]
     public async Task<object> DeleteModel(string modelId, CancellationToken ct = default)
     {
@@ -216,7 +257,7 @@ public sealed partial class MirbadMcpTools(
         return new { modelId, deleted = true, modelFilesDeleted = false };
     }
 
-    [McpServerTool(Name = "mirbad_start_benchmark", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_start_benchmark", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Start a benchmark job and return immediately; the model must be Ready.")]
     public async Task<object> StartBenchmark(string modelId, TuningGoal? preset = null, CancellationToken ct = default)
     {
@@ -226,7 +267,7 @@ public sealed partial class MirbadMcpTools(
         return new { job, nextAction = "Poll mirbad_get_job or mirbad_list_jobs." };
     }
 
-    [McpServerTool(Name = "mirbad_start_tuning", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_start_tuning", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Start a tuning job and return immediately; the winner is never applied automatically.")]
     public async Task<object> StartTuning(string modelId, TuningGoal goal = TuningGoal.Balanced, IReadOnlyList<TuningDimension>? dimensions = null, CancellationToken ct = default)
     {
@@ -236,7 +277,7 @@ public sealed partial class MirbadMcpTools(
         return new { job, nextAction = "Poll mirbad_get_job; inspect mirbad_list_tuning_runs after completion." };
     }
 
-    [McpServerTool(Name = "mirbad_cancel_job", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_cancel_job", ReadOnly = false, Destructive = true, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Request cancellation of an active benchmark or tuning job by job id.")]
     public async Task<object> CancelJob(string jobId)
     {
@@ -248,7 +289,7 @@ public sealed partial class MirbadMcpTools(
         return new { jobId, cancellationRequested = true };
     }
 
-    [McpServerTool(Name = "mirbad_apply_tuning_candidate", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true)]
+    [McpServerTool(Name = "mirbad_apply_tuning_candidate", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Apply an accepted tuning candidate to the saved model definition without starting it.")]
     public async Task<object> ApplyTuningCandidate(string modelId, string runId, [Range(0, int.MaxValue)] int candidateIndex, CancellationToken ct = default)
     {
