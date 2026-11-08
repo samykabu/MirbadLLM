@@ -147,7 +147,8 @@ public sealed class PlacementValidator : IModelDefinitionValidator
         // the save is the only place ExtraArgs, budgets and the split mode are refused before a launch.
         bool llamaCpp = proposed.Runtime == RuntimeKind.LlamaCpp && proposed.LlamaCpp is not null;
         bool mlx = proposed.Runtime == RuntimeKind.Mlx && proposed.Mlx is not null;
-        if (mustValidate || llamaCpp || mlx)
+        bool sglangSpeculative = proposed.Runtime == RuntimeKind.Sglang && proposed.Speculative is not null;
+        if (mustValidate || llamaCpp || mlx || sglangSpeculative)
         {
             var problems = new List<PlacementProblem>();
             if (mustValidate)
@@ -177,6 +178,11 @@ public sealed class PlacementValidator : IModelDefinitionValidator
             {
                 // MLX's own settings, like llama.cpp's, are checked on every save (they need no node report).
                 problems.AddRange(MlxArgsBuilder.Problems(proposed).Where(p => p.Code != PlacementProblemCodes.MlxSettingsMismatch));
+            }
+
+            if (sglangSpeculative && SglangSpeculativeArgs.Problem(proposed) is { } speculativeProblem)
+            {
+                problems.Add(new PlacementProblem(PlacementProblemCodes.ContainerSettingsInvalid, speculativeProblem));
             }
 
             if (problems.Count > 0)

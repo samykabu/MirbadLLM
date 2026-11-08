@@ -248,6 +248,31 @@ public sealed class McpEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task Deploy_OnSglang_SavesSpeculativeDecoding_AndNeedsAnAlgorithm()
+    {
+        using var client = Client();
+        string key = await NodeReporting(Capabilities(new RuntimeCapability { Kind = RuntimeKind.Sglang, Delivery = LaunchDelivery.Container, Available = true }));
+
+        string saved = await CallTool(client, key, "mirbad_deploy_model", new
+        {
+            modelId = "sg", servedName = "sg", repoId = "org/sg", folder = "sg", nodeId = "dgx", runtime = "sglang", image = "sglang:1",
+            speculativeMethod = "DFLASH", speculativeTokens = 16, draftFolder = "sg-dflash", draftRepoId = "org/sg-dflash",
+        });
+        Assert.DoesNotContain("\"isError\":true", saved, StringComparison.Ordinal);
+        Assert.Contains("saved but not proven", saved, StringComparison.Ordinal);
+        var model = await Models().GetAsync("sg");
+        Assert.Equal("DFLASH", model!.Speculative!.Method);
+        Assert.Equal("/models/sg-dflash", model.Speculative.DraftModel);
+
+        string refused = await CallTool(client, key, "mirbad_deploy_model", new
+        {
+            modelId = "no-algo", servedName = "x", repoId = "org/x", folder = "x", nodeId = "dgx", runtime = "sglang", image = "sglang:1", speculativeTokens = 16, draftFolder = "d",
+        });
+        Assert.Contains("needs an algorithm", refused, StringComparison.Ordinal);
+        Assert.Null(await Models().GetAsync("no-algo"));
+    }
+
+    [Fact]
     public async Task PlanningLimits_ReachTheCallingModel_OnConnectAndInTheDeployAnswer()
     {
         using var client = Client();
@@ -255,8 +280,8 @@ public sealed class McpEndpointTests : IDisposable
 
         using var connected = await Post(client, Initialize(), key);
         string instructions = await connected.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Contains("speculative decoding only on vllm and mlx", instructions, StringComparison.Ordinal);
-        Assert.Contains("depends on the vLLM image and the drafter", instructions, StringComparison.Ordinal);
+        Assert.Contains("speculative decoding on vllm, sglang and mlx", instructions, StringComparison.Ordinal);
+        Assert.Contains("depends on the runtime's image and the drafter", instructions.Replace("\\u0027", "'", StringComparison.Ordinal), StringComparison.Ordinal);
 
         string plain = await CallTool(client, key, "mirbad_deploy_model", new { modelId = "plain", servedName = "p", repoId = "org/p", folder = "p", nodeId = "dgx" });
         Assert.Contains("\"planningNotes\":[]", plain, StringComparison.Ordinal);

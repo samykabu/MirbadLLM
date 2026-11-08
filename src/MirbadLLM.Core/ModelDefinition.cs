@@ -44,7 +44,8 @@ public sealed record ModelDefinition
 
     /// <summary>
     /// The whole <c>--speculative-config</c> object: method, depth, draft model and any other key (e.g.
-    /// <c>moe_backend</c>). Null = speculative decoding off.
+    /// <c>moe_backend</c>). Null = speculative decoding off. A SGLang model uses it too: the method, depth and draft model
+    /// become <c>sglang.launch_server</c> flags (<c>SglangSpeculativeArgs</c>).
     /// </summary>
     public SpeculativeDecoding? Speculative { get; init; }
 

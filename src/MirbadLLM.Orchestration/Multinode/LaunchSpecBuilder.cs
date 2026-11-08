@@ -689,6 +689,11 @@ public static class LaunchSpecBuilder
         }
 
         ValidateContainerExtraArgs(model.Runtime, settings.ExtraArgs);
+        if (model.Runtime == RuntimeKind.Sglang && SglangSpeculativeArgs.Problem(model) is { } speculativeProblem)
+        {
+            throw new ArgumentException(speculativeProblem, nameof(model));
+        }
+
         environment ??= LaunchEnvironment.None;
         if (!environment.IsEmpty && !NodeReports(node, AgentFeatures.LaunchEnv, nodeFeatures))
         {
@@ -705,6 +710,7 @@ public static class LaunchSpecBuilder
         IReadOnlyList<string> argv = model.Runtime == RuntimeKind.Sglang
             ? ["python3", "-m", "sglang.launch_server", "--model-path", $"{LogicalVolumes.ModelsTarget}/{model.ModelPath}",
                 "--served-model-name", model.ServedName, "--host", "0.0.0.0", "--port", VllmContainerPort.ToString(CultureInfo.InvariantCulture),
+                .. model.Speculative is { } speculative ? SglangSpeculativeArgs.Build(speculative) : [],
                 .. settings.ExtraArgs]
             : [.. settings.ExtraArgs];
         var spec = new LaunchSpec
