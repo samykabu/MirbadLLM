@@ -240,6 +240,7 @@ public sealed partial class MirbadMcpTools(
         [Description("sha256 digest of image. Required for nim and on digestPinned nodes; taken from the node's report when the image is already there.")] string? imageDigest = null,
         [Description("GPU indices from mirbad_list_node_runtimes. Required on a node with discrete GPUs.")] IReadOnlyList<int>? gpuIndices = null,
         [Description("Memory budget in GiB that start admission checks. Defaults to 36.")] double? memoryBudgetGiB = null,
+        [Description("Extra command-line arguments for the server, one array item per flag and per value, such as [\"--tp\", \"2\"]. Flags MirbadLLM owns, such as the host and port, are refused, and mlx accepts only a fixed list that the refusal names.")] IReadOnlyList<string>? extraArgs = null,
         [Description("KV cache type. vllm: auto or fp8. llamacpp: a type such as q8_0, for keys and values. mlx: bits, 4 or 8.")] string? kvCacheDtype = null,
         [Description("vllm: reuse the KV cache across requests that share a prefix. On by default.")] bool? enablePrefixCaching = null,
         [Description("vllm: speculative method such as mtp, ngram or dflash; omit with draftFolder to let vLLM infer it from the drafter. sglang: required algorithm such as DFLASH, EAGLE, EAGLE3, STANDALONE or NGRAM. Support depends on the image and the checkpoint, and is only proven when the model starts.")] string? speculativeMethod = null,
@@ -268,6 +269,8 @@ public sealed partial class MirbadMcpTools(
             throw new McpException("image must be a container image reference such as registry/name:tag.");
         if (imageDigest is not null && (image is null || !ImageDigestRegex().IsMatch(imageDigest)))
             throw new McpException("imageDigest must be sha256: followed by 64 lowercase hex characters, and needs image.");
+        if (extraArgs is { Count: > 64 } || extraArgs?.Any(a => string.IsNullOrWhiteSpace(a) || a.Length > 1000 || a.Any(char.IsControl)) == true)
+            throw new McpException("extraArgs may contain at most 64 non-empty items of at most 1000 characters, without control characters.");
         RefuseIgnoredSettings(runtime, modelFile, image, kvCacheDtype, enablePrefixCaching, speculativeMethod, speculativeTokens, draftFolder);
         if (await models.GetAsync(modelId, ct).ConfigureAwait(false) is not null)
             throw new McpException($"Model '{modelId}' already exists; choose another id.");
@@ -300,25 +303,26 @@ public sealed partial class MirbadMcpTools(
             RuntimeKind.LlamaCpp => model with
             {
                 Runtime = runtime,
-                LlamaCpp = LlamaCppFor(selected.NodeId, capabilities, folder, modelFile, image, digest, kvCacheDtype),
+                LlamaCpp = LlamaCppFor(selected.NodeId, capabilities, folder, modelFile, image, digest, kvCacheDtype) with { ExtraArgs = extraArgs ?? [] },
             },
             RuntimeKind.Mlx => model with
             {
                 Runtime = runtime,
                 ToolCallParser = null,
                 ReasoningParser = null,
-                Mlx = new MlxSettings { ModelFolder = folder, KvBits = MlxKvBits(kvCacheDtype), DraftModelFolder = draftFolder, NumDraftTokens = speculativeTokens },
+                Mlx = new MlxSettings { ModelFolder = folder, KvBits = MlxKvBits(kvCacheDtype), DraftModelFolder = draftFolder, NumDraftTokens = speculativeTokens, ExtraArgs = extraArgs ?? [] },
             },
             RuntimeKind.Sglang or RuntimeKind.Nim => model with
             {
                 Runtime = runtime,
                 ToolCallParser = null,
                 ReasoningParser = null,
-                Container = new ContainerRuntimeSettings { Image = image ?? "", ImageDigest = digest },
+                Container = new ContainerRuntimeSettings { Image = image ?? "", ImageDigest = digest, ExtraArgs = extraArgs ?? [] },
                 Speculative = speculative,
             },
             _ => model with
             {
+                ExtraArgs = extraArgs ?? [],
                 KvCacheDtype = kvCacheDtype ?? model.KvCacheDtype,
                 EnablePrefixCaching = enablePrefixCaching ?? model.EnablePrefixCaching,
                 Image = image,
