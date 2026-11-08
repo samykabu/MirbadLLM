@@ -188,6 +188,29 @@ public sealed class PlacementTests : IDisposable
     }
 
     [Fact]
+    public async Task AContainerModelsSettings_AreCheckedOnEverySave_NotOnlyWhenItIsPlaced()
+    {
+        var f = await CreateAsync(Node("silent", null));
+        var settings = new ContainerRuntimeSettings { Image = "sglang:1" };
+        var model = Model("sg", new ModelPlacement("silent")) with { Runtime = RuntimeKind.Sglang, Container = settings };
+        await f.Registry.UpsertAsync(model, Ct);
+
+        foreach (var bad in new[]
+        {
+            settings with { Image = " " },
+            settings with { ImageDigest = "latest" },
+            settings with { ExtraArgs = ["--port", "9000"] },
+        })
+        {
+            var refused = await InvalidAsync(f, model with { Container = bad });
+            Assert.Equal(PlacementProblemCodes.ContainerSettingsInvalid, Assert.Single(refused.Problems).Code);
+        }
+
+        Assert.Equal(settings.Image, (await f.Registry.GetAsync("sg", Ct))!.Container!.Image);
+        await f.Registry.UpsertAsync(model with { Container = settings with { ExtraArgs = ["--tp", "2"] } }, Ct);
+    }
+
+    [Fact]
     public async Task FirstBoot_BeforeTheBootstrapNodeRecordExists_APlacementOnItIsAccepted()
     {
         var f = await CreateAsync();

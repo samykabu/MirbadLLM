@@ -750,6 +750,15 @@ public static class LaunchSpecBuilder
 
     private static void ValidateContainerExtraArgs(RuntimeKind runtime, IReadOnlyList<string> args)
     {
+        if (ContainerExtraArgProblem(runtime, args) is { } problem)
+        {
+            throw new ArgumentException(problem, nameof(args));
+        }
+    }
+
+    /// <summary>Why <paramref name="args"/> can't be passed to a SGLang or NIM container; null when they can. Checked on save and at launch.</summary>
+    internal static string? ContainerExtraArgProblem(RuntimeKind runtime, IReadOnlyList<string> args)
+    {
         string[] owned = runtime == RuntimeKind.Sglang
             ? ["--model", "--model-path", "--served-model-name", "--served-model", "--host", "--port", "-p"]
             : ["--host", "--port", "-p"];
@@ -757,10 +766,42 @@ public static class LaunchSpecBuilder
         {
             if (string.IsNullOrWhiteSpace(arg) || arg.Any(char.IsControl) || arg.Contains('\\') ||
                 arg.StartsWith(ProcessArgvTokens.Models, StringComparison.Ordinal) ||
-                owned.Any(flag => arg == flag || arg.StartsWith(flag + "=", StringComparison.Ordinal)))
+                owned.Any(flag => arg == flag || arg.StartsWith(flag + "=", StringComparison.Ordinal) || arg.StartsWith(flag + " ", StringComparison.Ordinal)))
             {
-                throw new ArgumentException($"Extra argument '{arg}' is not allowed for {runtime}; mirbadllm owns paths, served name, host and port.", nameof(args));
+                return $"Extra argument '{arg}' is not allowed for {runtime}; mirbadllm owns paths, served name, host and port.";
             }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The container image <paramref name="model"/> runs on <paramref name="node"/> and its approved digest, so a move can
+    /// pull the right one first; null when it runs as a native process or no image is known (its start then says why).
+    /// </summary>
+    public static (string Image, string? Digest)? ImageToPull(ModelDefinition model, NodeRecord node, MirbadLLMOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(options);
+        switch (model.Runtime)
+        {
+            case RuntimeKind.Mlx:
+                return null;
+            case RuntimeKind.LlamaCpp:
+                if (model.LlamaCpp is not { Delivery: LaunchDelivery.Container } llama)
+                {
+                    return null;
+                }
+
+                string? image = string.IsNullOrWhiteSpace(llama.Image) ? node.DefaultLlamaCppImage : llama.Image;
+                string? digest = string.IsNullOrWhiteSpace(llama.Image) ? node.DefaultLlamaCppImageDigest : llama.ImageDigest;
+                return string.IsNullOrWhiteSpace(image) ? null : (image, digest);
+            case RuntimeKind.Sglang or RuntimeKind.Nim:
+                return string.IsNullOrWhiteSpace(model.Container?.Image) ? null : (model.Container.Image, model.Container.ImageDigest);
+            default:
+                string defaultImage = DefaultImage(node, options);
+                return (ResolveImage(model, defaultImage), ResolveImageDigest(model, node, defaultImage));
         }
     }
 

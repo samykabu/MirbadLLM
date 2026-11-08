@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -84,7 +85,7 @@ public sealed class OwnershipValidator(IOwnershipStore ownership) : IModelDefini
 /// or when the pin changes, <c>executable_version_unavailable</c> for a pinned version the node's last report does not
 /// list as installed and verified.</para>
 /// </summary>
-public sealed class PlacementValidator : IModelDefinitionValidator
+public sealed partial class PlacementValidator : IModelDefinitionValidator
 {
     private readonly INodeRegistry _nodes;
     private readonly IOwnershipStore? _ownership;
@@ -148,9 +149,16 @@ public sealed class PlacementValidator : IModelDefinitionValidator
         bool llamaCpp = proposed.Runtime == RuntimeKind.LlamaCpp && proposed.LlamaCpp is not null;
         bool mlx = proposed.Runtime == RuntimeKind.Mlx && proposed.Mlx is not null;
         bool sglangSpeculative = proposed.Runtime == RuntimeKind.Sglang && proposed.Speculative is not null;
-        if (mustValidate || llamaCpp || mlx || sglangSpeculative)
+        // Like llama.cpp's and MLX's: otherwise a cleared image or a reserved flag saves fine and only fails at the next start.
+        bool sharedContainer = proposed.Runtime is RuntimeKind.Sglang or RuntimeKind.Nim;
+        if (mustValidate || llamaCpp || mlx || sharedContainer)
         {
             var problems = new List<PlacementProblem>();
+            if (sharedContainer && !mustValidate)
+            {
+                CheckContainerSettings(proposed, problems);
+            }
+
             if (mustValidate)
             {
                 CheckLlamaCppSettings(proposed, problems);
@@ -567,7 +575,21 @@ public sealed class PlacementValidator : IModelDefinitionValidator
                 PlacementProblemCodes.ContainerSettingsInvalid,
                 $"{RuntimeName(model.Runtime)} needs a relative model path, an explicit image{(model.Runtime == RuntimeKind.Nim ? " and approved digest" : string.Empty)}."));
         }
+
+        if (settings.ImageDigest is { } digest && !ContainerDigestPattern().IsMatch(digest))
+        {
+            problems.Add(new PlacementProblem(
+                PlacementProblemCodes.ContainerSettingsInvalid, $"Image digest '{digest}' must be sha256: followed by 64 lowercase hex characters."));
+        }
+
+        if (LaunchSpecBuilder.ContainerExtraArgProblem(model.Runtime, settings.ExtraArgs) is { } argProblem)
+        {
+            problems.Add(new PlacementProblem(PlacementProblemCodes.ContainerSettingsInvalid, argProblem));
+        }
     }
+
+    [GeneratedRegex("^sha256:[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
+    private static partial Regex ContainerDigestPattern();
 
     /// <summary>How the model is delivered: llama.cpp's setting, MLX always as a native process, all others in containers.</summary>
     private static LaunchDelivery Delivery(ModelDefinition model) => model.Runtime switch

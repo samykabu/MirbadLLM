@@ -910,9 +910,11 @@ public sealed partial class MoveService : IHostedService, IDisposable
     {
         var node = await _nodes.GetAsync(nodeId, ct).ConfigureAwait(false)
             ?? throw new MoveFailedException($"Node '{nodeId}' is no longer registered.");
-        string defaultImage = LaunchSpecBuilder.DefaultImage(node, _options);
-        string image = LaunchSpecBuilder.ResolveImage(model, defaultImage);
-        string? digest = LaunchSpecBuilder.ResolveImageDigest(model, node, defaultImage);
+        if (LaunchSpecBuilder.ImageToPull(model, node, _options) is not (var image, var digest))
+        {
+            return true; // a native process, or nothing to pull: a node without Docker would never answer an image request
+        }
+
         var client = _clients.GetClient(nodeId);
         while (true)
         {

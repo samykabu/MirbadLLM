@@ -511,6 +511,10 @@ public static class AdminApiEndpoints
             Placement = present.Contains(PlacementField) ? model.Placement : stored.Placement,
             Runtime = present.Contains("runtime") ? model.Runtime : stored.Runtime,
             LlamaCpp = present.Contains("llamaCpp") ? model.LlamaCpp : stored.LlamaCpp,
+            Mlx = present.Contains("mlx") ? model.Mlx : stored.Mlx,
+            Container = present.Contains("container") ? model.Container : stored.Container,
+            // Leaving it out must not silently turn speculative decoding off; send null to do that.
+            Speculative = present.Contains("speculative") ? model.Speculative : stored.Speculative,
             HostMemoryBudgetGiB = present.Contains("hostMemoryBudgetGiB") ? model.HostMemoryBudgetGiB : stored.HostMemoryBudgetGiB,
             KeepServingDuringJobs = present.Contains("keepServingDuringJobs") ? model.KeepServingDuringJobs : stored.KeepServingDuringJobs,
             // A digest pins one image: kept when absent only while the image stays the same (W7 review MN-126).
