@@ -3,9 +3,13 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Core;
+using MirbadLLM.Orchestration.Agents;
 using MirbadLLM.UnitTests.Auth;
+using MirbadLLM.UnitTests.Benchmarking;
 
 namespace MirbadLLM.UnitTests.Web;
 
@@ -52,6 +56,11 @@ public sealed class McpEndpointTests : IDisposable
         string json = await listed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.Contains("mirbad_get_fleet_health", json, StringComparison.Ordinal);
         Assert.Contains("mirbad_deploy_model", json, StringComparison.Ordinal);
+        // Access > MCP documents the same tools the endpoint publishes.
+        Assert.All(MirbadLLM.Web.Mcp.McpToolCatalog.All, tool => Assert.Contains(tool.Name, json, StringComparison.Ordinal));
+        // A boolean subschema here makes Claude Code reject the whole tool list.
+        Assert.DoesNotContain("\"output\":true", json, StringComparison.Ordinal);
+        Assert.Contains("\"outputSchema\":{\"type\":\"object\"}", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -83,6 +92,65 @@ public sealed class McpEndpointTests : IDisposable
         string allowedJson = await allowed.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         Assert.DoesNotContain("\"isError\":true", allowedJson, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("structuredContent", allowedJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NodeThatStopsAnswering_IsReported_NotAToolError()
+    {
+        var cache = new RemoteJobTests.FakeNodeCache(new NodeLiveStatus { NodeId = "dgx", NodeUid = "uid", State = NodeState.Online });
+        using var factory = _factory.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<INodeStatusCache>(cache)));
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var read = await factory.Services.GetRequiredService<IApiKeyStore>().CreateAsync("reader", ApiKeyScope.McpRead);
+
+        // No client yet: the background refresh is off here, as it is for a node waiting for approval.
+        string noClient = await CallTool(client, read.FullKey, "mirbad_list_downloads", new { });
+        Assert.DoesNotContain("\"isError\":true", noClient, StringComparison.Ordinal);
+        Assert.Contains("\"available\":false", noClient, StringComparison.Ordinal);
+        await ((AgentClientFactory)factory.Services.GetRequiredService<IAgentClientFactory>()).RefreshAsync(TestContext.Current.CancellationToken);
+
+        string healthy = await CallTool(client, read.FullKey, "mirbad_get_fleet_health", new { });
+        Assert.Contains("\"status\":\"healthy\"", healthy, StringComparison.Ordinal);
+        string listed = await CallTool(client, read.FullKey, "mirbad_list_downloads", new { });
+        Assert.Contains("\"available\":true", listed, StringComparison.Ordinal);
+
+        await _factory.StopAgentAsync();
+
+        string degraded = await CallTool(client, read.FullKey, "mirbad_get_fleet_health", new { });
+        Assert.DoesNotContain("\"isError\":true", degraded, StringComparison.Ordinal);
+        Assert.Contains("\"status\":\"degraded\"", degraded, StringComparison.Ordinal);
+        Assert.Contains("\"unavailableNodes\":[\"dgx\"]", degraded, StringComparison.Ordinal);
+
+        string unavailable = await CallTool(client, read.FullKey, "mirbad_list_downloads", new { });
+        Assert.DoesNotContain("\"isError\":true", unavailable, StringComparison.Ordinal);
+        Assert.Contains("\"available\":false", unavailable, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FleetHealth_IsNotHealthy_WithNoKnownNodes()
+    {
+        using var client = Client();
+        var read = await Keys().CreateAsync("reader", ApiKeyScope.McpRead);
+        string health = await CallTool(client, read.FullKey, "mirbad_get_fleet_health", new { });
+        Assert.Contains("\"status\":\"degraded\"", health, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FleetHealth_ReportsAPendingNode_WithoutFailing()
+    {
+        var cache = new RemoteJobTests.FakeNodeCache(new NodeLiveStatus { NodeId = "dgx", NodeUid = "uid", State = NodeState.PendingApproval });
+        using var factory = _factory.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<INodeStatusCache>(cache)));
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var read = await factory.Services.GetRequiredService<IApiKeyStore>().CreateAsync("reader", ApiKeyScope.McpRead);
+        string health = await CallTool(client, read.FullKey, "mirbad_get_fleet_health", new { });
+        Assert.Contains("\"status\":\"degraded\"", health, StringComparison.Ordinal);
+        Assert.Contains("\"unavailableNodes\":[\"dgx\"]", health, StringComparison.Ordinal);
+    }
+
+    private static async Task<string> CallTool(HttpClient client, string key, string name, object arguments)
+    {
+        using var response = await Post(client, Request(5, "tools/call", new { name, arguments }), key);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
     }
 
     private IApiKeyStore Keys()

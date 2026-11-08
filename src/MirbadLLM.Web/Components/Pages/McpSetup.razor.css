@@ -1,0 +1,19 @@
+/* Access > MCP: endpoint, keys and the agent prompt beside the per-client steps, then the full tool list. */
+.mcp-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: var(--ss-sp-4); align-items: start; }
+.mcp-column { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--ss-sp-4); min-width: 0; }
+@media (max-width: 1199.98px) { .mcp-layout { grid-template-columns: minmax(0, 1fr); } }
+
+.mcp-layout .panel-label { margin-bottom: var(--ss-sp-3); }
+.mcp-note { margin: var(--ss-sp-3) 0 0; max-width: 75ch; }
+.mcp-steps { padding: var(--ss-sp-2) 0 var(--ss-sp-2) 1.25rem; max-width: 75ch; }
+.mcp-subhead { margin: var(--ss-sp-4) 0 0; font-size: var(--ss-fs-200); }
+.mcp-snippet { border: 1px solid var(--ss-border); border-radius: var(--ss-radius); }
+.mcp-note + .mcp-snippet { margin-top: var(--ss-sp-3); }
+.mcp-snippet .snippet-head { padding-left: var(--ss-sp-3); }
+.mcp-snippet .snippet-head h3 { margin: 0; font-size: 13px; }
+/* Wrap rather than scroll sideways, at every width: the prompt is long prose. Copy still sends the exact text. */
+.mcp-snippet pre { max-height: 30rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mcp-snippet pre:focus-visible { outline: 2px solid var(--ss-focus); outline-offset: -2px; }
+.mcp-tool-name, .mcp-tool-args { background: none; padding: 0; }
+.mcp-tool-name { white-space: nowrap; }
+.mcp-tool-args { overflow-wrap: anywhere; }

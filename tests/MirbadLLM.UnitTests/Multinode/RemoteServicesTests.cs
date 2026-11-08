@@ -293,6 +293,14 @@ public sealed class RemoteServicesTests
     }
 
     [Fact]
+    public void NodeWithoutAgentClient_IsUnavailable_AndNotWorthRetrying()
+    {
+        var unavailable = Assert.IsType<NodeUnavailableException>(RemoteAgentErrors.ToStorageException(new KeyNotFoundException("no client"), NodeId));
+        Assert.Equal(NodeId, unavailable.NodeId);
+        Assert.False(unavailable.IsTransient);
+    }
+
+    [Fact]
     public async Task Download_RunsOnTheNode_TokenOnlyInMemory()
     {
         await using var env = await Env.StartAsync();
