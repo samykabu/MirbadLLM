@@ -133,7 +133,7 @@
             }
         }
 
-        var changes = launched is null ? [] : SettingChanges.RestartNeeded(launched, saved);
+        var changes = launched is null ? [] : SettingChanges.AllRestartNeeded(launched, saved);
         await OpenAsync(saved, changes, launched?.MemoryBudgetGiB ?? saved.MemoryBudgetGiB);
     }
 

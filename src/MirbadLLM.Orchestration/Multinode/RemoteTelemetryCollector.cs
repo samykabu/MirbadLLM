@@ -239,7 +239,7 @@ public sealed partial class RemoteTelemetryCollector(
             RecordModel(cursor, model.Id, scrape, sample.At);
         }
 
-        // A model that was not scraped was not Ready at this sample: its next Ready starts a fresh rate baseline.
+        // A model that was not scraped starts a fresh rate baseline when it is next scraped.
         foreach (string id in cursor.Baselines.Keys.Where(id => !scraped.Contains(id)).ToList())
         {
             cursor.Baselines.Remove(id);
@@ -249,7 +249,8 @@ public sealed partial class RemoteTelemetryCollector(
         {
             foreach (var instance in instances.Values)
             {
-                if (instance.State is ModelState.Starting or ModelState.Stopping &&
+                // Ready too: MLX, SGLang and NIM are Ready without ever being scraped, and still hold their memory.
+                if (instance.State is ModelState.Starting or ModelState.Ready or ModelState.Stopping &&
                     definitions.TryGetValue(instance.ModelId, out var model) && !IsPlacedElsewhere(model, nodeId))
                 {
                     running.TryAdd(model.Id, ModelMemoryAttribution.Running(model, instance));

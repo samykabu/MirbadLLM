@@ -232,6 +232,17 @@ public sealed class RemoteModelRuntime : IModelRuntime, IModelLauncher
             return MlxArgsParser.Parse(launch, template with { Runtime = RuntimeKind.Mlx }, node);
         }
 
+        if (launch.Runtime is RuntimeKind.Sglang or RuntimeKind.Nim)
+        {
+            return ContainerRuntimeArgsParser.Parse(launch, template);
+        }
+
+        if (launch.Runtime == RuntimeKind.LlamaCpp)
+        {
+            // shortcut: llama.cpp in a container has no parser of its own, so the saved settings stand in for what runs and the Apply dialog lists no changes; add a parser if container delivery gets real use.
+            return template with { Runtime = RuntimeKind.LlamaCpp };
+        }
+
         double totalGiB = await GetTotalGiBAsync(node, ct).ConfigureAwait(false);
         return VllmArgsParser.Parse(launch, LaunchSpecBuilder.DefaultImage(node, _options), totalGiB, template);
     }
