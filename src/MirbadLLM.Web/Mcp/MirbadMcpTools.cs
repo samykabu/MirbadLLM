@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Core;
 using MirbadLLM.Orchestration;
 using MirbadLLM.Orchestration.Benchmarking;
@@ -30,6 +31,22 @@ public sealed partial class MirbadMcpTools(
 {
     private const int DefaultPageSize = 50;
     private const int MaximumPageSize = 100;
+
+    private const string UnprovenSpeculativeNote =
+        "Speculative decoding is saved but not proven. It depends on the vLLM image and the drafter, so plan to check it: " +
+        "after mirbad_start_model, poll mirbad_get_model for Ready, then run mirbad_start_benchmark. If it fails, delete the model and deploy again without it; the downloaded files are kept.";
+
+    private const string UnprovenImageNote =
+        "The image is pulled when the model starts if the node lacks it. A digestPinned node refuses images it has not approved, and only a start shows whether the image can serve this model.";
+
+    /// <summary>Sent to every client when it connects, so a calling model can plan around these limits before it deploys.</summary>
+    public const string PlanningGuide =
+        "Planning a model deployment. " +
+        "(1) Call mirbad_list_node_runtimes first: a node only runs the runtimes it reports, and a node with discrete GPUs needs gpuIndices. " +
+        "(2) Settings depend on the runtime, and mirbad_deploy_model refuses one the runtime would ignore: kvCacheDtype works on vllm, llamacpp and mlx; enablePrefixCaching on vllm; " +
+        "speculative decoding only on vllm and mlx, never on llamacpp, sglang or nim. " +
+        "(3) A deploy only proves the settings are valid. " + UnprovenSpeculativeNote + " " +
+        "(4) " + UnprovenImageNote;
 
     [McpServerTool(Name = "mirbad_get_fleet_health", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Summarize controller, node, model, download, and job health.")]
@@ -80,6 +97,37 @@ public sealed partial class MirbadMcpTools(
         (offset, limit) = PageArgs(offset, limit);
         var registered = (await nodes.ListAsync(ct).ConfigureAwait(false)).Where(n => !n.Revoked).ToList();
         var items = registered.Skip(offset).Take(limit).Select(n => new { record = n, live = nodeStatus.GetNode(n.Id) }).ToList();
+        return Page(items, offset, limit, registered.Count);
+    }
+
+    [McpServerTool(Name = "mirbad_list_node_runtimes", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
+    [Description("List the runtimes, container images and GPUs each node last reported, to choose mirbad_deploy_model arguments.")]
+    public async Task<object> ListNodeRuntimes([Description("One node id; omit for every node.")] string? nodeId = null, int offset = 0, int limit = DefaultPageSize, CancellationToken ct = default)
+    {
+        (offset, limit) = PageArgs(offset, limit);
+        var registered = (await nodes.ListAsync(ct).ConfigureAwait(false))
+            .Where(n => !n.Revoked && (nodeId is null || n.Id == nodeId))
+            .ToList();
+        if (nodeId is not null && registered.Count == 0)
+            throw new McpException($"Node '{nodeId}' was not found; use mirbad_list_nodes to refresh.");
+
+        var items = registered.Skip(offset).Take(limit).Select(n =>
+        {
+            var live = nodeStatus.GetNode(n.Id);
+            var capabilities = live?.Capabilities ?? n.LastCapabilities;
+            return new
+            {
+                nodeId = n.Id,
+                state = live?.State,
+                approved = n.Approved,
+                draining = n.Draining,
+                memoryModel = capabilities?.Memory.Model,
+                digestPinned = capabilities?.Features.Contains(AgentFeatures.ImagesDigestPinned, StringComparer.Ordinal) ?? false,
+                runtimes = capabilities?.Runtimes ?? [],
+                images = capabilities?.Images ?? [],
+                gpus = capabilities?.Gpus ?? [],
+            };
+        }).ToList();
         return Page(items, offset, limit, registered.Count);
     }
 
@@ -176,7 +224,7 @@ public sealed partial class MirbadMcpTools(
     }
 
     [McpServerTool(Name = "mirbad_deploy_model", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = true, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
-    [Description("Register a validated model and immediately start its Hugging Face download; returns without waiting for completion.")]
+    [Description("Register a validated model on a runtime the node supports (see mirbad_list_node_runtimes) and immediately start its Hugging Face downloads; returns without waiting for completion. Validity is not proof: an image, drafter or speculative method can still fail when the model starts.")]
     public async Task<object> DeployModel(
         string modelId,
         string servedName,
@@ -185,43 +233,171 @@ public sealed partial class MirbadMcpTools(
         string nodeId,
         string? revision = null,
         IReadOnlyList<string>? allowPatterns = null,
+        [Description("Runtime that serves the model.")] RuntimeKind runtime = RuntimeKind.Vllm,
+        [Description("llama.cpp: the GGUF file inside folder. It is the only file downloaded unless allowPatterns is set.")] string? modelFile = null,
+        [Description("Container image, pulled when the model starts if the node lacks it. Required for sglang and nim; otherwise the node's default image. A digestPinned node refuses images it has not approved.")] string? image = null,
+        [Description("sha256 digest of image. Required for nim and on digestPinned nodes; taken from the node's report when the image is already there.")] string? imageDigest = null,
+        [Description("GPU indices from mirbad_list_node_runtimes. Required on a node with discrete GPUs.")] IReadOnlyList<int>? gpuIndices = null,
+        [Description("Memory budget in GiB that start admission checks. Defaults to 36.")] double? memoryBudgetGiB = null,
+        [Description("KV cache type. vllm: auto or fp8. llamacpp: a type such as q8_0, for keys and values. mlx: bits, 4 or 8.")] string? kvCacheDtype = null,
+        [Description("vllm: reuse the KV cache across requests that share a prefix. On by default.")] bool? enablePrefixCaching = null,
+        [Description("vllm only: speculative method such as mtp, ngram or dflash. Omit with draftFolder to let vLLM infer it from the drafter. Support depends on the vLLM image and the checkpoint, and is only proven when the model starts.")] string? speculativeMethod = null,
+        [Description("vllm and mlx: tokens drafted per step. Required by vllm when speculative decoding is on.")] int? speculativeTokens = null,
+        [Description("vllm and mlx: folder of the draft model, such as a DFlash or DSpark drafter. The image must support that drafter.")] string? draftFolder = null,
+        [Description("Hugging Face repository to download into draftFolder. Omit when the folder is already on the node.")] string? draftRepoId = null,
         CancellationToken ct = default)
     {
         RequireOperator();
         ValidateModelId(modelId);
         ValidateFolder(folder);
+        if (draftFolder is not null) ValidateFolder(draftFolder);
         if (string.IsNullOrWhiteSpace(servedName) || servedName.Length > 200)
             throw new McpException("servedName is required and must be at most 200 characters.");
         if (!RepoIdRegex().IsMatch(repoId))
             throw new McpException("repoId must be a Hugging Face owner/repository identifier.");
         if (allowPatterns is { Count: > 32 } || allowPatterns?.Any(p => string.IsNullOrWhiteSpace(p) || p.Length > 200 || p.Contains("..", StringComparison.Ordinal)) == true)
             throw new McpException("allowPatterns may contain at most 32 non-empty repository-relative glob patterns without '..'.");
+        if (draftRepoId is not null && (draftFolder is null || !RepoIdRegex().IsMatch(draftRepoId)))
+            throw new McpException("draftRepoId must be a Hugging Face owner/repository identifier and needs draftFolder.");
+        if (kvCacheDtype is not null && !SettingRegex().IsMatch(kvCacheDtype))
+            throw new McpException("kvCacheDtype must be a single word of letters, digits, '_' or '-'.");
+        if (speculativeMethod is not null && !SettingRegex().IsMatch(speculativeMethod))
+            throw new McpException("speculativeMethod must be a single word of letters, digits, '_' or '-'.");
+        if (image is not null && !ImageRegex().IsMatch(image))
+            throw new McpException("image must be a container image reference such as registry/name:tag.");
+        if (imageDigest is not null && (image is null || !ImageDigestRegex().IsMatch(imageDigest)))
+            throw new McpException("imageDigest must be sha256: followed by 64 lowercase hex characters, and needs image.");
+        RefuseIgnoredSettings(runtime, modelFile, image, kvCacheDtype, enablePrefixCaching, speculativeMethod, speculativeTokens, draftFolder);
         if (await models.GetAsync(modelId, ct).ConfigureAwait(false) is not null)
             throw new McpException($"Model '{modelId}' already exists; choose another id.");
 
         var selected = await Downloader(nodeId, ct).ConfigureAwait(false);
+        var capabilities = nodeStatus.GetNode(selected.NodeId)?.Capabilities
+            ?? (await nodes.GetAsync(selected.NodeId, ct).ConfigureAwait(false))?.LastCapabilities;
+        string? digest = imageDigest ?? capabilities?.Images.FirstOrDefault(i => i.Ref == image)?.Digest;
+
+        IReadOnlyList<string>? patterns = allowPatterns is not { Count: > 0 } && runtime == RuntimeKind.LlamaCpp && modelFile is not null ? [modelFile] : allowPatterns;
         var model = new ModelDefinition
         {
             Id = modelId,
             ServedName = servedName,
             ModelPath = folder,
-            Sources = [new ModelSource(repoId, folder, revision, allowPatterns)],
-            Placement = new ModelPlacement(selected.NodeId),
+            Sources = draftRepoId is null
+                ? [new ModelSource(repoId, folder, revision, patterns)]
+                : [new ModelSource(repoId, folder, revision, patterns), new ModelSource(draftRepoId, draftFolder!)],
+            Placement = new ModelPlacement(selected.NodeId, GpuIndices: gpuIndices),
+        };
+        if (memoryBudgetGiB is { } budget) model = model with { MemoryBudgetGiB = budget };
+        model = runtime switch
+        {
+            RuntimeKind.LlamaCpp => model with
+            {
+                Runtime = runtime,
+                LlamaCpp = LlamaCppFor(selected.NodeId, capabilities, folder, modelFile, image, digest, kvCacheDtype),
+            },
+            RuntimeKind.Mlx => model with
+            {
+                Runtime = runtime,
+                ToolCallParser = null,
+                ReasoningParser = null,
+                Mlx = new MlxSettings { ModelFolder = folder, KvBits = MlxKvBits(kvCacheDtype), DraftModelFolder = draftFolder, NumDraftTokens = speculativeTokens },
+            },
+            RuntimeKind.Sglang or RuntimeKind.Nim => model with
+            {
+                Runtime = runtime,
+                ToolCallParser = null,
+                ReasoningParser = null,
+                Container = new ContainerRuntimeSettings { Image = image ?? "", ImageDigest = digest },
+            },
+            _ => model with
+            {
+                KvCacheDtype = kvCacheDtype ?? model.KvCacheDtype,
+                EnablePrefixCaching = enablePrefixCaching ?? model.EnablePrefixCaching,
+                Image = image,
+                ImageDigest = digest,
+                Speculative = speculativeMethod is null && speculativeTokens is null && draftFolder is null
+                    ? null
+                    : new SpeculativeDecoding(speculativeMethod ?? "", speculativeTokens ?? 0)
+                    {
+                        DraftModel = draftFolder is null ? null : $"{LogicalVolumes.ModelsTarget}/{draftFolder}",
+                    },
+            },
         };
 
-        await models.UpsertAsync(model, ct).ConfigureAwait(false);
         try
         {
-            DownloadStatus state = await selected.Value.StartAsync(new DownloadRequest(repoId, revision, Folder: folder, AllowPatterns: allowPatterns), ct).ConfigureAwait(false);
-            await Audit(AuditActions.ModelCreate, modelId, selected.NodeId, AuditResults.Accepted, "MCP deploy and download started").ConfigureAwait(false);
-            return new { model, folder, nodeId = selected.NodeId, download = state, nextAction = "Poll mirbad_get_download; when complete, call mirbad_start_model." };
+            await models.UpsertAsync(model, ct).ConfigureAwait(false);
         }
-        catch
+        catch (ArgumentException ex)
+        {
+            throw new McpException(ex.Message, ex);
+        }
+
+        try
+        {
+            // The small drafter goes first, so a refused draft leaves no large download running for a deleted model.
+            DownloadStatus? draft = draftRepoId is null
+                ? null
+                : await selected.Value.StartAsync(new DownloadRequest(draftRepoId, Folder: draftFolder), ct).ConfigureAwait(false);
+            DownloadStatus state = await selected.Value.StartAsync(new DownloadRequest(repoId, revision, Folder: folder, AllowPatterns: patterns), ct).ConfigureAwait(false);
+            await Audit(AuditActions.ModelCreate, modelId, selected.NodeId, AuditResults.Accepted, "MCP deploy and download started").ConfigureAwait(false);
+            string[] notes =
+            [
+                .. model.Speculative is not null || model.Mlx?.DraftModelFolder is not null ? [UnprovenSpeculativeNote] : Array.Empty<string>(),
+                .. image is not null ? [UnprovenImageNote] : Array.Empty<string>(),
+            ];
+            return new { model, folder, nodeId = selected.NodeId, download = state, draftDownload = draft, planningNotes = notes, nextAction = "Poll mirbad_get_download for each folder; when complete, call mirbad_start_model." };
+        }
+        catch (Exception ex)
         {
             await models.DeleteAsync(modelId, CancellationToken.None).ConfigureAwait(false);
+            if (ex is InvalidOperationException or ArgumentException or MirbadLLM.NodeRuntime.HuggingFaceApiException) throw new McpException(ex.Message, ex);
             throw;
         }
     }
+
+    // A runtime would ignore these without a word, and the caller would believe the setting took effect.
+    private static void RefuseIgnoredSettings(RuntimeKind runtime, string? modelFile, string? image, string? kv, bool? prefix, string? method, int? tokens, string? draft)
+    {
+        var ignored = new (bool Given, bool Applies, string Name)[]
+        {
+            (modelFile is not null, runtime == RuntimeKind.LlamaCpp, "modelFile"),
+            (image is not null, runtime != RuntimeKind.Mlx, "image"),
+            (kv is not null, runtime is RuntimeKind.Vllm or RuntimeKind.LlamaCpp or RuntimeKind.Mlx, "kvCacheDtype"),
+            (prefix is not null, runtime == RuntimeKind.Vllm, "enablePrefixCaching"),
+            (method is not null, runtime == RuntimeKind.Vllm, "speculativeMethod"),
+            (tokens is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Mlx, "speculativeTokens"),
+            (draft is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Mlx, "draftFolder"),
+        }.Where(s => s.Given && !s.Applies).Select(s => s.Name).ToList();
+        if (ignored.Count > 0)
+            throw new McpException($"The {runtime} runtime does not use {string.Join(", ", ignored)}; no state was changed.");
+    }
+
+    private static LlamaCppSettings LlamaCppFor(string nodeId, NodeCapabilities? capabilities, string folder, string? modelFile, string? image, string? digest, string? kv)
+    {
+        if (string.IsNullOrWhiteSpace(modelFile))
+            throw new McpException("The LlamaCpp runtime needs modelFile, the GGUF file inside folder.");
+        LaunchDelivery delivery = LlamaCppEditing.Runtime(capabilities)?.Delivery ?? LaunchDelivery.Container;
+        if (image is not null && delivery == LaunchDelivery.Process)
+            throw new McpException($"Node '{nodeId}' runs llama.cpp as a native process, so it does not use image.");
+        return new LlamaCppSettings
+        {
+            ModelFile = $"{folder}/{modelFile}",
+            Delivery = delivery,
+            Image = image,
+            ImageDigest = digest,
+            CacheTypeK = kv,
+            CacheTypeV = kv,
+        };
+    }
+
+    private static int? MlxKvBits(string? kv) => kv switch
+    {
+        null => null,
+        "4" => 4,
+        "8" => 8,
+        _ => throw new McpException("The Mlx runtime takes kvCacheDtype 4 or 8."),
+    };
 
     [McpServerTool(Name = "mirbad_start_model", ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Start a registered model using existing placement, ownership, and admission checks.")]
@@ -359,6 +535,15 @@ public sealed partial class MirbadMcpTools(
 
     [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$")]
     private static partial Regex FolderRegex();
+
+    [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")]
+    private static partial Regex SettingRegex();
+
+    [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,254}$")]
+    private static partial Regex ImageRegex();
+
+    [GeneratedRegex("^sha256:[0-9a-f]{64}$")]
+    private static partial Regex ImageDigestRegex();
 
     [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")]
     private static partial Regex RepoIdRegex();
