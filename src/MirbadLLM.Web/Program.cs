@@ -189,7 +189,7 @@ builder.Services.AddRazorComponents()
 builder.Services.AddScoped<LiveDataService>();
 builder.Services.AddSingleton<ModelStartService>();
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddMcpServer()
+builder.Services.AddMcpServer(options => options.ServerInstructions = MirbadMcpTools.PlanningGuide)
     .WithHttpTransport(options => options.SessionMode = HttpServerSessionMode.Stateless)
     .WithTools<MirbadMcpTools>();
 // The release notes this build carries (docs/multinode/agent-updates.md U1): What's new, Releases, agent updates.

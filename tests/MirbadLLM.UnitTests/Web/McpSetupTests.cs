@@ -23,7 +23,7 @@ public sealed class McpSetupTests
     [Fact]
     public void Catalog_SplitsReadAndOperatorTools_AndMarksDestructiveOnes()
     {
-        Assert.Equal(10, McpToolCatalog.All.Count(t => t.ReadOnly));
+        Assert.Equal(11, McpToolCatalog.All.Count(t => t.ReadOnly));
         Assert.Equal(8, McpToolCatalog.All.Count(t => !t.ReadOnly));
         Assert.Equal(
             ["mirbad_stop_model", "mirbad_delete_model", "mirbad_cancel_job"],
