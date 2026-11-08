@@ -94,6 +94,13 @@ public sealed class PlacementEditorTests
 
             var reopened = ctx.Render<ModelEditor>(p => p.Add(x => x.Id, "sg"));
             Assert.Equal("DFLASH", reopened.Find("[data-testid=field-speculative-method]").GetAttribute("value"));
+
+            // A flag and its value on one line are two arguments, and read back the same way.
+            reopened.Find("[data-testid=field-extra-args]").Change("--tp 2\n--speculative-eagle-topk 4");
+            reopened.Find("form").Submit();
+            Assert.Equal(["--tp", "2", "--speculative-eagle-topk", "4"], (await registry.GetAsync("sg", Ct))!.Container!.ExtraArgs);
+            var again = ctx.Render<ModelEditor>(p => p.Add(x => x.Id, "sg"));
+            Assert.Contains("--tp 2", again.Find("[data-testid=field-extra-args]").TextContent + again.Find("[data-testid=field-extra-args]").GetAttribute("value"), StringComparison.Ordinal);
         }
         finally
         {

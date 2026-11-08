@@ -6,6 +6,9 @@ private development history.
 
 ## Unreleased
 
+- Moving a model pulls the image its runtime actually uses, and a native-process model no longer waits on a node without Docker
+- SGLang and NIM settings are checked on every save, and a flag with its value on one line of Extra args now works
+- `PUT /api/models` keeps `mlx`, `container` and `speculative` when the body leaves them out
 - Tuning is refused on MLX, SGLang and NIM with a clear reason, because the search couldn't change anything on them; benchmarks still work
 - Ready MLX, SGLang and NIM models show on the Overview leaderboard and in the memory charts; the Apply dialog and saved-settings prompts list real changes for SGLang, NIM, llama.cpp and MLX
 - SGLang speculative decoding: set the algorithm, draft depth and draft model in the model editor or through `mirbad_deploy_model`

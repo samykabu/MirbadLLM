@@ -618,6 +618,24 @@ public sealed class RegistryMigrationTests : IDisposable
         Assert.Equal(((ModelPlacement?)null, RuntimeKind.Vllm, (LlamaCppSettings?)null, (double?)null, false), (all.Placement, all.Runtime, all.LlamaCpp, all.HostMemoryBudgetGiB, all.KeepServingDuringJobs));
     }
 
+    [Fact]
+    public void MergeAbsentFields_KeepsRuntimeSettingsAndSpeculativeDecoding_UnlessTheBodyNamesThem()
+    {
+        var stored = Placed with
+        {
+            Mlx = new MlxSettings { ModelFolder = "m" },
+            Container = new ContainerRuntimeSettings { Image = "sg:1" },
+            Speculative = new SpeculativeDecoding("mtp", 2),
+        };
+        var incoming = new ModelDefinition { Id = "placed", ServedName = "placed", ModelPath = "Placed" };
+
+        var none = AdminApiEndpoints.MergeAbsentFields(incoming, stored, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        var all = AdminApiEndpoints.MergeAbsentFields(incoming, stored, new HashSet<string>(["MLX", "container", "Speculative"], StringComparer.OrdinalIgnoreCase));
+
+        Assert.Equal((stored.Mlx, stored.Container, stored.Speculative), (none.Mlx, none.Container, none.Speculative));
+        Assert.Equal(((MlxSettings?)null, (ContainerRuntimeSettings?)null, (SpeculativeDecoding?)null), (all.Mlx, all.Container, all.Speculative));
+    }
+
     // ------------------------------------------------------------ POST default placement (design §5.6, MN-090)
 
     private static Task<HttpResponseMessage> PostAsync(ApiHost host, ModelDefinition model) =>

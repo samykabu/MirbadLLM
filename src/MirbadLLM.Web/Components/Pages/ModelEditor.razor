@@ -706,7 +706,7 @@ else
                         <div class="field"><FieldHelp Label="Memory budget (GiB)" For="field-memory-budget" Help="@ModelFieldHelp.MemoryBudgetGiB" /><InputNumber class="form-control num" id="field-memory-budget" @bind-Value="_model.MemoryBudgetGiB" /></div>
                         <div class="field field--wide"><label class="field-label" for="field-image">Image</label><InputText class="form-control num" id="field-image" data-testid="field-image" @bind-Value="_model.Image" /></div>
                         <div class="field field--wide"><label class="field-label" for="field-image-digest">Image digest</label><InputText class="form-control num" id="field-image-digest" data-testid="field-image-digest" @bind-Value="_model.ImageDigest" placeholder="@(_runtime == RuntimeKind.Nim ? "sha256:… (required)" : "sha256:…")" /></div>
-                        <div class="field field--wide"><label class="field-label" for="field-extra-args">Extra args (one per line)</label><InputTextArea class="form-control num" id="field-extra-args" data-testid="field-extra-args" rows="4" @bind-Value="_model.ExtraArgsText" /></div>
+                        <div class="field field--wide"><label class="field-label" for="field-extra-args">Extra args (one flag and its value per line)</label><InputTextArea class="form-control num" id="field-extra-args" data-testid="field-extra-args" rows="4" @bind-Value="_model.ExtraArgsText" /></div>
                         @if (_runtime == RuntimeKind.Sglang)
                         {
                             <div class="field field--wide">
@@ -1703,7 +1703,7 @@ else
                 _runtime = existing.Runtime;
                 _model.Image = existing.Container?.Image ?? "";
                 _model.ImageDigest = existing.Container?.ImageDigest ?? "";
-                _model.ExtraArgsText = string.Join(Environment.NewLine, existing.Container?.ExtraArgs ?? []);
+                _model.ExtraArgsText = LlamaCppEditing.FormatExtraArgs(existing.Container?.ExtraArgs);
                 _budgetTouched = true;
             }
 
@@ -3030,7 +3030,8 @@ else
                 {
                     Image = (_model.Image ?? "").Trim(),
                     ImageDigest = string.IsNullOrWhiteSpace(_model.ImageDigest) ? null : _model.ImageDigest.Trim(),
-                    ExtraArgs = _model.ExtraArgsText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                    // A flag and its value on one line are two arguments, as in the llama.cpp and MLX sections.
+                    ExtraArgs = LlamaCppEditing.ParseExtraArgs(_model.ExtraArgsText),
                 },
                 LlamaCpp = null,
                 Mlx = null,

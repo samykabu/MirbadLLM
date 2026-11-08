@@ -532,6 +532,33 @@ public sealed class LaunchSpecBuilderLlamaCppTests
     }
 
     [Fact]
+    public void ImageToPull_IsTheImageEachRuntimeActuallyRuns()
+    {
+        var node = ContainerNode() with { DefaultVllmImage = "vllm:default", DefaultLlamaCppImage = "llama:default", DefaultLlamaCppImageDigest = Digest };
+        var options = new MirbadLLMOptions();
+        var model = ContainerModel(RuntimeKind.Sglang) with { Container = null };
+
+        Assert.Equal(("vllm:default", null), LaunchSpecBuilder.ImageToPull(model with { Runtime = RuntimeKind.Vllm }, node, options)!.Value);
+        Assert.Equal(("sg:1", Digest), LaunchSpecBuilder.ImageToPull(model with { Container = new ContainerRuntimeSettings { Image = "sg:1", ImageDigest = Digest } }, node, options)!.Value);
+        Assert.Equal(("nim:1", Digest), LaunchSpecBuilder.ImageToPull(model with { Runtime = RuntimeKind.Nim, Container = new ContainerRuntimeSettings { Image = "nim:1", ImageDigest = Digest } }, node, options)!.Value);
+        Assert.Equal(("llama:default", Digest), LaunchSpecBuilder.ImageToPull(model with { Runtime = RuntimeKind.LlamaCpp, LlamaCpp = new LlamaCppSettings { ModelFile = "m/a.gguf" } }, node, options)!.Value);
+        Assert.Equal(("llama:1", null), LaunchSpecBuilder.ImageToPull(model with { Runtime = RuntimeKind.LlamaCpp, LlamaCpp = new LlamaCppSettings { ModelFile = "m/a.gguf", Image = "llama:1" } }, node, options)!.Value);
+
+        // A native process needs no image: a node without Docker would never answer an image request.
+        Assert.Null(LaunchSpecBuilder.ImageToPull(model with { Runtime = RuntimeKind.LlamaCpp, LlamaCpp = new LlamaCppSettings { ModelFile = "m/a.gguf", Delivery = LaunchDelivery.Process } }, node, options));
+        Assert.Null(LaunchSpecBuilder.ImageToPull(model with { Runtime = RuntimeKind.Mlx }, node, options));
+    }
+
+    [Theory]
+    [InlineData("--port 9000")]
+    [InlineData("--port=9000")]
+    [InlineData("--port")]
+    public void ContainerExtraArgs_RefuseAReservedFlag_HoweverItIsWritten(string arg)
+    {
+        Assert.NotNull(LaunchSpecBuilder.ContainerExtraArgProblem(RuntimeKind.Sglang, [arg]));
+    }
+
+    [Fact]
     public void SglangSpeculative_RefusesAFlagRepeatedInExtraArgs()
     {
         var model = ContainerModel(RuntimeKind.Sglang) with
