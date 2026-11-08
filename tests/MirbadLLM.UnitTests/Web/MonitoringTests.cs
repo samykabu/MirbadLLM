@@ -59,6 +59,30 @@ public sealed class MonitoringTests
         ToolCallsPerMinute: 0);
 
     [Fact]
+    public void AReadyModelWithoutEngineMetrics_IsOnTheLeaderboard_NotUnderNotRunning()
+    {
+        using var ctx = new Bunit.BunitContext();
+        var model = new ModelDefinition { Id = "sg", ServedName = "SG", ModelPath = "checkpoint", Runtime = RuntimeKind.Sglang };
+        RegisterBaseFakes(ctx, new FakeModelRegistry([model]));
+        var runtime = new FakeModelRuntime();
+        runtime.SetStatus(new ModelStatus("sg", ModelState.Ready));
+        ctx.Services.AddSingleton<IModelRuntime>(runtime);
+        ctx.Services.AddSingleton<IMetricsHistory>(new FakeMetricsHistory
+        {
+            HostSamples = [new HostSample(DateTimeOffset.UtcNow, new MemorySnapshot(128, 90), Gpu: null)],
+        });
+
+        var cut = ctx.Render<Dashboard>();
+
+        Assert.Contains("Ready", cut.Find("[data-testid=model-row-state-sg]").TextContent, StringComparison.Ordinal);
+        Assert.Equal(MirbadLLM.Web.UiFormat.Missing, cut.Find("[data-testid=model-tps-sg]").TextContent.Trim());
+        Assert.Empty(cut.FindAll("[data-testid=model-table-fold]"));
+
+        cut.Find("[data-testid=model-row-open-sg]").Click();
+        Assert.Contains("SGLang has no engine metrics", cut.Find("[data-testid=readout-no-metrics]").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ADeletedModel_WithRecentSamples_HasNoRunningRow()
     {
         // The history still holds the deleted model's last samples; only registered models get a row.

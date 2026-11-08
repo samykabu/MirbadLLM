@@ -317,6 +317,24 @@ public sealed class TelemetryCollectorTests
     }
 
     [Fact]
+    public async Task AReadyModelThatIsNeverScraped_StillHoldsItsMemory()
+    {
+        // MLX, SGLang and NIM have no engine metrics, so a scrape never lists them.
+        var registry = new FakeModelRegistry()
+            .Add(new ModelDefinition { Id = "sg", ServedName = "SG", ModelPath = "p", MemoryBudgetGiB = 24, Runtime = RuntimeKind.Sglang });
+        var cache = new FakeStatusCache();
+        cache.Runtimes.Add(new NodeModelRuntime { ModelId = "sg", NodeId = "dgx", State = ModelState.Ready });
+        var env = new Env(registry: registry, statusCache: cache);
+        env.AddNode("dgx");
+        env.Agent("dgx").Append(env.Time.GetUtcNow(), totalGiB: 121, availableGiB: 40, models: []);
+
+        await env.Collector.CollectOnceAsync();
+
+        var host = Assert.Single(env.History.GetHost("dgx", Hour));
+        Assert.Equal(new Dictionary<string, double> { ["sg"] = 24 }, host.ModelMemoryGiB);
+    }
+
+    [Fact]
     public async Task HostSampleBudgetsEveryModelWhoseContainerHoldsMemory()
     {
         // Ported from MetricsSamplerPerModelTests: Ready (scraped), Starting and Stopping hold their budget; Stopped and

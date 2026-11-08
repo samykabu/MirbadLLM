@@ -3344,7 +3344,7 @@ else
 
     /// <summary>Every setting a restart applies: the vLLM list (unchanged for vLLM models) and the llama.cpp settings.</summary>
     private static IReadOnlyList<SettingChange> RestartNeeded(ModelDefinition before, ModelDefinition after) =>
-        [.. SettingChanges.RestartNeeded(before, after), .. LlamaCppEditing.RestartNeeded(before, after), .. MlxEditing.RestartNeeded(before, after)];
+        SettingChanges.AllRestartNeeded(before, after);
 
     // --- MLX (docs/macos/implementation-plan.md, Phase 3 "UI") ---
 

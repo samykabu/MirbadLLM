@@ -474,6 +474,11 @@ public sealed class ModelJobService(
     {
         var model = await registry.GetAsync(modelId, ct).ConfigureAwait(false)
             ?? throw new KeyNotFoundException($"Unknown model '{modelId}'.");
+        if (TuningSupport.RefusalFor(model) is { } refusal)
+        {
+            throw new InvalidOperationException(refusal);
+        }
+
         string nodeId = NodeOf(model);
         ThrowIfBusy(nodeId, JobKind.Tuning, modelId);
         goal = EffectiveGoal(model, goal);
@@ -743,6 +748,12 @@ public sealed class ModelJobService(
 
         var saved = await registry.GetAsync(modelId, ct).ConfigureAwait(false)
             ?? throw new KeyNotFoundException($"Unknown model '{modelId}'.");
+
+        // A run from before tuning was refused for this runtime only changed settings its server never reads.
+        if (TuningSupport.RefusalFor(saved) is { } refusal)
+        {
+            throw new InvalidOperationException(refusal);
+        }
 
         var merged = MergeTuned(saved, candidate.Settings);
 

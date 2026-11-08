@@ -19,6 +19,10 @@ public static class SettingChanges
 {
     private static readonly CultureInfo Culture = CultureInfo.InvariantCulture;
 
+    /// <summary>Everything that differs and needs a restart, on whichever runtime the model uses.</summary>
+    public static IReadOnlyList<SettingChange> AllRestartNeeded(ModelDefinition before, ModelDefinition after) =>
+        [.. RestartNeeded(before, after), .. LlamaCppEditing.RestartNeeded(before, after), .. MlxEditing.RestartNeeded(before, after)];
+
     public static IReadOnlyList<SettingChange> RestartNeeded(ModelDefinition before, ModelDefinition after)
     {
         ArgumentNullException.ThrowIfNull(before);
@@ -52,6 +56,9 @@ public static class SettingChanges
         Add("Image", before.Image ?? "default", after.Image ?? "default");
         Add("Image digest", before.ImageDigest ?? "none", after.ImageDigest ?? "none");
         Add("Extra args", ExtraArgs(before.ExtraArgs), ExtraArgs(after.ExtraArgs));
+        Add("Container image", before.Container?.Image ?? "none", after.Container?.Image ?? "none");
+        Add("Container image digest", before.Container?.ImageDigest ?? "none", after.Container?.ImageDigest ?? "none");
+        Add("Container extra args", ExtraArgs(before.Container?.ExtraArgs ?? []), ExtraArgs(after.Container?.ExtraArgs ?? []));
 
         // Placement GPUs (design §5.1, §6.3; MN-118): another card or another count is a launch change (device selection,
         // --tensor-parallel-size, the per-GPU utilization). Compared by UUID, the GPU's identity, so a renumbering that

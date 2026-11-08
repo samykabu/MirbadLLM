@@ -133,6 +133,31 @@ public sealed class ModelTuneApplyTests : IDisposable
             d => Assert.True(cut.Find($"[data-testid=step-{d}]").HasAttribute("checked"), d.ToString()));
     }
 
+    [Theory]
+    [InlineData(RuntimeKind.Mlx)]
+    [InlineData(RuntimeKind.Sglang)]
+    [InlineData(RuntimeKind.Nim)]
+    public async Task RuntimeTheSearchCannotChange_IsExplained_AndCanNeitherStartNorApply(RuntimeKind runtime)
+    {
+        var model = Baseline with { Runtime = runtime };
+        var run = MakeRun("run-1", MakeCandidate(0, CandidateOutcome.Accepted, model), MakeCandidate(1, CandidateOutcome.Accepted, model with { MaxNumSeqs = 4 }));
+        var (ctx, registry, _, _) = MakeContext(model, run);
+        using var _ = ctx;
+
+        var cut = ctx.Render<ModelTune>(p => p.Add(x => x.Id, model.Id));
+        cut.WaitForElement("[data-testid=tune-unavailable]", TimeSpan.FromSeconds(10));
+        Assert.Empty(cut.FindAll("[data-testid=start-tuning]"));
+        Assert.Empty(cut.FindAll("[data-testid=tune-results]"));
+        Assert.Empty(cut.FindAll("[data-testid=apply-best]"));
+        Assert.Empty(cut.FindAll("[data-testid=tune-history]"));
+
+        var jobs = ctx.Services.GetRequiredService<ModelJobService>();
+        var ct = Xunit.TestContext.Current.CancellationToken;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => jobs.StartTuningAsync(model.Id, TuningGoal.InteractiveChat, ct: ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => jobs.ApplyTuningCandidateAsync(model.Id, run.Id, 1, ct));
+        Assert.Equal(16, (await registry.GetAsync(model.Id, ct))!.MaxNumSeqs);
+    }
+
     [Fact]
     public void ApplyButton_OnlyOnAcceptedRows()
     {

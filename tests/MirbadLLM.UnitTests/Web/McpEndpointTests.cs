@@ -264,6 +264,10 @@ public sealed class McpEndpointTests : IDisposable
         Assert.Equal("DFLASH", model!.Speculative!.Method);
         Assert.Equal("/models/sg-dflash", model.Speculative.DraftModel);
 
+        string tuning = await CallTool(client, key, "mirbad_start_tuning", new { modelId = "sg" });
+        Assert.Contains("\"isError\":true", tuning, StringComparison.Ordinal);
+        Assert.Contains("Tuning isn", tuning, StringComparison.Ordinal);
+
         string refused = await CallTool(client, key, "mirbad_deploy_model", new
         {
             modelId = "no-algo", servedName = "x", repoId = "org/x", folder = "x", nodeId = "dgx", runtime = "sglang", image = "sglang:1", speculativeTokens = 16, draftFolder = "d",

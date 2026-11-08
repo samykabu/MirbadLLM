@@ -46,7 +46,8 @@ public sealed partial class MirbadMcpTools(
         "(2) Settings depend on the runtime, and mirbad_deploy_model refuses one the runtime would ignore: kvCacheDtype works on vllm, llamacpp and mlx; enablePrefixCaching on vllm; " +
         "speculative decoding on vllm, sglang and mlx, never on llamacpp or nim; sglang needs speculativeMethod, an algorithm such as DFLASH, EAGLE3, STANDALONE or NGRAM. " +
         "(3) A deploy only proves the settings are valid. " + UnprovenSpeculativeNote + " " +
-        "(4) " + UnprovenImageNote;
+        "(4) " + UnprovenImageNote + " " +
+        "(5) Tuning works only on vllm and llamacpp. On mlx, sglang and nim it is refused because it could not change anything; mirbad_start_benchmark still works there.";
 
     [McpServerTool(Name = "mirbad_get_fleet_health", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Summarize controller, node, model, download, and job health.")]
@@ -446,11 +447,20 @@ public sealed partial class MirbadMcpTools(
     }
 
     [McpServerTool(Name = "mirbad_start_tuning", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
-    [Description("Start a tuning job and return immediately; the winner is never applied automatically.")]
+    [Description("Start a tuning job on a vllm or llamacpp model and return immediately; the winner is never applied automatically. Other runtimes are refused.")]
     public async Task<object> StartTuning(string modelId, TuningGoal goal = TuningGoal.Balanced, IReadOnlyList<TuningDimension>? dimensions = null, CancellationToken ct = default)
     {
         RequireOperator();
-        var job = await jobs.StartTuningAsync(modelId, goal, dimensions, ct).ConfigureAwait(false);
+        JobSnapshot job;
+        try
+        {
+            job = await jobs.StartTuningAsync(modelId, goal, dimensions, ct).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new McpException(ex.Message, ex);
+        }
+
         await Audit(AuditActions.Job, modelId, job.NodeId, AuditResults.Accepted, "MCP tuning started").ConfigureAwait(false);
         return new { job, nextAction = "Poll mirbad_get_job; inspect mirbad_list_tuning_runs after completion." };
     }
@@ -473,7 +483,16 @@ public sealed partial class MirbadMcpTools(
     {
         RequireOperator();
         if (candidateIndex < 0) throw new McpException("candidateIndex must be non-negative.");
-        var model = await jobs.ApplyTuningCandidateAsync(modelId, runId, candidateIndex, ct).ConfigureAwait(false);
+        ModelDefinition model;
+        try
+        {
+            model = await jobs.ApplyTuningCandidateAsync(modelId, runId, candidateIndex, ct).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new McpException(ex.Message, ex);
+        }
+
         await Audit(AuditActions.ModelUpdate, modelId, model.Placement?.NodeId, AuditResults.Succeeded, $"MCP applied tuning candidate {runId}#{candidateIndex}").ConfigureAwait(false);
         return new { model, runId, candidateIndex, nextAction = "Restart the model to use the saved settings." };
     }

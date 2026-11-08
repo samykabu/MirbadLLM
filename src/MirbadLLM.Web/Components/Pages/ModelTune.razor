@@ -23,6 +23,19 @@
 else if (_model is not null)
 {
     <ModelHeader ModelId="@_model.Id" Current="tune" />
+    @if (TuningRefusal is { } refusal)
+    {
+        <div class="callout callout--warning page-alert" role="status" data-testid="tune-unavailable">
+            <Icon Name="warning" />
+            <div class="callout-body">
+                <span>@refusal</span>
+                <span>Results from any earlier run aren't shown, because they can't be trusted.</span>
+                <div><a class="btn btn-sm btn-outline-secondary" href="@($"models/{_model.Id}/benchmark")">Go to Benchmark</a></div>
+            </div>
+        </div>
+    }
+    else
+    {
     <p class="job-lede">Find faster @(IsLlamaCpp ? "llama-server" : "vLLM") settings for this model with a repeatable search. You apply the winner yourself; nothing changes automatically.</p>
 
     @if (_error is not null)
@@ -357,6 +370,8 @@ else if (_model is not null)
         }
     </section>
 
+    }
+
     <StartJobDialog @ref="_start" ModelId="@_model.Id" Title="@($"Tune {_model.ServedName}?")" ConfirmLabel="Start tuning"
                     Estimate="@(_preview is null ? "" : UiFormat.About(_preview.Estimate))" OnConfirm="StartAsync" TestId="tune-dialog">
         <p>
@@ -392,6 +407,8 @@ else if (_model is not null)
 
     /// <summary>True for a llama.cpp model: the steps are <see cref="LlamaCppTuning.Dimensions"/>, not the vLLM ones (MN-230).</summary>
     private bool IsLlamaCpp => _model is not null && LlamaCppTuning.Applies(_model);
+
+    private string? TuningRefusal => _model is null ? null : TuningSupport.RefusalFor(_model);
 
     private (string Key, string Label)[] SearchOptions => IsLlamaCpp ? LlamaCppSearchOptions : VllmSearchOptions;
 
@@ -816,6 +833,11 @@ else if (_model is not null)
 
     private async Task RefreshPreviewAsync()
     {
+        if (TuningRefusal is not null)
+        {
+            return;
+        }
+
         try
         {
             _preview = await Jobs.PreviewTuningAsync(Id, _steps.ToList(), _goal);
@@ -984,7 +1006,7 @@ else if (_model is not null)
             }
         }
 
-        await _apply.OpenAsync(merged, SettingChanges.RestartNeeded(launched, merged), launched.MemoryBudgetGiB);
+        await _apply.OpenAsync(merged, SettingChanges.AllRestartNeeded(launched, merged), launched.MemoryBudgetGiB);
     }
 
     private async Task AfterApplyAsync(bool restarted)

@@ -75,7 +75,7 @@
             ? $"{p.NodeId}, {string.Join(" + ", p.Gpus.Select(g => g.Name ?? g.Uuid))}"
             : p.NodeId;
 
-    private IReadOnlyList<SettingChange> Changes => SettingChanges.RestartNeeded(A.Settings, B.Settings);
+    private IReadOnlyList<SettingChange> Changes => SettingChanges.AllRestartNeeded(A.Settings, B.Settings);
 
     /// <summary>One compared metric. <see cref="HigherIsBetter"/> false for latencies.</summary>
     public sealed record CompareRow(string Key, string Label, double? A, double? B, bool HigherIsBetter, Func<double?, string> Format);

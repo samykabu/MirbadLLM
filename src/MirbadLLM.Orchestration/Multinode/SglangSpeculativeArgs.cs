@@ -72,7 +72,8 @@ public static class SglangSpeculativeArgs
         return null;
     }
 
-    private static string DepthFlag(string algorithm) => algorithm is "EAGLE" or "EAGLE3" or "STANDALONE" or "NEXTN"
+    /// <summary>The flag that sets how much <paramref name="algorithm"/> (upper case) drafts per step.</summary>
+    internal static string DepthFlag(string algorithm) => algorithm is "EAGLE" or "EAGLE3" or "STANDALONE" or "NEXTN"
         ? "--speculative-num-steps"
         : "--speculative-num-draft-tokens";
 }
