@@ -6,6 +6,7 @@ private development history.
 
 ## Unreleased
 
+- SGLang speculative decoding: set the algorithm, draft depth and draft model in the model editor or through `mirbad_deploy_model`
 - MCP: `mirbad_deploy_model` selects the runtime, GPUs, image and memory budget, and sets the KV cache type, prefix caching and speculative decoding with a draft model; `mirbad_list_node_runtimes` lists what each node supports. An MCP Operator key can choose any container image, within each node's digest policy. MCP clients are told on connect, in the tool descriptions and in the deploy answer what each runtime supports and what a deploy doesn't prove
 - Access > MCP: a new tab lists every MCP tool, gives setup steps for Codex, Claude Code and Claude Desktop, and has a prompt that asks an agent to configure itself; the Remote MCP panel moved here from Connect
 - Fix MCP tool output schemas so Claude Code can load the tools; `structuredContent` now holds the result directly instead of under a `result` property

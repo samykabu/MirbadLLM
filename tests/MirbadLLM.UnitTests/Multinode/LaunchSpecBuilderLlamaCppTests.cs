@@ -497,6 +497,51 @@ public sealed class LaunchSpecBuilderLlamaCppTests
         Assert.Equal(["--tp", "2"], built.Spec.Argv.TakeLast(2));
     }
 
+    [Theory]
+    [InlineData("dflash", "--speculative-num-draft-tokens")]
+    [InlineData("NGRAM", "--speculative-num-draft-tokens")]
+    [InlineData("EAGLE3", "--speculative-num-steps")]
+    [InlineData("STANDALONE", "--speculative-num-steps")]
+    public void SglangContainer_TurnsSpeculativeIntoFlags_BeforeTheExtraArgs(string method, string depthFlag)
+    {
+        var model = ContainerModel(RuntimeKind.Sglang) with
+        {
+            Container = new ContainerRuntimeSettings { Image = "lmsysorg/sglang:1", ImageDigest = Digest, ExtraArgs = ["--tp", "2"] },
+            Speculative = new SpeculativeDecoding(method, 7) { DraftModel = "/models/drafter" },
+        };
+        var built = LaunchSpecBuilder.Build(model, ContainerNode(), "unused", 120, false, nodeFeatures: [AgentFeatures.RuntimeSglangContainer]);
+
+        Assert.Equal(
+            ["--speculative-algorithm", method.ToUpperInvariant(), "--speculative-draft-model-path", "/models/drafter", depthFlag, "7", "--tp", "2"],
+            built.Spec.Argv.TakeLast(8));
+    }
+
+    [Theory]
+    [InlineData("", "/models/d", "needs an algorithm")]
+    [InlineData("--evil", "/models/d", "needs an algorithm")]
+    [InlineData("DFLASH", "/etc/passwd", "must be a folder under /models")]
+    [InlineData("DFLASH", "/models/../etc", "must be a folder under /models")]
+    public void SglangSpeculative_RefusesBadSettings(string method, string draft, string message)
+    {
+        var model = ContainerModel(RuntimeKind.Sglang) with
+        {
+            Container = new ContainerRuntimeSettings { Image = "lmsysorg/sglang:1" },
+            Speculative = new SpeculativeDecoding(method, 7) { DraftModel = draft },
+        };
+        Assert.Contains(message, SglangSpeculativeArgs.Problem(model), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SglangSpeculative_RefusesAFlagRepeatedInExtraArgs()
+    {
+        var model = ContainerModel(RuntimeKind.Sglang) with
+        {
+            Container = new ContainerRuntimeSettings { Image = "lmsysorg/sglang:1", ExtraArgs = ["--speculative-algorithm=EAGLE"] },
+            Speculative = new SpeculativeDecoding("DFLASH", 16),
+        };
+        Assert.Contains("repeats a speculative decoding setting", SglangSpeculativeArgs.Problem(model), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void NimContainer_RequiresDigest_UsesSecretsAndCacheReadiness()
     {

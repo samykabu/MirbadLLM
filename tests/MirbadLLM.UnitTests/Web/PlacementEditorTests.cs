@@ -36,6 +36,71 @@ public sealed class PlacementEditorTests
 
     private static CancellationToken Ct => Xunit.TestContext.Current.CancellationToken;
 
+    private sealed class SilentNodeMemoryProbe : IMemoryProbe
+    {
+        public Task<MemorySnapshot> GetAsync(CancellationToken ct = default) =>
+            throw new NodeTelemetryUnavailableException("Node 'dgx' has not reported memory recently.");
+    }
+
+    [Fact]
+    public void Editor_StillOpens_WhenTheNodeHasNotReportedMemory()
+    {
+        var model = new ModelDefinition { Id = "m1", ServedName = "M1", ModelPath = "m1" };
+        string root = Path.Combine(Path.GetTempPath(), "ss-silent-node-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var ctx = FakeContext(new FakeModelRegistry([model]), root, nodes: null);
+            ctx.Services.AddSingleton<IMemoryProbe>(new SilentNodeMemoryProbe());
+
+            var cut = ctx.Render<ModelEditor>(p => p.Add(x => x.Id, "m1"));
+
+            Assert.NotEmpty(cut.FindAll("[data-testid=field-speculative-enabled]"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SglangEdit_SavesSpeculativeDecoding_AndRefusesItWithoutAnAlgorithm_WhileNimDoesNotOfferIt()
+    {
+        var container = new ContainerRuntimeSettings { Image = "lmsysorg/sglang:1" };
+        var sglang = new ModelDefinition { Id = "sg", ServedName = "SG", ModelPath = "sg", Runtime = RuntimeKind.Sglang, Container = container, ToolCallParser = null, ReasoningParser = null };
+        var nim = sglang with { Id = "nim", ServedName = "NIM", Runtime = RuntimeKind.Nim };
+        string root = Path.Combine(Path.GetTempPath(), "ss-sglang-speculative-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var registry = new FakeModelRegistry([sglang, nim]);
+            using var ctx = FakeContext(registry, root, nodes: null);
+
+            Assert.Empty(ctx.Render<ModelEditor>(p => p.Add(x => x.Id, "nim")).FindAll("[data-testid=field-speculative-enabled]"));
+
+            var cut = ctx.Render<ModelEditor>(p => p.Add(x => x.Id, "sg"));
+            Assert.Empty(cut.FindAll("[data-testid=field-speculative-method]"));
+            cut.Find("[data-testid=field-speculative-enabled]").Change(true);
+            cut.Find("[data-testid=field-speculative-draft-model]").Change("/models/sg-dflash");
+            cut.Find("form").Submit();
+            Assert.Contains("needs an algorithm", cut.Find("[data-testid=save-error]").TextContent, StringComparison.Ordinal);
+            Assert.Null((await registry.GetAsync("sg", Ct))!.Speculative);
+
+            cut.Find("[data-testid=field-speculative-method]").Change("DFLASH");
+            cut.Find("[data-testid=field-speculative-num-tokens]").Change("16");
+            cut.Find("form").Submit();
+            var saved = (await registry.GetAsync("sg", Ct))!.Speculative!;
+            Assert.Equal(("DFLASH", 16, "/models/sg-dflash"), (saved.Method, saved.NumSpeculativeTokens, saved.DraftModel));
+
+            var reopened = ctx.Render<ModelEditor>(p => p.Add(x => x.Id, "sg"));
+            Assert.Equal("DFLASH", reopened.Find("[data-testid=field-speculative-method]").GetAttribute("value"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     // ================================================================ single DGX: as before P2
 
     [Fact]

@@ -170,6 +170,26 @@ public static class ModelFieldHelp
              "MTP layers; vLLM infers the method from the drafter when Method is left empty.",
         Example: "/models/Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark with 3 speculative tokens for nemotron-3-5.");
 
+    public static readonly FieldHelpText SglangSpeculativeEnabled = new(
+        What: "SGLang speculative decoding: a cheap draft step proposes several tokens, the model verifies them in one pass.",
+        Why: "Can raise single-stream throughput when the draft's guesses are often right. Whether it works depends on the SGLang image and the drafter, and only a start shows that.",
+        Example: "DFLASH with a DFlash draft checkpoint downloaded under Extra checkpoints.");
+
+    public static readonly FieldHelpText SglangSpeculativeAlgorithm = new(
+        What: "The value of SGLang's --speculative-algorithm flag.",
+        Why: "Each algorithm needs a matching draft: DFLASH a DFlash checkpoint, EAGLE and EAGLE3 an EAGLE checkpoint, STANDALONE a small ordinary model. NGRAM needs none.",
+        Example: "DFLASH with z-lab's DFlash checkpoint for your model.");
+
+    public static readonly FieldHelpText SglangSpeculativeDepth = new(
+        What: "How much to draft per step: --speculative-num-draft-tokens for DFLASH and NGRAM, --speculative-num-steps for EAGLE, EAGLE3 and STANDALONE.",
+        Why: "Too deep wastes GPU work when guesses miss; a drafter's block size also limits it.",
+        Example: "16 for DFLASH (SGLang's default block size), 3 for EAGLE3.");
+
+    public static readonly FieldHelpText SglangSpeculativeDraftModel = new(
+        What: "Path of the draft checkpoint as the container sees it under /models. Leave it empty for NGRAM.",
+        Why: "Add the same folder under Extra checkpoints so it is downloaded with the model and on a move or restore.",
+        Example: "/models/my-model-DFlash");
+
     public static readonly FieldHelpText SpeculativeExtra = new(
         What: "Any other --speculative-config key, as a JSON object; kept verbatim and merged with the fields above.",
         Why: "vLLM's speculative config has many more knobs than this form; they round-trip here instead of hiding in the extra args.",

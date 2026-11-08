@@ -33,7 +33,7 @@ public sealed partial class MirbadMcpTools(
     private const int MaximumPageSize = 100;
 
     private const string UnprovenSpeculativeNote =
-        "Speculative decoding is saved but not proven. It depends on the vLLM image and the drafter, so plan to check it: " +
+        "Speculative decoding is saved but not proven. It depends on the runtime's image and the drafter, so plan to check it: " +
         "after mirbad_start_model, poll mirbad_get_model for Ready, then run mirbad_start_benchmark. If it fails, delete the model and deploy again without it; the downloaded files are kept.";
 
     private const string UnprovenImageNote =
@@ -44,7 +44,7 @@ public sealed partial class MirbadMcpTools(
         "Planning a model deployment. " +
         "(1) Call mirbad_list_node_runtimes first: a node only runs the runtimes it reports, and a node with discrete GPUs needs gpuIndices. " +
         "(2) Settings depend on the runtime, and mirbad_deploy_model refuses one the runtime would ignore: kvCacheDtype works on vllm, llamacpp and mlx; enablePrefixCaching on vllm; " +
-        "speculative decoding only on vllm and mlx, never on llamacpp, sglang or nim. " +
+        "speculative decoding on vllm, sglang and mlx, never on llamacpp or nim; sglang needs speculativeMethod, an algorithm such as DFLASH, EAGLE3, STANDALONE or NGRAM. " +
         "(3) A deploy only proves the settings are valid. " + UnprovenSpeculativeNote + " " +
         "(4) " + UnprovenImageNote;
 
@@ -241,9 +241,9 @@ public sealed partial class MirbadMcpTools(
         [Description("Memory budget in GiB that start admission checks. Defaults to 36.")] double? memoryBudgetGiB = null,
         [Description("KV cache type. vllm: auto or fp8. llamacpp: a type such as q8_0, for keys and values. mlx: bits, 4 or 8.")] string? kvCacheDtype = null,
         [Description("vllm: reuse the KV cache across requests that share a prefix. On by default.")] bool? enablePrefixCaching = null,
-        [Description("vllm only: speculative method such as mtp, ngram or dflash. Omit with draftFolder to let vLLM infer it from the drafter. Support depends on the vLLM image and the checkpoint, and is only proven when the model starts.")] string? speculativeMethod = null,
-        [Description("vllm and mlx: tokens drafted per step. Required by vllm when speculative decoding is on.")] int? speculativeTokens = null,
-        [Description("vllm and mlx: folder of the draft model, such as a DFlash or DSpark drafter. The image must support that drafter.")] string? draftFolder = null,
+        [Description("vllm: speculative method such as mtp, ngram or dflash; omit with draftFolder to let vLLM infer it from the drafter. sglang: required algorithm such as DFLASH, EAGLE, EAGLE3, STANDALONE or NGRAM. Support depends on the image and the checkpoint, and is only proven when the model starts.")] string? speculativeMethod = null,
+        [Description("vllm, sglang and mlx: how much to draft per step. Required by vllm and sglang when speculative decoding is on. On sglang this is draft tokens for DFLASH and NGRAM, and steps for EAGLE, EAGLE3 and STANDALONE.")] int? speculativeTokens = null,
+        [Description("vllm, sglang and mlx: folder of the draft model, such as a DFlash or DSpark drafter. The image must support that drafter.")] string? draftFolder = null,
         [Description("Hugging Face repository to download into draftFolder. Omit when the folder is already on the node.")] string? draftRepoId = null,
         CancellationToken ct = default)
     {
@@ -288,6 +288,12 @@ public sealed partial class MirbadMcpTools(
             Placement = new ModelPlacement(selected.NodeId, GpuIndices: gpuIndices),
         };
         if (memoryBudgetGiB is { } budget) model = model with { MemoryBudgetGiB = budget };
+        SpeculativeDecoding? speculative = runtime is not (RuntimeKind.Vllm or RuntimeKind.Sglang) || speculativeMethod is null && speculativeTokens is null && draftFolder is null
+            ? null
+            : new SpeculativeDecoding(speculativeMethod ?? "", speculativeTokens ?? 0)
+            {
+                DraftModel = draftFolder is null ? null : $"{LogicalVolumes.ModelsTarget}/{draftFolder}",
+            };
         model = runtime switch
         {
             RuntimeKind.LlamaCpp => model with
@@ -308,6 +314,7 @@ public sealed partial class MirbadMcpTools(
                 ToolCallParser = null,
                 ReasoningParser = null,
                 Container = new ContainerRuntimeSettings { Image = image ?? "", ImageDigest = digest },
+                Speculative = speculative,
             },
             _ => model with
             {
@@ -315,12 +322,7 @@ public sealed partial class MirbadMcpTools(
                 EnablePrefixCaching = enablePrefixCaching ?? model.EnablePrefixCaching,
                 Image = image,
                 ImageDigest = digest,
-                Speculative = speculativeMethod is null && speculativeTokens is null && draftFolder is null
-                    ? null
-                    : new SpeculativeDecoding(speculativeMethod ?? "", speculativeTokens ?? 0)
-                    {
-                        DraftModel = draftFolder is null ? null : $"{LogicalVolumes.ModelsTarget}/{draftFolder}",
-                    },
+                Speculative = speculative,
             },
         };
 
@@ -365,9 +367,9 @@ public sealed partial class MirbadMcpTools(
             (image is not null, runtime != RuntimeKind.Mlx, "image"),
             (kv is not null, runtime is RuntimeKind.Vllm or RuntimeKind.LlamaCpp or RuntimeKind.Mlx, "kvCacheDtype"),
             (prefix is not null, runtime == RuntimeKind.Vllm, "enablePrefixCaching"),
-            (method is not null, runtime == RuntimeKind.Vllm, "speculativeMethod"),
-            (tokens is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Mlx, "speculativeTokens"),
-            (draft is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Mlx, "draftFolder"),
+            (method is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Sglang, "speculativeMethod"),
+            (tokens is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Sglang or RuntimeKind.Mlx, "speculativeTokens"),
+            (draft is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Sglang or RuntimeKind.Mlx, "draftFolder"),
         }.Where(s => s.Given && !s.Applies).Select(s => s.Name).ToList();
         if (ignored.Count > 0)
             throw new McpException($"The {runtime} runtime does not use {string.Join(", ", ignored)}; no state was changed.");

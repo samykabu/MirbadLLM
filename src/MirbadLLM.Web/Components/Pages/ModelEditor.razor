@@ -707,6 +707,47 @@ else
                         <div class="field field--wide"><label class="field-label" for="field-image">Image</label><InputText class="form-control num" id="field-image" data-testid="field-image" @bind-Value="_model.Image" /></div>
                         <div class="field field--wide"><label class="field-label" for="field-image-digest">Image digest</label><InputText class="form-control num" id="field-image-digest" data-testid="field-image-digest" @bind-Value="_model.ImageDigest" placeholder="@(_runtime == RuntimeKind.Nim ? "sha256:… (required)" : "sha256:…")" /></div>
                         <div class="field field--wide"><label class="field-label" for="field-extra-args">Extra args (one per line)</label><InputTextArea class="form-control num" id="field-extra-args" data-testid="field-extra-args" rows="4" @bind-Value="_model.ExtraArgsText" /></div>
+                        @if (_runtime == RuntimeKind.Sglang)
+                        {
+                            <div class="field field--wide">
+                                <FieldHelp Label="Speculative decoding" For="speculativeEnabled" ShowLabel="false" Help="@ModelFieldHelp.SglangSpeculativeEnabled">
+                                    <Leading>
+                                        <div class="form-check form-switch switch-row">
+                                            <InputCheckbox class="form-check-input" role="switch" @bind-Value="_model.SpeculativeEnabled" id="speculativeEnabled" data-testid="field-speculative-enabled" />
+                                            <label class="form-check-label" for="speculativeEnabled">Speculative decoding</label>
+                                        </div>
+                                    </Leading>
+                                </FieldHelp>
+                            </div>
+                            @if (_model.SpeculativeEnabled)
+                            {
+                                <div class="field">
+                                    <FieldHelp Label="Algorithm" For="field-speculative-method" Help="@ModelFieldHelp.SglangSpeculativeAlgorithm" />
+                                    <select class="form-select" id="field-speculative-method" data-testid="field-speculative-method" @bind="_model.SpeculativeMethod">
+                                        <option value="">Choose an algorithm</option>
+                                        @foreach (string algorithm in SglangSpeculativeArgs.Algorithms)
+                                        {
+                                            <option value="@algorithm">@algorithm</option>
+                                        }
+                                        @if (!string.IsNullOrEmpty(_model.SpeculativeMethod) && !SglangSpeculativeArgs.Algorithms.Contains(_model.SpeculativeMethod))
+                                        {
+                                            <option value="@_model.SpeculativeMethod">@_model.SpeculativeMethod</option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="field">
+                                    <FieldHelp Label="Draft depth" For="field-speculative-num-tokens" Help="@ModelFieldHelp.SglangSpeculativeDepth" />
+                                    <InputNumber class="form-control num" id="field-speculative-num-tokens" data-testid="field-speculative-num-tokens" @bind-Value="_model.SpeculativeNumTokens"
+                                                 aria-describedby="field-speculative-num-tokens-error" />
+                                    <div id="field-speculative-num-tokens-error"><ValidationMessage For="() => _model.SpeculativeNumTokens" /></div>
+                                </div>
+                                <div class="field field--wide">
+                                    <FieldHelp Label="Draft model path" For="field-speculative-draft-model" Help="@ModelFieldHelp.SglangSpeculativeDraftModel" />
+                                    <InputText class="form-control num" id="field-speculative-draft-model" data-testid="field-speculative-draft-model"
+                                               @bind-Value="_model.SpeculativeDraftModel" placeholder="/models/…" spellcheck="false" />
+                                </div>
+                            }
+                        }
                         <div class="field field--wide"><label class="form-check"><InputCheckbox class="form-check-input" @bind-Value="_model.AutoStart" /><span>Start automatically</span></label></div>
                     </div>
                 </section>
@@ -1626,7 +1667,14 @@ else
                 ? null
                 : new PlacementFit(_nodeRegistry, Registry, Services.GetService<INodeTelemetry>(), _nodeCache, Services.GetService<TimeProvider>()));
         _reserveGiB = SparkOptions.Value.MemoryReserveGiB;
-        _memory = await MemoryProbe.GetAsync();
+        try
+        {
+            _memory = await MemoryProbe.GetAsync();
+        }
+        catch (NodeTelemetryUnavailableException)
+        {
+            // An offline node must not take down the settings of every model; the fit hints just have no figure yet.
+        }
 
         if (!IsNew)
         {
@@ -2771,6 +2819,12 @@ else
             return;
         }
 
+        if (_runtime == RuntimeKind.Sglang && SglangSpeculativeArgs.Problem(normalized.Definition) is { } sglangProblem)
+        {
+            _saveError = "Not saved: " + sglangProblem;
+            return;
+        }
+
         var definition = normalized.Definition;
         if (IsNew && definition.Placement is null)
         {
@@ -2985,6 +3039,10 @@ else
                 ExtraArgs = [],
                 ToolCallParser = null,
                 ReasoningParser = null,
+                // The advanced JSON keys are vLLM's; a model switched to SGLang in the wizard must not carry them over.
+                Speculative = _runtime == RuntimeKind.Sglang && definition.Speculative is { } speculative
+                    ? speculative with { Extra = JsonFields.Empty }
+                    : null,
             };
         }
 
