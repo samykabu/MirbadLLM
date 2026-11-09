@@ -60,7 +60,7 @@ else if (_model is not null)
                 </div>
                 <div>
                     <dt><ColumnHelp Label="Run / wait" Key="run-wait" Scope="overview"
-                                    Text="@($"Requests generating now / requests queued for a free slot. At most {_model.MaxNumSeqs} run at once (Max sequences).")" /></dt>
+                                    Text="@(_model.Runtime == RuntimeKind.Vllm ? $"Requests generating now / requests queued for a free slot. At most {_model.MaxNumSeqs} run at once (Max sequences)." : "Requests generating now / requests queued for a free slot.")" /></dt>
                     <dd class="num" data-testid="overview-running-waiting">@RunningWaiting</dd>
                 </div>
                 <div>

@@ -706,6 +706,13 @@ public static class LaunchSpecBuilder
             variables[NimServedNameVariable] = model.ServedName; // Otherwise the server answers to its own name and every routed request fails.
         }
 
+        // SGLang's /health otherwise queues a one-token request, which can outlast the agent's 3 s probe while a long prompt
+        // is processing. The model then reads Starting and the router refuses it. A stuck model still shows through the stall warning.
+        if (model.Runtime == RuntimeKind.Sglang && NodeReports(node, AgentFeatures.LaunchEnv, nodeFeatures))
+        {
+            variables.TryAdd(SglangHealthGenerationVariable, "false");
+        }
+
         foreach (var (name, value) in environment.Variables)
         {
             variables[name] = value;
@@ -773,6 +780,8 @@ public static class LaunchSpecBuilder
     internal const string SglangEnableMetrics = "--enable-metrics";
 
     internal const string NimServedNameVariable = "NIM_SERVED_MODEL_NAME";
+
+    internal const string SglangHealthGenerationVariable = "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION";
 
     private static readonly string[] SecretNameWords = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL"];
 
