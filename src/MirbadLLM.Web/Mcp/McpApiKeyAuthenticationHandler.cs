@@ -34,7 +34,7 @@ public sealed class McpApiKeyAuthenticationHandler(
         }
 
         ApiKeyRecord? record = await keys.FindByPresentedKeyAsync(presented, Context.RequestAborted).ConfigureAwait(false);
-        if (record is not { Scope: ApiKeyScope.McpRead or ApiKeyScope.McpOperator })
+        if (record is null || !(record.Grants(ApiKeyScope.McpRead) || record.Grants(ApiKeyScope.McpOperator)))
         {
             return AuthenticateResult.Fail("Invalid bearer credential.");
         }
@@ -43,7 +43,7 @@ public sealed class McpApiKeyAuthenticationHandler(
         [
             new(ClaimTypes.NameIdentifier, record.Id),
             new(ClaimTypes.Name, record.Name),
-            new(ScopeClaim, record.Scope.ToString()),
+            new(ScopeClaim, (record.Grants(ApiKeyScope.McpOperator) ? ApiKeyScope.McpOperator : ApiKeyScope.McpRead).ToString()),
         ];
         var identity = new ClaimsIdentity(claims, AuthenticationScheme);
         return AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(identity), AuthenticationScheme));

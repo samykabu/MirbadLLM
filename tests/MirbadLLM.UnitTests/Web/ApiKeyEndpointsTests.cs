@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +15,8 @@ namespace MirbadLLM.UnitTests.Web;
 /// revocation (<c>POST /api/keys/{id}/revoke</c>), and refuses to delete an active key.</summary>
 public sealed class ApiKeyEndpointsTests
 {
+    private static readonly int[] UnknownScope = [99];
+
     private sealed class TestHost : IAsyncDisposable
     {
         public required WebApplication App { get; init; }
@@ -74,6 +77,70 @@ public sealed class ApiKeyEndpointsTests
         using var response = await host.Client.DeleteAsync("/api/keys/no-such-id", TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ScopesEndpoint_ReplacesTheScopes_AndRefusesBadInput()
+    {
+        await using var host = await StartAsync();
+        var key = host.Store.AddActiveKey("ssk_active1", ApiKeyScope.McpRead, "live-key");
+        var revoked = host.Store.AddRevokedKey("ssk_revoked1", ApiKeyScope.McpRead, "old-key");
+        var ct = TestContext.Current.CancellationToken;
+
+        using (var ok = await host.Client.PutAsJsonAsync($"/api/keys/{key.Id}/scopes", new { scopes = new[] { ApiKeyScope.Inference, ApiKeyScope.McpRead } }, ct))
+        {
+            Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+        }
+
+        Assert.Equal([ApiKeyScope.Inference, ApiKeyScope.McpRead], (await host.Store.ListAsync(ct)).Single(k => k.Id == key.Id).Scopes);
+
+        using (var empty = await host.Client.PutAsJsonAsync($"/api/keys/{key.Id}/scopes", new { scopes = Array.Empty<ApiKeyScope>() }, ct))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, empty.StatusCode);
+        }
+
+        using (var missing = await host.Client.PutAsJsonAsync($"/api/keys/{key.Id}/scopes", new { }, ct))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, missing.StatusCode);
+        }
+
+        using (var unknown = await host.Client.PutAsJsonAsync($"/api/keys/{key.Id}/scopes", new { scopes = UnknownScope }, ct))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode);
+        }
+
+        using (var gone = await host.Client.PutAsJsonAsync($"/api/keys/{revoked.Id}/scopes", new { scopes = new[] { ApiKeyScope.Inference } }, ct))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+        }
+
+        Assert.Equal([ApiKeyScope.Inference, ApiKeyScope.McpRead], (await host.Store.ListAsync(ct)).Single(k => k.Id == key.Id).Scopes);
+    }
+
+    [Fact]
+    public async Task CreateEndpoint_TakesSeveralScopes_AndStillTakesOne()
+    {
+        await using var host = await StartAsync();
+        var ct = TestContext.Current.CancellationToken;
+
+        using (var several = await host.Client.PostAsJsonAsync("/api/keys/", new { name = "several", scopes = new[] { ApiKeyScope.Metrics, ApiKeyScope.McpRead } }, ct))
+        {
+            Assert.Equal(HttpStatusCode.Created, several.StatusCode);
+        }
+
+        using (var one = await host.Client.PostAsJsonAsync("/api/keys/", new { name = "one", scope = ApiKeyScope.Metrics }, ct))
+        {
+            Assert.Equal(HttpStatusCode.Created, one.StatusCode);
+        }
+
+        using (var empty = await host.Client.PostAsJsonAsync("/api/keys/", new { name = "none", scopes = Array.Empty<ApiKeyScope>() }, ct))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, empty.StatusCode);
+        }
+
+        var keys = await host.Store.ListAsync(ct);
+        Assert.Equal([ApiKeyScope.Metrics, ApiKeyScope.McpRead], keys.Single(k => k.Name == "several").Scopes);
+        Assert.Equal([ApiKeyScope.Metrics], keys.Single(k => k.Name == "one").Scopes);
     }
 
     [Fact]

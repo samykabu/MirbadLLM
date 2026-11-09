@@ -57,7 +57,7 @@ service.
 - Terminology: *model* (a registered definition), *served name* (what API clients send as `model`),
   *budget* (memory reserved for a model), *node* (a machine in the fleet), *runtime* (vLLM, llama.cpp, MLX, SGLang or NIM),
   *placement* (the node and GPUs a model runs on), states *Stopped, Starting, Ready, Stopping, Failed*.
-- Access: admin login for the UI; isolated API keys for `/v1`, `/metrics`, MCP Read, and MCP Operator. The stateless Streamable HTTP MCP server is mounted at `/mcp`; read keys cannot mutate, and non-MCP credentials never grant MCP access.
+- Access: admin login for the UI; API keys holding one or more scopes (`/v1`, `/metrics`, MCP Read, MCP Operator), editable after creation. The stateless Streamable HTTP MCP server is mounted at `/mcp`; MCP Read cannot mutate, and credentials without an MCP scope never grant MCP access.
 
 ## Brand Commitments
 

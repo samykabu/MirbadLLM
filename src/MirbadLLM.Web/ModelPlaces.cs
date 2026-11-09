@@ -16,6 +16,8 @@ namespace MirbadLLM.Web;
 /// <param name="NodeName">That node's display name, or its id.</param>
 /// <param name="Runtime">The runtime serving it; null when the definition is not known here.</param>
 /// <param name="MaxModelLen">Context length in tokens (llama.cpp: per-request context), 32,768 when unknown.</param>
+/// <param name="AcceptsImages">Tagged Vision or Multimodal, so the Playground offers to attach images.</param>
+/// <param name="Thinks">Tagged Reasoning, so it is also served as "&lt;served&gt;-nothink" (<see cref="NoThinking"/>).</param>
 public sealed record ModelPlace(
     string ModelId,
     string ServedName,
@@ -23,7 +25,9 @@ public sealed record ModelPlace(
     string NodeId,
     string NodeName,
     RuntimeKind? Runtime,
-    int MaxModelLen)
+    int MaxModelLen,
+    bool AcceptsImages = false,
+    bool Thinks = false)
 {
     /// <summary>"vLLM", "llama.cpp", "MLX", or null when unknown.</summary>
     public string? RuntimeName => Runtime is { } kind ? LlamaCppEditing.RuntimeName(kind) : null;
@@ -78,7 +82,9 @@ public static class ModelPlaces
                 var definition = byId.GetValueOrDefault(e.ModelId);
                 string nodeId = definition?.Placement?.NodeId ?? defaultNode;
                 int context = definition is null ? DefaultContext : ModelCapabilities.MaxModelLen(definition);
-                return new ModelPlace(e.ModelId, e.ServedName, e.State, nodeId, names.GetValueOrDefault(nodeId, nodeId), definition?.Runtime, context);
+                bool images = definition is not null && ModelCapabilities.Vision(definition);
+                bool thinks = definition is not null && NoThinking.Offered(definition);
+                return new ModelPlace(e.ModelId, e.ServedName, e.State, nodeId, names.GetValueOrDefault(nodeId, nodeId), definition?.Runtime, context, images, thinks);
             })
             .OrderBy(p => p.ServedName, StringComparer.OrdinalIgnoreCase)];
     }

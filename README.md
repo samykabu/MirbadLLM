@@ -119,7 +119,7 @@ hosted service.
 - **Benchmark and tune.** Workload presets (interactive chat, agents and tools, throughput, long documents,
   embeddings) measure a running model. The tuner searches vLLM settings phase by phase and re-measures the leaders, with a smaller search for llama.cpp, MLX and SGLang (NIM has nothing to tune)
   before it names a winner; nothing changes until you choose **Apply**.
-- **Access control.** An admin login for the UI and the admin API, isolated API-key scopes for `/v1`, `/metrics`, and the protected stateless Streamable HTTP MCP endpoint at `/mcp`, and a Connect
+- **Access control.** An admin login for the UI and the admin API, API keys holding one or more scopes, which you can change later, for `/v1`, `/metrics`, and the protected stateless Streamable HTTP MCP endpoint at `/mcp`, and a Connect
   page with ready-to-paste settings for common clients, including a VS Code configuration export.
 - **Back up and restore everything.** Model definitions, running models, node settings, managed host services,
   history, API keys and saved tokens (encrypted with your passphrase), on a schedule to a local folder or an SMB or
@@ -213,6 +213,9 @@ reply = client.chat.completions.create(
 print(reply.choices[0].message.content)
 ```
 
+A model tagged Reasoning also answers as `<served-name>-nothink`, the same model with thinking switched off. Clients that can
+send extra body fields can instead set `"chat_template_kwargs": {"enable_thinking": false}` per request.
+
 Until the first API key exists, `/v1` is open and the UI says so in its header. Create a key on **Access**, or set
 `MIRBADLLM_REQUIRE_API_KEY=true` to require one from the start.
 
@@ -233,7 +236,7 @@ agents on TCP 9443, and agents reach the master's enroll listener on TCP 8443. K
 
 ## Remote MCP
 
-Create an **MCP Read** or **MCP Operator** key under **Access → API keys**, then use `http://<host>:8080/mcp`. MCP keys are intentionally isolated: inference, metrics, and admin-cookie credentials cannot authenticate this endpoint. Read keys cannot invoke mutations.
+Create a key with the **MCP Read** or **MCP Operator** scope under **Access → API keys**, or add the scope to a key you have, then use `http://<host>:8080/mcp`. Keys without an MCP scope and admin-cookie credentials cannot authenticate this endpoint. MCP Read cannot invoke mutations.
 
 ```toml
 [mcp_servers.mirbad]

@@ -109,6 +109,16 @@ public sealed class RouterChatClientTests
         Assert.Equal(0.3, root.GetProperty("temperature").GetDouble());
         Assert.Equal("chat-model", root.GetProperty("model").GetString());
         Assert.Equal(2, root.GetProperty("messages").GetArrayLength());
+        Assert.Equal("hi", root.GetProperty("messages")[1].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public void AMessageWithImagesIsSentAsTextAndImageParts()
+    {
+        string json = JsonSerializer.Serialize(RouterChatClient.Content(new ChatMessage("user", "what is this?", ["data:image/png;base64,AQID"])));
+
+        Assert.Equal("""[{"type":"text","text":"what is this?"},{"type":"image_url","image_url":{"url":"data:image/png;base64,AQID"}}]""", json);
+        Assert.Equal("""[{"type":"image_url","image_url":{"url":"u"}}]""", JsonSerializer.Serialize(RouterChatClient.Content(new ChatMessage("user", "", ["u"]))));
     }
 
     [Fact]

@@ -42,6 +42,31 @@ public sealed class McpEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task ChangingAKeysScopes_AppliesToMcpOnItsNextRequest()
+    {
+        using var client = Client();
+        var key = await Keys().CreateAsync("one-key", ApiKeyScope.Inference);
+        using (var noMcp = await Post(client, Initialize(), key.FullKey))
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, noMcp.StatusCode);
+        }
+
+        await Keys().UpdateScopesAsync(key.Record.Id, [ApiKeyScope.Inference, ApiKeyScope.McpRead]);
+        Assert.Contains("Operator scope", await CallTool(client, key.FullKey, "mirbad_delete_model", new { modelId = "nope" }), StringComparison.Ordinal);
+
+        // MCP Operator wins over MCP Read when a key holds both, whichever is stored first.
+        await Keys().UpdateScopesAsync(key.Record.Id, [ApiKeyScope.McpRead, ApiKeyScope.McpOperator]);
+        Assert.DoesNotContain("Operator scope", await CallTool(client, key.FullKey, "mirbad_delete_model", new { modelId = "nope" }), StringComparison.Ordinal);
+
+        await Keys().UpdateScopesAsync(key.Record.Id, [ApiKeyScope.McpRead]);
+        Assert.Contains("Operator scope", await CallTool(client, key.FullKey, "mirbad_delete_model", new { modelId = "nope" }), StringComparison.Ordinal);
+
+        await Keys().UpdateScopesAsync(key.Record.Id, [ApiKeyScope.Metrics]);
+        using var removed = await Post(client, Initialize(), key.FullKey);
+        Assert.Equal(HttpStatusCode.Unauthorized, removed.StatusCode);
+    }
+
+    [Fact]
     public async Task ReadAndOperatorKeys_InitializeAndListTools_OverStatelessHttp()
     {
         using var client = Client();

@@ -5,8 +5,11 @@ using MirbadLLM.Core;
 
 namespace MirbadLLM.Web.Api;
 
-/// <summary>Request body for <c>POST /api/keys</c>.</summary>
-public sealed record CreateApiKeyRequest(string Name, ApiKeyScope Scope);
+/// <summary>Request body for <c>POST /api/keys</c>: <paramref name="Scopes"/>, or the single <paramref name="Scope"/> when it is left out.</summary>
+public sealed record CreateApiKeyRequest(string Name, ApiKeyScope Scope, IReadOnlyList<ApiKeyScope>? Scopes = null);
+
+/// <summary>Request body for <c>PUT /api/keys/{id}/scopes</c>: the full set the key should hold.</summary>
+public sealed record UpdateApiKeyScopesRequest(IReadOnlyList<ApiKeyScope>? Scopes);
 
 /// <summary>Response for <c>POST /api/keys</c>: the persisted record plus the plaintext key, shown once.</summary>
 public sealed record CreateApiKeyResponse(ApiKeyRecord Record, string FullKey);
@@ -30,8 +33,27 @@ public static class ApiKeyEndpoints
                 return Results.Problem(detail: "Name must not be empty.", statusCode: StatusCodes.Status400BadRequest);
             }
 
-            var created = await store.CreateAsync(request.Name, request.Scope, ct);
-            return Results.Created($"/api/keys/{created.Record.Id}", new CreateApiKeyResponse(created.Record, created.FullKey));
+            try
+            {
+                var created = await store.CreateAsync(request.Name, request.Scopes ?? [request.Scope], ct);
+                return Results.Created($"/api/keys/{created.Record.Id}", new CreateApiKeyResponse(created.Record, created.FullKey));
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.Problem(detail: ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
+        });
+
+        api.MapPut("/{id}/scopes", async (string id, UpdateApiKeyScopesRequest request, IApiKeyStore store, CancellationToken ct) =>
+        {
+            try
+            {
+                return await store.UpdateScopesAsync(id, request.Scopes ?? [], ct) is { } updated ? Results.Ok(updated) : Results.NotFound();
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.Problem(detail: ex.Message, statusCode: StatusCodes.Status400BadRequest);
+            }
         });
 
         api.MapPost("/{id}/revoke", async (string id, IApiKeyStore store, CancellationToken ct) =>

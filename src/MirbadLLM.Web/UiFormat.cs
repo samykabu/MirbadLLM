@@ -137,6 +137,18 @@ public static class UiFormat
     /// <summary>Context length with thousands separators ("262,144"), or <see cref="Missing"/>.</summary>
     public static string ContextLength(int maxModelLen) => Whole(maxModelLen);
 
+    /// <summary>The KV cache precision a model runs with, from its runtime's own setting: "fp8", "q8_0", "4-bit", or the runtime default.</summary>
+    public static string KvCacheLabel(ModelDefinition model) => model.Runtime switch
+    {
+        RuntimeKind.LlamaCpp => model.LlamaCpp?.CacheTypeK is { Length: > 0 } k
+            ? model.LlamaCpp.CacheTypeV is { Length: > 0 } v && v != k ? $"K {k} · V {v}" : k
+            : "f16 (default)",
+        RuntimeKind.Mlx => model.Mlx?.KvBits is int bits ? $"{bits}-bit" : "Full precision",
+        RuntimeKind.Sglang => ModelCapabilities.ContainerFlag(model, "--kv-cache-dtype") is { Length: > 0 } dtype ? dtype : "auto (default)",
+        RuntimeKind.Nim => "NIM default",
+        _ => model.KvCacheDtype,
+    };
+
     /// <summary>"MTP × 2", "n-gram × 4", or "Off" when speculative decoding is not configured.</summary>
     public static string SpeculativeLabel(SpeculativeDecoding? speculative)
     {

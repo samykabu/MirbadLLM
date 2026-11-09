@@ -132,16 +132,23 @@ internal static class ModelKpiCalculator
     /// SGLang adds to its token counters only when a request finishes, so during a long request they stand still. The
     /// scheduler's throughput gauge moves meanwhile, but keeps its last value once decoding stops, so it counts only while
     /// requests run and it has changed since the last scrape; otherwise the counter's rate is used, which lets a stalled
-    /// model read as 0 tok/s. KV usage is its token pool, and SGLang has no preemption, tool-call or finish-reason counter.
+    /// model read as 0 tok/s. When requests were running at the last scrape, the gauge has already shown their tokens, so
+    /// the counter's jump as they finish is capped at the live rate instead of reading as a spike (a 1,024-token reply
+    /// read as 205 tok/s for one sample, and the chart's scale then flattened the real 25 tok/s). KV usage is its token
+    /// pool, and SGLang has no preemption, tool-call or finish-reason counter.
     /// </summary>
     private static ModelKpis ComputeSglang(IReadOnlyList<PrometheusSample> current, IReadOnlyList<PrometheusSample>? previous, double elapsedSeconds)
     {
         double running = PrometheusText.Sum(current, SglangRunningMetric);
         double waiting = PrometheusText.Sum(current, SglangWaitingMetric);
         double throughput = PrometheusText.Sum(current, SglangThroughputMetric);
-        double generationRate = running > 0 && SumOrNull(previous, SglangThroughputMetric) is { } before && throughput > 0 && before != throughput
+        double? throughputBefore = SumOrNull(previous, SglangThroughputMetric);
+        double counterRate = CounterMath.PerSecond(SumOrNull(previous, SglangGenerationTokensMetric), PrometheusText.Sum(current, SglangGenerationTokensMetric), elapsedSeconds);
+        double generationRate = running > 0 && throughputBefore is { } before && throughput > 0 && before != throughput
             ? throughput
-            : CounterMath.PerSecond(SumOrNull(previous, SglangGenerationTokensMetric), PrometheusText.Sum(current, SglangGenerationTokensMetric), elapsedSeconds);
+            : SumOrNull(previous, SglangRunningMetric) > 0
+                ? Math.Min(counterRate, Math.Max(throughput, throughputBefore ?? 0))
+                : counterRate;
         double promptRate = CounterMath.PerSecond(SumOrNull(previous, SglangPromptTokensMetric), PrometheusText.Sum(current, SglangPromptTokensMetric), elapsedSeconds);
         double kv = PrometheusText.HasMetric(current, SglangTokenUsageMetric) ? Math.Min(1, PrometheusText.Sum(current, SglangTokenUsageMetric)) : double.NaN;
         double acceptRate = PrometheusText.Sum(current, SglangAcceptRateMetric);

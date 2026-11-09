@@ -12,7 +12,7 @@ namespace MirbadLLM.Router;
 /// Besides the OpenAI fields each entry carries <c>max_model_len</c> (context per request) and <c>capabilities</c>
 /// (<c>chat</c>, <c>embeddings</c>, <c>tool_calling</c>, <c>vision</c>, see <see cref="ModelCapabilities"/>) from the
 /// model's definition, so a client can pick models without a hand-written list; both are omitted when the definition is
-/// unknown.
+/// unknown. A model tagged Reasoning is listed a second time as "&lt;served&gt;-nothink" (<see cref="NoThinking"/>).
 /// </summary>
 internal static class ModelsEndpoint
 {
@@ -24,12 +24,13 @@ internal static class ModelsEndpoint
         var paused = await RouterMaintenance.PausedModelsAsync(
             services.GetService<IMaintenanceMode>(), RouterMaintenance.NodeScoped(services), registry, ct);
         var definitions = registry is null ? [] : (await registry.ListAsync(ct)).ToDictionary(m => m.Id, StringComparer.Ordinal);
+        var served = endpoints.Select(e => e.ServedName).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var data = endpoints
             .Where(e => e.State == ModelState.Ready && paused?.Invoke(e.ModelId) != true)
-            .Select(e =>
+            .SelectMany(e =>
             {
                 var definition = definitions.GetValueOrDefault(e.ModelId);
-                return new ModelListEntry(
+                var entry = new ModelListEntry(
                     e.ServedName,
                     "model",
                     0,
@@ -40,6 +41,10 @@ internal static class ModelsEndpoint
                         PoolingDetection.Detect(definition) == PoolingMode.Embedding,
                         ModelCapabilities.ToolCalling(definition),
                         ModelCapabilities.Vision(definition)));
+                string alias = NoThinking.NameFor(e.ServedName);
+                return definition is not null && NoThinking.Offered(definition) && !served.Contains(alias)
+                    ? [entry, entry with { Id = alias }]
+                    : new[] { entry };
             })
             .ToArray();
 

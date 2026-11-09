@@ -6,6 +6,13 @@ private development history.
 
 ## Unreleased
 
+- A model tagged Reasoning is also served as `<name>-nothink`, the same model with thinking switched off, so clients that can't send `chat_template_kwargs` (Copilot, Cline) can choose it by name. `/v1/models` lists it, and it takes no extra memory
+- Access > Connect: the VS Code entry uses Copilot's Custom Endpoint format (`chatLanguageModels.json`), turns `vision` on for Vision models, and lists the no-thinking names; Continue and Cline show them too
+- Playground: a model tagged Vision or Multimodal takes images; attach up to 4 (8 MB each) with **Image**
+- Models: the list and the side panel show the memory reserved, context length, KV cache type and speculative decoding; a long image name no longer pushes the panel's values out of view, and a click outside the panel closes it
+- SGLang: a reply no longer reads as a burst of hundreds of tokens per second the moment it finishes, which squashed the real line flat on the Overview chart
+- Access > MCP lists your keys that have an MCP scope and explains scopes, and every Access tab shows the API key count
+- API keys can hold several scopes, and **Edit scopes** adds or removes them later, so one key can cover inference, metrics and MCP. The key itself doesn't change, and `PUT /api/keys/{id}/scopes` does the same
 - A busy SGLang model no longer reads as Starting, which made the router refuse its requests while a long prompt was processing. It takes one restart to apply
 - The Add model wizard moves keyboard focus to the step it opens, password managers leave the registry login alone, and the Overview and Tune help no longer describe settings a runtime doesn't have
 - Tuning works on MLX (parallel requests, KV bits, draft tokens, prompt cache) and SGLang (max running requests, schedule policy, draft depth); NIM stays benchmark-only because it has nothing to tune

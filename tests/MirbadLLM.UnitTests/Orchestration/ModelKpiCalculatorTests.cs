@@ -54,6 +54,25 @@ public sealed class ModelKpiCalculatorTests
     }
 
     [Fact]
+    public void Sglang_ARequestTheGaugeTracked_DoesNotSpikeWhenItsTokensLandAtTheEnd()
+    {
+        // Seen on the DGX: 25 tok/s while decoding, then 1,024 tokens counted at once as the reply finished.
+        var decoding = PrometheusText.Parse(Sglang(1, 25, 1000, 500, 0, 10, 0.3));
+        var finished = PrometheusText.Parse(Sglang(0, 25, 2024, 642, 0, 11, 0.3));
+
+        Assert.Equal(25, ModelKpiCalculator.Compute(finished, decoding, 5).Load.GenerationTokensPerSecond);
+    }
+
+    [Fact]
+    public void Sglang_AShortRequestBetweenTwoScrapes_StillCountsFromTheCounter()
+    {
+        var idle = PrometheusText.Parse(Sglang(0, 25, 1000, 500, 0, 10, 0));
+        var after = PrometheusText.Parse(Sglang(0, 25, 1100, 548, 0, 11, 0));
+
+        Assert.Equal(20, ModelKpiCalculator.Compute(after, idle, 5).Load.GenerationTokensPerSecond);
+    }
+
+    [Fact]
     public void Nim_ReadsVllmsFamiliesWithoutThePrefix()
     {
         var before = PrometheusText.Parse("num_requests_running 1\nnum_requests_waiting 0\ngpu_cache_usage_perc 0.1\ngeneration_tokens_total 100\nprompt_tokens_total 10\n");

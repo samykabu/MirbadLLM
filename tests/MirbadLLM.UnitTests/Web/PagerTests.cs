@@ -325,10 +325,10 @@ public sealed class PagerTests
         var cut = ctx.Render<MirbadLLM.Web.Components.Pages.Models>();
 
         var headers = cut.FindAll("[data-testid=models-table] thead th");
-        Assert.Equal(["Model", "Where", "State", "Tok/s", "Requests", "Actions"], headers.Select(h => h.TextContent.Trim()));
+        Assert.Equal(["Model", "Where", "State", "Memory", "Context", "KV cache", "Speculative", "Tok/s", "Requests", "Actions"], headers.Select(h => h.TextContent.Trim()));
         Assert.Contains("models-table", cut.Find("[data-testid=models-table]").ClassName, StringComparison.Ordinal);
         // Every fact cell carries its label for the stacked (narrow) layout.
-        Assert.Equal(["Where", "State", "tok/s", "Requests"],
+        Assert.Equal(["Where", "State", "Memory", "Context", "KV cache", "Speculative", "tok/s", "Requests"],
             cut.FindAll("[data-testid=models-row-m00] td[data-label]").Select(td => td.GetAttribute("data-label")));
     }
 

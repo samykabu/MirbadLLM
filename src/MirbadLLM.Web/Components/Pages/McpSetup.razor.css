@@ -17,3 +17,6 @@
 .mcp-tool-name, .mcp-tool-args { background: none; padding: 0; }
 .mcp-tool-name { white-space: nowrap; }
 .mcp-tool-args { overflow-wrap: anywhere; }
+
+.mcp-key-list { display: grid; gap: var(--ss-sp-1); margin: 0 0 var(--ss-sp-2); padding: 0; list-style: none; }
+.mcp-key-list li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ss-sp-2); }

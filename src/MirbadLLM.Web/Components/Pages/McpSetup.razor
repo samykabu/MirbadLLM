@@ -3,6 +3,7 @@
 @using MirbadLLM.Web.Mcp
 @inject IJSRuntime JS
 @inject NavigationManager Nav
+@inject IServiceProvider Services
 
 <PageTitle>MCP · Access · MirbadLLM</PageTitle>
 
@@ -23,21 +24,42 @@
             <dt>Transport</dt>
             <dd>Streamable HTTP, stateless</dd>
             <dt>Sign-in</dt>
-            <dd>Send <code>Authorization: Bearer &lt;key&gt;</code> with an MCP key. Inference keys, metrics keys and the admin login do not work here.</dd>
+            <dd>Send <code>Authorization: Bearer &lt;key&gt;</code> with a key that has an MCP scope. Keys without one and the admin login do not work here.</dd>
             <dt>Limits</dt>
             <dd>256 KiB per request, 120 requests per minute, 100 items per page</dd>
         </dl>
     </section>
 
-    <section class="panel panel-body" aria-labelledby="mcp-keys-title">
-        <h2 id="mcp-keys-title" class="panel-label">Choose a key</h2>
+    <section class="panel panel-body" aria-labelledby="mcp-keys-title" data-testid="mcp-scopes">
+        <h2 id="mcp-keys-title" class="panel-label">Key and scope</h2>
+        <p class="mcp-note">Any API key works here once it holds an MCP scope. The same key can also hold Inference and Metrics, so one key can serve a client everywhere.</p>
         <dl class="kv kv--wide">
             <dt>MCP Read</dt>
             <dd>Looks at nodes, models, downloads, jobs and results. Start with this one.</dd>
             <dt>MCP Operator</dt>
-            <dd>Also deploys, changes, starts, stops and deletes models, reads model logs, and runs benchmarks and tuning. It can choose any container image, which then runs on the node with GPU access, unless that node only allows approved digests.</dd>
+            <dd>Everything MCP Read does, and also deploys, changes, starts, stops and deletes models, reads model logs, and runs benchmarks and tuning. It can choose any container image, which then runs on the node with GPU access, unless that node only allows approved digests.</dd>
         </dl>
-        <p class="field-hint mcp-note">Create either one on <a href="access/keys">API keys</a>. A key is shown once and can be revoked there.</p>
+        @if (_mcpKeys is not null)
+        {
+            <h3 class="mcp-subhead">Your keys with MCP access</h3>
+            @if (_mcpKeys.Count == 0)
+            {
+                <p class="muted mcp-note" data-testid="mcp-keys-none">None of your active keys holds an MCP scope yet.</p>
+            }
+            else
+            {
+                <ul class="mcp-key-list" data-testid="mcp-keys">
+                    @foreach (var key in _mcpKeys)
+                    {
+                        <li>
+                            <span>@key.Name</span> <code class="num">ssk_@(key.Prefix)&hellip;</code>
+                            <span class="tag-chip">@(key.Grants(ApiKeyScope.McpOperator) ? "MCP Operator" : "MCP Read")</span>
+                        </li>
+                    }
+                </ul>
+            }
+        }
+        <p class="field-hint mcp-note">Create a key on <a href="access/keys">API keys</a>, or use <strong>Edit scopes</strong> there to add an MCP scope to a key you have. A key is shown once and can be revoked there.</p>
     </section>
 
     <section class="panel panel-body" aria-labelledby="mcp-prompt-title">
@@ -114,7 +136,7 @@
 <section class="section" aria-labelledby="mcp-tools-title">
     <div class="section-head">
         <h2 id="mcp-tools-title">Tools</h2>
-        <span class="section-note"><span class="num" data-testid="mcp-tool-count">@McpToolCatalog.All.Count</span> tools. Both key types can list them all, but an MCP Read key gets an error from Operator tools and nothing changes.</span>
+        <span class="section-note"><span class="num" data-testid="mcp-tool-count">@McpToolCatalog.All.Count</span> tools. Any key with an MCP scope can list them all, but without MCP Operator an Operator tool returns an error and nothing changes.</span>
     </div>
     <div class="panel panel--scroll-x">
         <table class="data-table data-table--stack data-table--stack-wide" data-testid="mcp-tools">
@@ -124,7 +146,7 @@
                     <th scope="col">Tool</th>
                     <th scope="col">What it does</th>
                     <th scope="col">Arguments</th>
-                    <th scope="col">Key</th>
+                    <th scope="col">Scope</th>
                 </tr>
             </thead>
             <tbody>
@@ -143,7 +165,7 @@
                                 <code class="mcp-tool-args">@string.Join(", ", tool.Arguments)</code>
                             }
                         </td>
-                        <td data-label="Key">
+                        <td data-label="Scope">
                             <span class="tag-chip">@(tool.NeedsOperator ? "MCP Operator" : "MCP Read")</span>
                             @if (tool.Destructive)
                             {
@@ -181,6 +203,7 @@
     private HttpContext? HttpContext { get; set; }
 
     private string _mcpUrl = "/mcp";
+    private List<ApiKeyRecord>? _mcpKeys;
     private string _client = "codex";
     private string? _copied;
     private IJSObjectReference? _module;
@@ -192,6 +215,16 @@
             ? $"{HttpContext.Request.Scheme}://{HttpContext.Request.Host}"
             : new Uri(Nav.BaseUri).GetLeftPart(UriPartial.Authority);
         _mcpUrl = $"{origin}/mcp";
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (Services.GetService<IApiKeyStore>() is { } store)
+        {
+            _mcpKeys = [.. (await store.ListAsync())
+                .Where(k => k.IsActive && (k.Grants(ApiKeyScope.McpRead) || k.Grants(ApiKeyScope.McpOperator)))
+                .OrderBy(k => k.Name, StringComparer.OrdinalIgnoreCase)];
+        }
     }
 
     private RenderFragment Snippet(string id, string label, string text) =>

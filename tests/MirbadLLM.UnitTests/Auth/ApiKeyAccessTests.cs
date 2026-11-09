@@ -71,6 +71,30 @@ public sealed class ApiKeyAccessTests
     }
 
     [Fact]
+    public async Task OneKey_ReachesWhatItsScopesAllow_AndLosesThemWhenRemoved()
+    {
+        var store = new FakeApiKeyStore();
+        var key = store.AddActiveKey("ssk_one", ApiKeyScope.McpRead);
+        store.AddActiveKey("ssk_other", ApiKeyScope.Inference);
+        store.AddActiveKey("ssk_scraper", ApiKeyScope.Metrics);
+
+        Assert.Equal(ApiKeyAccessResult.Denied, await ApiKeyAccess.CheckInferenceAsync(store, "ssk_one", null, false));
+        Assert.Equal(ApiKeyAccessResult.Denied, await ApiKeyAccess.CheckMetricsAsync(store, "ssk_one", null));
+
+        await store.UpdateScopesAsync(key.Id, [ApiKeyScope.McpRead, ApiKeyScope.Metrics]);
+        Assert.Equal(ApiKeyAccessResult.Denied, await ApiKeyAccess.CheckInferenceAsync(store, "ssk_one", null, false));
+        Assert.Equal(ApiKeyAccessResult.Allowed, await ApiKeyAccess.CheckMetricsAsync(store, "ssk_one", null));
+
+        await store.UpdateScopesAsync(key.Id, [ApiKeyScope.McpRead, ApiKeyScope.Inference]);
+        Assert.Equal(ApiKeyAccessResult.Allowed, await ApiKeyAccess.CheckInferenceAsync(store, "ssk_one", null, false));
+        Assert.Equal(ApiKeyAccessResult.Allowed, await ApiKeyAccess.CheckMetricsAsync(store, "ssk_one", null));
+
+        await store.UpdateScopesAsync(key.Id, [ApiKeyScope.McpRead]);
+        Assert.Equal(ApiKeyAccessResult.Denied, await ApiKeyAccess.CheckInferenceAsync(store, "ssk_one", null, false));
+        Assert.Equal(ApiKeyAccessResult.Denied, await ApiKeyAccess.CheckMetricsAsync(store, "ssk_one", null));
+    }
+
+    [Fact]
     public async Task CheckInferenceAsync_RevokedKeyIsRejected()
     {
         var store = new FakeApiKeyStore();

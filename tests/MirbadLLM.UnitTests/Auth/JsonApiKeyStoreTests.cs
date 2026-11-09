@@ -301,6 +301,89 @@ public sealed class JsonApiKeyStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateScopes_KeepsTheKey_AppliesAtOnce_AndSurvivesAReload()
+    {
+        var store = CreateStore();
+        var created = await store.CreateAsync("laptop", ApiKeyScope.McpRead);
+
+        var updated = await store.UpdateScopesAsync(created.Record.Id, [ApiKeyScope.McpOperator, ApiKeyScope.Inference, ApiKeyScope.Inference]);
+
+        Assert.Equal([ApiKeyScope.Inference, ApiKeyScope.McpOperator], updated!.Scopes);
+        Assert.Equal(created.Record.KeyHash, updated.KeyHash);
+        var found = await store.FindByPresentedKeyAsync(created.FullKey);
+        Assert.True(found!.Grants(ApiKeyScope.Inference));
+        Assert.True(found.Grants(ApiKeyScope.McpOperator));
+        Assert.False(found.Grants(ApiKeyScope.McpRead));
+        Assert.True(await store.HasActiveKeyAsync(ApiKeyScope.McpOperator));
+        Assert.False(await store.HasActiveKeyAsync(ApiKeyScope.McpRead));
+
+        // Recording a use keeps the extra scopes, and so does the file.
+        var reloaded = CreateStore();
+        Assert.Equal([ApiKeyScope.Inference, ApiKeyScope.McpOperator], (await reloaded.FindByPresentedKeyAsync(created.FullKey))!.Scopes);
+    }
+
+    [Fact]
+    public async Task UpdateScopes_RemovingAScope_DoesNotReopenItsGate()
+    {
+        var store = CreateStore();
+        var created = await store.CreateAsync("laptop", ApiKeyScope.McpRead);
+        Assert.False(await store.HasAnyKeyAsync(ApiKeyScope.Inference));
+
+        await store.UpdateScopesAsync(created.Record.Id, [ApiKeyScope.McpRead, ApiKeyScope.Inference]);
+        Assert.True(await store.HasAnyKeyAsync(ApiKeyScope.Inference));
+
+        await store.UpdateScopesAsync(created.Record.Id, [ApiKeyScope.McpRead]);
+        Assert.True(await store.HasAnyKeyAsync(ApiKeyScope.Inference));
+        Assert.True(await CreateStore().HasAnyKeyAsync(ApiKeyScope.Inference));
+        Assert.False(await store.HasActiveKeyAsync(ApiKeyScope.Inference));
+    }
+
+    [Fact]
+    public async Task UpdateScopes_RefusesAnEmptySet_AnUnknownScope_ARevokedKey_AndAnUnknownId()
+    {
+        var store = CreateStore();
+        var created = await store.CreateAsync("laptop", ApiKeyScope.McpRead);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => store.UpdateScopesAsync(created.Record.Id, []));
+        await Assert.ThrowsAsync<ArgumentException>(() => store.UpdateScopesAsync(created.Record.Id, [(ApiKeyScope)99]));
+        Assert.Equal([ApiKeyScope.McpRead], (await store.FindByPresentedKeyAsync(created.FullKey))!.Scopes);
+
+        Assert.Null(await store.UpdateScopesAsync("no-such-id", [ApiKeyScope.Inference]));
+        await store.RevokeAsync(created.Record.Id);
+        Assert.Null(await store.UpdateScopesAsync(created.Record.Id, [ApiKeyScope.Inference]));
+        Assert.False(await store.HasAnyKeyAsync(ApiKeyScope.Inference));
+    }
+
+    [Fact]
+    public async Task ASingleScopeKey_WritesTheSameRecordAsBefore_AndAnOldVersionReadsTheLowestScopeOnly()
+    {
+        var store = CreateStore();
+        var single = await store.CreateAsync("single", ApiKeyScope.Metrics);
+        var several = await store.CreateAsync("several", [ApiKeyScope.McpOperator, ApiKeyScope.Metrics]);
+
+        Assert.Null(single.Record.ExtraScopes);
+        Assert.Equal(ApiKeyScope.Metrics, several.Record.Scope);
+        Assert.Equal([ApiKeyScope.McpOperator], several.Record.ExtraScopes);
+
+        string json = await File.ReadAllTextAsync(Path.Combine(_dataDir, "apikeys.json"));
+        Assert.Equal(1, json.Split("\"ExtraScopes\"").Length - 1);
+        Assert.Contains("\"McpOperator\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Scopes\"", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Import_RaisesTheGateForEveryScopeOfARecord()
+    {
+        var store = CreateStore();
+        var record = new ApiKeyRecord("id", "n", ApiKeyScope.McpRead, new string('a', 64), "p", DateTimeOffset.UnixEpoch, null, null, [ApiKeyScope.Inference]);
+
+        await store.ImportAsync([record]);
+
+        Assert.True(await store.HasAnyKeyAsync(ApiKeyScope.Inference));
+        Assert.True(await store.HasAnyKeyAsync(ApiKeyScope.McpRead));
+    }
+
+    [Fact]
     public async Task LegacyBareArrayFile_MigratesToFlaggedFormat_PreservingTheGate()
     {
         Directory.CreateDirectory(_dataDir);

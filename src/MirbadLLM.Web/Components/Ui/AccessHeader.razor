@@ -1,4 +1,5 @@
 @namespace MirbadLLM.Web.Components.Ui
+@inject IServiceProvider Services
 @* The shared header of the Access area: one job, handing out access, split over four pages. Connect (/access) says
    where clients point and what to paste; MCP (/access/mcp) documents the MCP tools and client setup; API keys (/access/keys) issues and revokes the keys they send; Tokens (/access/tokens) keeps the outside credentials
    (Hugging Face) that downloads, moves and restores pick by name. The tabs are
@@ -16,7 +17,7 @@
     </a>
     <a href="access/keys" aria-current="@(Current == AccessPage.Keys ? "page" : null)" data-testid="access-tab-keys" data-tour="access-keys-tab">
         <Icon Name="key" /> API keys
-        @if (KeyCount is int count)
+        @if ((KeyCount ?? _loadedCount) is int count)
         {
             <span class="visually-hidden">, </span><span class="access-tab-count num">@count</span><span class="visually-hidden"> active</span>
         }
@@ -31,7 +32,18 @@
     [Parameter, EditorRequired]
     public AccessPage Current { get; set; }
 
-    /// <summary>Active keys, shown on the API keys tab when known.</summary>
+    /// <summary>Active keys, shown on the API keys tab. Left out, the header counts them itself.</summary>
     [Parameter]
     public int? KeyCount { get; set; }
+
+    private int? _loadedCount;
+
+    // Optional store, so a host or test without one still renders the tabs.
+    protected override async Task OnInitializedAsync()
+    {
+        if (KeyCount is null && Services.GetService<IApiKeyStore>() is { } store)
+        {
+            _loadedCount = (await store.ListAsync()).Count(k => k.IsActive);
+        }
+    }
 }

@@ -74,6 +74,13 @@
                 </li>
             }
         </ul>
+        @if (_ready.Any(m => m.Thinks))
+        {
+            <p class="field-hint connect-prose" data-testid="nothink-hint">
+                A model tagged Reasoning also answers as <code>@NoThinking.NameFor(_ready.First(m => m.Thinks).ServedName)</code>: the same model with
+                thinking switched off. Use it in clients that can't send <code>chat_template_kwargs</code>.
+            </p>
+        }
     }
     @if (_notReady.Count > 0)
     {
@@ -174,21 +181,22 @@
                 default:
                     <div class="panel snippet">
                         <div class="snippet-head">
-                            <h3>VS Code <span class="muted">(GitHub Copilot Chat, OpenAI Compatible models)</span></h3>
+                            <h3>VS Code <span class="muted">(GitHub Copilot Chat, Custom Endpoint)</span></h3>
                             <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="Copy VS Code models configuration" @onclick="CopyVsCodeAsync">
                                 <Icon Name="@(_copied == CopyTarget.VsCode ? "check" : "copy")" /> @(_copied == CopyTarget.VsCode ? "Copied" : "Copy")
                             </button>
                         </div>
                         <ol class="snippet-steps connect-prose">
-                            <li>In VS Code, open the Chat view, pick <strong>Manage Models…</strong> in the model picker and choose <strong>OpenAI Compatible</strong>.</li>
-                            <li>Open its JSON settings and paste the entry below. It lists every Ready model, each named with the node and runtime that serve it.</li>
+                            <li>In VS Code, run <strong>Chat: Manage Language Models</strong>, choose <strong>Add Models</strong>, then <strong>Custom Endpoint</strong>.</li>
+                            <li>VS Code opens <code>chatLanguageModels.json</code>. Replace its new entry with the one below and save. It lists every Ready model, each named with the node and runtime that serve it.</li>
                             @if (_apiKeyConfigured)
                             {
-                                <li>When VS Code asks for the API key, paste your <code>ssk_…</code> key from <a href="access/keys">API keys</a>. VS Code stores it and replaces <code>apiKey</code> with its own secret reference.</li>
+                                <li>When VS Code asks for <code>mirbadApiKey</code>, paste a key with the Inference scope from <a href="access/keys">API keys</a>. The file keeps only the reference, not the key.</li>
                             }
+                            <li>Pick a model in the chat model picker. If none appears, restart VS Code.</li>
                         </ol>
                         <pre tabindex="0" aria-label="VS Code models configuration" data-testid="vscode-snippet">@foreach (var part in WordBreakParts(VsCodeText())) { @part.Text if (part.BreakAfter) { <wbr /> } }</pre>
-                        <p class="field-hint connect-prose">Token limits come from each model's context length: output is capped at 16,384 tokens (or a quarter of a short context) and input gets the rest, so the two always fit. <code>vision</code> is off because image input has not been verified.</p>
+                        <p class="field-hint connect-prose">Token limits come from each model's context length: output is capped at 16,384 tokens (or a quarter of a short context) and input gets the rest, so the two always fit. Lower <code>maxInputTokens</code> to keep chats shorter. <code>vision</code> follows the model's Vision tag, and a "no thinking" entry is the same model with thinking switched off.</p>
                     </div>
                     break;
             }
@@ -279,12 +287,16 @@
     }
 
     private string ClineText() =>
-        $"Base URL: {_baseUrl}\nAPI Key: {(_apiKeyConfigured ? "Bearer <your key>" : "(not required)")}\nModel: {ModelName}";
+        $"Base URL: {_baseUrl}\nAPI Key: {(_apiKeyConfigured ? "Bearer <your key>" : "(not required)")}\nModel: {ModelName}"
+        + (SnippetPlace?.Thinks == true ? $"\nModel without thinking: {NoThinking.NameFor(ModelName)}" : "");
 
     private string ContinueText()
     {
         var apiKeyLine = _apiKeyConfigured ? "\n    apiKey: <your key>" : "";
-        return $"models:\n  - name: {ModelName}\n    provider: openai\n    apiBase: {_baseUrl}\n    model: {ModelName}{apiKeyLine}";
+        string entry = $"models:\n  - name: {ModelName}\n    provider: openai\n    apiBase: {_baseUrl}\n    model: {ModelName}{apiKeyLine}";
+        return SnippetPlace?.Thinks == true
+            ? entry + $"\n  - name: {ModelName} (no thinking)\n    provider: openai\n    apiBase: {_baseUrl}\n    model: {NoThinking.NameFor(ModelName)}{apiKeyLine}"
+            : entry;
     }
 
     private string VsCodeText() => VsCodeSnippet.Build(_baseUrl, _ready, _apiKeyConfigured);

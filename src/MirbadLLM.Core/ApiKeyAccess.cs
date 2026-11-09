@@ -46,7 +46,7 @@ public static class ApiKeyAccess
             }
 
             var record = await store.FindByPresentedKeyAsync(presentedKey, ct).ConfigureAwait(false);
-            if (record is { Scope: ApiKeyScope.Inference })
+            if (record?.Grants(ApiKeyScope.Inference) == true)
             {
                 return ApiKeyAccessResult.Allowed;
             }
@@ -78,7 +78,7 @@ public static class ApiKeyAccess
             }
 
             var record = await store.FindByPresentedKeyAsync(presentedKey, ct).ConfigureAwait(false);
-            if (record is { Scope: ApiKeyScope.Inference or ApiKeyScope.Metrics })
+            if (record is not null && (record.Grants(ApiKeyScope.Inference) || record.Grants(ApiKeyScope.Metrics)))
             {
                 return ApiKeyAccessResult.Allowed;
             }

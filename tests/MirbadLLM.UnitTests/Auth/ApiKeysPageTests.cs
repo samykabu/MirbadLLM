@@ -79,14 +79,15 @@ public sealed class ApiKeysPageTests
     }
 
     [Fact]
-    public async Task ScopeSegments_CreateAMetricsKey_AndRevealItInsideTheDialog()
+    public async Task ScopeChoices_CreateAMetricsKey_AndRevealItInsideTheDialog()
     {
         var store = new FakeApiKeyStore();
         using var ctx = MakeContext(store);
         var cut = ctx.Render<ApiKeys>();
         cut.Find("[data-testid=add-key]").Click();
         cut.Find("[data-testid=field-key-name]").Change("prometheus");
-        cut.Find("[data-testid=key-scope-metrics]").Change("Metrics");
+        cut.Find("[data-testid=key-scope-inference]").Change(false);
+        cut.Find("[data-testid=key-scope-metrics]").Change(true);
         cut.Find("[data-testid=create-key-form]").Submit();
         Assert.Equal(ApiKeyScope.Metrics, Assert.Single(await store.ListAsync(Xunit.TestContext.Current.CancellationToken)).Scope);
         Assert.NotNull(cut.Find("[data-testid=add-key-dialog] [data-testid=created-key-banner]"));
@@ -94,18 +95,121 @@ public sealed class ApiKeysPageTests
     }
 
     [Fact]
-    public async Task ScopeSegments_CreateMcpOperatorKey_AndDescribeMcpEndpoint()
+    public async Task ScopeChoices_CreateMcpOperatorKey_AndDescribeMcpEndpoint()
     {
         var store = new FakeApiKeyStore();
         using var ctx = MakeContext(store);
         var cut = ctx.Render<ApiKeys>();
         cut.Find("[data-testid=add-key]").Click();
         cut.Find("[data-testid=field-key-name]").Change("automation");
-        cut.Find("[data-testid=key-scope-mcp-operator]").Change("McpOperator");
+        cut.Find("[data-testid=key-scope-inference]").Change(false);
+        cut.Find("[data-testid=key-scope-mcp-operator]").Change(true);
         cut.Find("[data-testid=create-key-form]").Submit();
 
         Assert.Equal(ApiKeyScope.McpOperator, Assert.Single(await store.ListAsync(Xunit.TestContext.Current.CancellationToken)).Scope);
         Assert.Contains("/mcp", cut.Markup, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ACreatedKey_CanHoldSeveralScopes_AndNeedsAtLeastOne()
+    {
+        var store = new FakeApiKeyStore();
+        using var ctx = MakeContext(store);
+        var cut = ctx.Render<ApiKeys>();
+        cut.Find("[data-testid=add-key]").Click();
+        cut.Find("[data-testid=field-key-name]").Change("everything");
+
+        cut.Find("[data-testid=key-scope-inference]").Change(false);
+        cut.Find("[data-testid=create-key-form]").Submit();
+        Assert.Contains("at least one scope", cut.Find("[data-testid=add-key-error]").TextContent, StringComparison.Ordinal);
+        Assert.Empty(await store.ListAsync(Xunit.TestContext.Current.CancellationToken));
+
+        cut.Find("[data-testid=key-scope-inference]").Change(true);
+        cut.Find("[data-testid=key-scope-mcp-read]").Change(true);
+        cut.Find("[data-testid=create-key-form]").Submit();
+
+        var stored = Assert.Single(await store.ListAsync(Xunit.TestContext.Current.CancellationToken));
+        Assert.Equal([ApiKeyScope.Inference, ApiKeyScope.McpRead], stored.Scopes);
+        string chips = cut.Find($"[data-testid=scopes-{stored.Id}]").TextContent;
+        Assert.Contains("Inference", chips, StringComparison.Ordinal);
+        Assert.Contains("MCP Read", chips, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task EditScopes_ChangesAnActiveKey_WithoutShowingANewKey()
+    {
+        var store = new FakeApiKeyStore();
+        var key = store.AddActiveKey("ssk_abcdefgh12345678", ApiKeyScope.McpRead, "laptop");
+        using var ctx = MakeContext(store);
+        var cut = ctx.Render<ApiKeys>();
+
+        cut.Find($"[data-testid=edit-scopes-{key.Id}]").Click();
+        Assert.Equal("true", cut.Find("[data-testid=edit-scopes-dialog]").GetAttribute("data-open"));
+        Assert.True(cut.Find("[data-testid=edit-scope-mcp-read]").HasAttribute("checked"));
+        Assert.True(cut.Find("[data-testid=edit-scopes-dialog-confirm]").HasAttribute("disabled")); // nothing changed yet
+
+        cut.Find("[data-testid=edit-scope-mcp-read]").Change(false);
+        Assert.True(cut.Find("[data-testid=edit-scopes-dialog-confirm]").HasAttribute("disabled")); // none left
+
+        cut.Find("[data-testid=edit-scope-mcp-operator]").Change(true);
+        cut.Find("[data-testid=edit-scope-inference]").Change(true);
+        Assert.Single(await store.ListAsync(Xunit.TestContext.Current.CancellationToken));
+        Assert.Equal(ApiKeyScope.McpRead, (await store.ListAsync(Xunit.TestContext.Current.CancellationToken))[0].Scope); // not saved until confirmed
+
+        cut.Find("[data-testid=edit-scopes-dialog-confirm]").Click();
+
+        var stored = Assert.Single(await store.ListAsync(Xunit.TestContext.Current.CancellationToken));
+        Assert.Equal([ApiKeyScope.Inference, ApiKeyScope.McpOperator], stored.Scopes);
+        Assert.Equal(key.KeyHash, stored.KeyHash);
+        Assert.Contains("MCP Operator", cut.Find($"[data-testid=scopes-{key.Id}]").TextContent, StringComparison.Ordinal);
+        Assert.Equal("false", cut.Find("[data-testid=edit-scopes-dialog]").GetAttribute("data-open"));
+        Assert.Empty(cut.FindAll("[data-testid=created-key-value]"));
+    }
+
+    [Fact]
+    public void ARevokedKey_CannotBeEdited()
+    {
+        var store = new FakeApiKeyStore();
+        var key = store.AddRevokedKey("ssk_revoked1234567", ApiKeyScope.Inference, "old");
+        using var ctx = MakeContext(store);
+
+        var cut = ctx.Render<ApiKeys>();
+
+        Assert.Empty(cut.FindAll($"[data-testid=edit-scopes-{key.Id}]"));
+    }
+
+    [Fact]
+    public void AddingAnOpenEndpointsScope_WarnsThatItClosesForClientsWithoutAKey()
+    {
+        var store = new FakeApiKeyStore();
+        var key = store.AddActiveKey("ssk_abcdefgh12345678", ApiKeyScope.McpRead, "laptop");
+        using var ctx = MakeContext(store);
+        var cut = ctx.Render<ApiKeys>();
+
+        cut.Find($"[data-testid=edit-scopes-{key.Id}]").Click();
+        Assert.Empty(cut.FindAll("[data-testid=edit-scopes-dialog] [data-testid=key-gate-warning]"));
+
+        cut.Find("[data-testid=edit-scope-metrics]").Change(true);
+        string warning = cut.Find("[data-testid=edit-scopes-dialog] [data-testid=key-gate-warning]").TextContent;
+        Assert.Contains("/metrics", warning, StringComparison.Ordinal);
+        Assert.DoesNotContain("/v1", warning, StringComparison.Ordinal);
+
+        cut.Find("[data-testid=edit-scope-inference]").Change(true);
+        Assert.Contains("/v1 and /metrics", cut.Find("[data-testid=edit-scopes-dialog] [data-testid=key-gate-warning]").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RevokeDialog_NamesEveryEndpointTheKeyReaches()
+    {
+        var store = new FakeApiKeyStore();
+        var key = store.AddActiveKey("ssk_abcdefgh12345678", ApiKeyScope.Inference, "laptop");
+        await store.UpdateScopesAsync(key.Id, [ApiKeyScope.Inference, ApiKeyScope.McpRead, ApiKeyScope.McpOperator], Xunit.TestContext.Current.CancellationToken);
+        using var ctx = MakeContext(store);
+        var cut = ctx.Render<ApiKeys>();
+
+        cut.Find($"[data-testid=revoke-{key.Id}]").Click();
+
+        Assert.Contains("/v1, /mcp immediately", cut.Find("[data-testid=revoke-dialog]").TextContent, StringComparison.Ordinal);
     }
 
     [Fact]

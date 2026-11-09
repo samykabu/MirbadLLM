@@ -74,6 +74,15 @@ internal static partial class ProxyHandler
             return;
         }
 
+        // "<served>-nothink" (NoThinking): the same model with thinking off, unless a model is really served under that name.
+        if (NoThinking.BaseName(modelName) is { } baseName &&
+            await resolver.ResolveAsync(modelName, ct) is null &&
+            await resolver.ResolveAsync(baseName, ct) is not null)
+        {
+            body = NoThinking.Rewrite(body, baseName, string.Equals(path, "chat/completions", StringComparison.OrdinalIgnoreCase));
+            modelName = baseName;
+        }
+
         if (context.RequestServices.GetService<AgentEndpointResolver>() is { } agentResolver)
         {
             await HandleThroughAgentAsync(context, path, modelName, body, lease, agentResolver, runtime, options.Value, stats, ct);

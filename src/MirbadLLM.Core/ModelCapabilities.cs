@@ -31,7 +31,7 @@ public static class ModelCapabilities
         : model.MaxModelLen;
 
     /// <summary>The value of <paramref name="flag"/> in the container's extra arguments (<c>--flag value</c> or <c>--flag=value</c>); null when it isn't set.</summary>
-    private static string? ContainerFlag(ModelDefinition model, string flag)
+    public static string? ContainerFlag(ModelDefinition model, string flag)
     {
         var args = model.Container?.ExtraArgs ?? [];
         for (int i = 0; i < args.Count; i++)

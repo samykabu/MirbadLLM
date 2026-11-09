@@ -1,6 +1,7 @@
 namespace MirbadLLM.Core;
 
-public sealed record ChatMessage(string Role, string Content);
+/// <summary>One message. <paramref name="Images"/>: <c>data:</c> URLs sent with the text, for a model that reads images.</summary>
+public sealed record ChatMessage(string Role, string Content, IReadOnlyList<string>? Images = null);
 
 public sealed record ChatRequest(
     string ServedName,
