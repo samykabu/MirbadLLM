@@ -151,6 +151,10 @@ public sealed record BenchmarkResult(
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public double? SpecAcceptanceRate { get; init; }
 
+    /// <summary>The objective questions asked again with thinking on, for a model tagged Reasoning; null otherwise.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ThinkingResult? Thinking { get; init; }
+
     public const int CurrentSchemaVersion = 3;
 
     /// <summary>The level at <paramref name="concurrency"/> (the shortest output length when there are several).</summary>
@@ -170,6 +174,30 @@ public sealed record BenchmarkResult(
         (SharedPrefix is { } sp ? sp.Questions * Math.Max(1, sp.TtftRuns.Count) : 0) +
         (Mixed is { } m ? (m.Concurrency + 1) * Math.Max(1, m.LongTtftRuns.Count) : 0);
 }
+
+/// <summary>
+/// The objective questions asked one at a time with thinking on. Every other measurement runs with thinking off, so this is
+/// what thinking costs: how long the user waits for the answer, and how many tokens the thinking takes.
+/// </summary>
+/// <param name="Questions">Questions asked.</param>
+/// <param name="Correct">Answers that matched the expected one.</param>
+/// <param name="Unanswered">Replies that reached <paramref name="MaxTokens"/> before any answer.</param>
+/// <param name="Errors">Requests that failed.</param>
+/// <param name="TimeToAnswerMedian">Seconds from sending to the first answer token: what a user waits for.</param>
+/// <param name="ThinkingSecondsMedian">Seconds from the first thinking token to the first answer token.</param>
+/// <param name="ThinkingTokensMedian">About how many tokens the thinking took: the reply's tokens times thinking's share of its text.</param>
+/// <param name="TokensPerSecondMedian">Reply tokens per second, thinking included, from the first token to the last.</param>
+/// <param name="MaxTokens">The token limit per request.</param>
+public sealed record ThinkingResult(
+    int Questions,
+    int Correct,
+    int Unanswered,
+    int Errors,
+    double TimeToAnswerMedian,
+    double ThinkingSecondsMedian,
+    double ThinkingTokensMedian,
+    double TokensPerSecondMedian,
+    int MaxTokens);
 
 /// <summary>
 /// The mixed workload (schema v3): one cold <see cref="LongTargetTokens"/>-token request, then ~1 s later (before its first
@@ -340,6 +368,9 @@ public sealed record BenchmarkTarget(
     /// <c>llamacpp:*</c> counters read around every timed run. vLLM (the default) is measured exactly as before.
     /// </summary>
     public RuntimeKind Runtime { get; init; } = RuntimeKind.Vllm;
+
+    /// <summary>Tagged Reasoning: the run ends with the objective questions asked again with thinking on (<see cref="ThinkingResult"/>).</summary>
+    public bool Thinks { get; init; }
 }
 
 /// <summary>

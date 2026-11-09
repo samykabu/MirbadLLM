@@ -274,6 +274,25 @@
                 </ul>
             </details>
         </dd>
+        @if (Result.Thinking is { } thinking)
+        {
+            <dt>With thinking on</dt>
+            <dd data-testid="@($"{TestId}-thinking")">
+                <span><span class="num">@thinking.Correct / @thinking.Questions</span> correct</span>
+                <span>· answer after <span class="num">@UiFormat.Seconds(thinking.TimeToAnswerMedian)</span>
+                    (thinking <span class="num">@UiFormat.Seconds(thinking.ThinkingSecondsMedian)</span>, about <span class="num">@UiFormat.Whole(thinking.ThinkingTokensMedian)</span> tokens)</span>
+                <span>· <span class="num">@UiFormat.Number(thinking.TokensPerSecondMedian)</span> tok/s</span>
+                @if (thinking.Unanswered > 0)
+                {
+                    <span>· <span class="num">@thinking.Unanswered</span> still thinking at @thinking.MaxTokens.ToString("N0", CultureInfo.InvariantCulture) tokens</span>
+                }
+                @if (thinking.Errors > 0)
+                {
+                    <span>· <span class="num">@thinking.Errors</span> failed</span>
+                }
+                <span class="muted bench-thinking-note">Medians over the objective questions, one at a time. Every other figure here was measured with thinking off.</span>
+            </dd>
+        }
     </dl>
     }
 </div>
