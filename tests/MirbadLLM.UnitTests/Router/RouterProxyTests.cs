@@ -209,6 +209,36 @@ public sealed class RouterProxyTests
         Assert.Contains("\"real-nothink\"", sent[1].Body, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task AStreamedAnswer_LosesSglangsNullReasoningField_AndOtherBodiesPassAsTheyAre()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var resolver = new FakeModelEndpointResolver();
+        resolver.Set(new ModelEndpoint("q", "qwen", new Uri("http://upstream-q/"), ModelState.Ready));
+        const string Sse = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":null,\"content\":\"Hi\"}}]}\n\ndata: [DONE]\n\n";
+        bool stream = true;
+        var handler = new FakeUpstreamHandler
+        {
+            Handler = (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = stream
+                    ? new StringContent(Sse, Encoding.UTF8, "text/event-stream")
+                    : new StringContent("{\"reasoning_content\":null}", Encoding.UTF8, "application/json"),
+            }),
+        };
+        using var app = await RouterHostFactory.CreateAsync(resolver, new FakeModelRuntime(), configureServices: services => ConfigureUpstream(services, handler));
+        using var client = app.GetTestClient();
+
+        using (var streamed = await client.PostAsJsonAsync("/v1/chat/completions", new { model = "qwen", stream = true }, ct))
+        {
+            Assert.Equal("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: [DONE]\n\n", await streamed.Content.ReadAsStringAsync(ct));
+        }
+
+        stream = false;
+        using var plain = await client.PostAsJsonAsync("/v1/chat/completions", new { model = "qwen" }, ct);
+        Assert.Equal("{\"reasoning_content\":null}", await plain.Content.ReadAsStringAsync(ct));
+    }
+
     internal static void ConfigureUpstream(IServiceCollection services, HttpMessageHandler handler)
         => services.AddHttpClient(RouterExtensions.UpstreamHttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => handler);
