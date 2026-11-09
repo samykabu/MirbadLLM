@@ -5,7 +5,11 @@ using ModelContextProtocol.Server;
 namespace MirbadLLM.Web.Mcp;
 
 /// <summary>One MCP tool as Access &gt; MCP documents it.</summary>
-public sealed record McpToolInfo(string Name, string Description, bool ReadOnly, bool Destructive, IReadOnlyList<string> Arguments);
+public sealed record McpToolInfo(string Name, string Description, bool ReadOnly, bool Destructive, IReadOnlyList<string> Arguments)
+{
+    /// <summary>Which key the tool takes: everything that changes state, and the logs, which can hold prompts.</summary>
+    public bool NeedsOperator => !ReadOnly || Name == "mirbad_get_model_logs";
+}
 
 /// <summary>Read from the attributes the server publishes, so the page cannot drift from <c>tools/list</c>.</summary>
 public static class McpToolCatalog
