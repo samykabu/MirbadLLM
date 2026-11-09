@@ -317,11 +317,11 @@ public sealed partial class AgentReconciler
             return ReconciliationAction.Completed;
         }
 
-        if (request.Spec.SecretEnvNames.Count > 0)
+        if (request.Spec.SecretEnvNames.Count > 0 || request.Registry is not null)
         {
-            // Secret environment values are never stored (design §10.4), so the launch cannot be rebuilt from the log.
+            // Secret environment values and registry logins are never stored (design §10.4), so the launch cannot be rebuilt from the log.
             await _runtimes.FinishLaunchAsync(id, OperationState.Failed, Failure(ErrorCodes.InternalError,
-                "Launch " + id + " carries secret environment values, which are not stored; start the model again."), null).ConfigureAwait(false);
+                "Launch " + id + " carries secret values, which are not stored; start the model again."), null).ConfigureAwait(false);
             return ReconciliationAction.Completed;
         }
 

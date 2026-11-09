@@ -301,9 +301,13 @@ public static class BenchmarkComparisons
             Noise = Combine(verdicts),
         };
 
-    /// <summary>A model's delivery: llama.cpp's own setting, else container (vLLM always runs in a container).</summary>
-    public static LaunchDelivery DeliveryOf(ModelDefinition? model) =>
-        model?.Runtime == RuntimeKind.LlamaCpp ? model.LlamaCpp?.Delivery ?? LaunchDelivery.Container : LaunchDelivery.Container;
+    /// <summary>A model's delivery: llama.cpp's own setting, MLX always a native process, else container.</summary>
+    public static LaunchDelivery DeliveryOf(ModelDefinition? model) => model?.Runtime switch
+    {
+        RuntimeKind.LlamaCpp => model.LlamaCpp?.Delivery ?? LaunchDelivery.Container,
+        RuntimeKind.Mlx => LaunchDelivery.Process,
+        _ => LaunchDelivery.Container,
+    };
 
     private static BenchmarkProvenance Legacy(string bootstrapNodeId, ModelDefinition? settings, string? configHash, string? proxy, BenchmarkNoise? noise) =>
         new()

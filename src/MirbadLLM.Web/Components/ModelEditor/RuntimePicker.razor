@@ -24,7 +24,7 @@
                 llama.cpp
             </label>
         </div>
-        <div class="field-hint" id="placement-runtime-hint">Choose the node first: vLLM runs on every node, llama.cpp only on nodes that report it.</div>
+        <div class="field-hint" id="placement-runtime-hint">Choose the node first: vLLM runs on every node, the others only on nodes that report them.</div>
     </div>
 }
 else if (Node is not null)
@@ -111,13 +111,30 @@ else if (Node is not null)
                 {
                     <span>NIM serves an OpenAI-compatible endpoint from an approved NVIDIA container on @Node.Id.</span>
                 }
-                else if (!offerMlx && !offerSglang && !offerNim)
-                {
-                    <span>@Node.Id also runs llama.cpp@(llamaCpp?.Delivery == LaunchDelivery.Process ? " (native process)" : "").</span>
-                }
                 else
                 {
-                    <span>@Node.Id also runs @(offerLlamaCpp ? $"llama.cpp{(llamaCpp?.Delivery == LaunchDelivery.Process ? " (native process)" : "")} and " : "")MLX (native process).</span>
+                    var others = new List<string>();
+                    if (offerLlamaCpp)
+                    {
+                        others.Add(llamaCpp?.Delivery == LaunchDelivery.Process ? "llama.cpp (native process)" : "llama.cpp");
+                    }
+
+                    if (offerMlx)
+                    {
+                        others.Add("MLX (native process)");
+                    }
+
+                    if (offerSglang)
+                    {
+                        others.Add("SGLang");
+                    }
+
+                    if (offerNim)
+                    {
+                        others.Add("NIM");
+                    }
+
+                    <span>@Node.Id also runs @UiFormat.JoinNames(others, "and").</span>
                 }
                 @if (RuntimeLocked)
                 {

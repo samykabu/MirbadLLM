@@ -373,6 +373,7 @@ public sealed partial class RuntimeOperations : IOperationCanceller, IDisposable
                 Mode = run.Request.Mode,
                 Spec = run.Request.Spec,
                 HostPort = port,
+                Registry = run.Request.Registry,
             }, new LaunchStageSink(this, run), ct).ConfigureAwait(false);
 
             var instance = result.Instance;

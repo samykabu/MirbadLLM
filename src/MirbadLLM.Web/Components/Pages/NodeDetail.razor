@@ -1999,13 +1999,7 @@ else
     public static IReadOnlyList<RuntimeKind> RuntimeKinds(NodeCapabilities? capabilities) =>
         [.. (capabilities?.Runtimes ?? []).Where(r => r.Available).Select(r => r.Kind).Distinct().Order()];
 
-    private static string RuntimeName(RuntimeKind kind) => kind switch
-    {
-        RuntimeKind.Vllm => "vLLM",
-        RuntimeKind.LlamaCpp => "llama.cpp",
-        RuntimeKind.Mlx => "MLX",
-        _ => kind.ToString(),
-    };
+    private static string RuntimeName(RuntimeKind kind) => LlamaCppEditing.RuntimeName(kind);
 
     public async ValueTask DisposeAsync()
     {

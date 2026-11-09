@@ -61,7 +61,8 @@ public sealed class BenchmarkSuite(
     public IReadOnlyList<int> ChatLevels(BenchmarkTarget target)
     {
         ArgumentNullException.ThrowIfNull(target);
-        if (target.Runtime != RuntimeKind.LlamaCpp)
+        // A runtime with a fixed number of slots gets levels up to them; SGLang and NIM queue the rest, and that load is worth measuring.
+        if (target.Runtime is not (RuntimeKind.LlamaCpp or RuntimeKind.Mlx))
         {
             return options.Levels;
         }
@@ -79,12 +80,16 @@ public sealed class BenchmarkSuite(
     public static BenchmarkTarget TargetFor(string modelId, ModelDefinition settings, Uri baseUri, TuningGoal? preset, int? repetitions)
     {
         ArgumentNullException.ThrowIfNull(settings);
-        return settings.Runtime == RuntimeKind.LlamaCpp && settings.LlamaCpp is { } llama
-            ? new BenchmarkTarget(modelId, settings.ServedName, baseUri, llama.ContextSize, PoolingDetection.Detect(settings), llama.Parallel, preset, repetitions)
-            {
-                Runtime = RuntimeKind.LlamaCpp,
-            }
-            : new BenchmarkTarget(modelId, settings.ServedName, baseUri, settings.MaxModelLen, PoolingDetection.Detect(settings), settings.MaxNumSeqs, preset, repetitions);
+        int slots = settings.Runtime switch
+        {
+            RuntimeKind.LlamaCpp when settings.LlamaCpp is { } llama => llama.Parallel,
+            RuntimeKind.Mlx when settings.Mlx is { } mlx => mlx.KvBits is null ? mlx.Parallel : 1, // a quantized KV cache makes it serial
+            _ => settings.MaxNumSeqs,
+        };
+        return new BenchmarkTarget(modelId, settings.ServedName, baseUri, ModelCapabilities.MaxModelLen(settings), PoolingDetection.Detect(settings), slots, preset, repetitions)
+        {
+            Runtime = settings.Runtime,
+        };
     }
 
     public async Task<BenchmarkResult> RunAsync(BenchmarkTarget target, IProgress<BenchmarkProgress>? progress, CancellationToken ct = default)
@@ -147,7 +152,7 @@ public sealed class BenchmarkSuite(
         var noise = await EvaluateNoiseAsync(target, windows, ct).ConfigureAwait(false);
         var measured = ApplyNoise(levels, noise);
         return new BenchmarkResult(measured, prefill, guardrails, BuildNoise(target, measured.SelectMany(l => l.Runs).Select(r => r.SameModelRunningMax - r.Concurrency), noise,
-            measured.SelectMany(l => l.Runs).Select(r => r.Server)));
+            measured.SelectMany(l => l.Runs).Select(r => r.Server))) { SpecAcceptanceRate = AcceptanceDuring(target, windows) };
     }
 
     /// <summary>Per-metric median across repetitions; the level is noisy when any repetition was.</summary>
@@ -394,7 +399,9 @@ public sealed class BenchmarkSuite(
         var unknown = new List<string>();
         if (selfIncomplete)
         {
-            unknown.Add($"noise unknown: the metrics of {target.ModelId} do not cover every run");
+            unknown.Add(target.Runtime == RuntimeKind.Mlx
+                ? "noise unknown: MLX has no metrics, so requests from other clients can't be seen"
+                : $"noise unknown: the metrics of {target.ModelId} do not cover every run");
         }
 
         if (incomplete.Count > 0)
@@ -744,6 +751,7 @@ public sealed class BenchmarkSuite(
 
         double? ttft = null;
         int completionTokens = 0;
+        int chunks = 0;
         int promptTokens = 0;
         await using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
         using var reader = new StreamReader(stream);
@@ -770,6 +778,13 @@ public sealed class BenchmarkSuite(
                 ttft = Stopwatch.GetElapsedTime(start).TotalSeconds;
             }
 
+            if (root.TryGetProperty("choices", out var deltaChoices) && deltaChoices.ValueKind == JsonValueKind.Array && deltaChoices.GetArrayLength() > 0 &&
+                deltaChoices[0].TryGetProperty("delta", out var chunk) && chunk.ValueKind == JsonValueKind.Object &&
+                (HasText(chunk, "content") || HasText(chunk, "reasoning_content") || HasText(chunk, "reasoning")))
+            {
+                chunks++;
+            }
+
             if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object)
             {
                 completionTokens = usage.TryGetProperty("completion_tokens", out var ctok) && ctok.TryGetInt32(out int c) ? c : completionTokens;
@@ -778,7 +793,26 @@ public sealed class BenchmarkSuite(
         }
 
         double total = Stopwatch.GetElapsedTime(start).TotalSeconds;
-        return new RequestSample(ttft ?? total, total, completionTokens, promptTokens);
+        // shortcut: a server that reports no usage gets one token per stream chunk, which undercounts if it batches tokens; read its usage when it adds it.
+        return new RequestSample(ttft ?? total, total, completionTokens > 0 ? completionTokens : chunks, promptTokens);
+    }
+
+    /// <summary>The average speculative acceptance the server reported during <paramref name="windows"/>; null when it reported none.</summary>
+    private double? AcceptanceDuring(BenchmarkTarget target, List<RunWindow> windows)
+    {
+        if (history is null || windows.Count == 0)
+        {
+            return null;
+        }
+
+        var first = windows.Min(w => w.Start);
+        var last = windows.Max(w => w.End);
+        var rates = history.GetModel(target.ModelId, _time.GetUtcNow() - first + options.TelemetryMaxGap)
+            .Where(s => s.At >= first && s.At <= last + options.TelemetryMaxGap)
+            .Select(s => s.Kpis.SpecDecodeAcceptanceRate)
+            .OfType<double>()
+            .ToList();
+        return rates.Count == 0 ? null : rates.Average();
     }
 
     private static bool HasText(JsonElement element, string property) =>
@@ -931,7 +965,7 @@ public sealed class BenchmarkSuite(
             BuildNoise(target, measured.SelectMany(l => l.Runs).Select(r => r.SameModelRunningMax - r.Concurrency), noise,
                 measured.SelectMany(l => l.Runs).Select(r => r.Server)), null,
             BenchmarkResult.CurrentSchemaVersion, profile.Goal, reps, longPrompts, sharedPrefix, tools,
-            mixed, preemptions, pool.Max(s => s.KvUsage));
+            mixed, preemptions, pool.Max(s => s.KvUsage)) { SpecAcceptanceRate = AcceptanceDuring(target, windows) };
     }
 
     private async Task<RunMeasurement> RunChatLevelAsync(

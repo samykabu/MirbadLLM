@@ -4,6 +4,10 @@
 @* One benchmark result: whether it was measured on a quiet box, throughput and latency per concurrency
    level (median of the runs, every run listed), the long-prompt prefill, and the correctness guardrails. *@
 <div class="bench-result" data-testid="@TestId">
+    @if (Result.SpecAcceptanceRate is { } acceptance)
+    {
+        <p class="quiet-note" data-testid="@($"{TestId}-acceptance")">Speculative decoding accepted @UiFormat.Number(acceptance * 100)% of drafted tokens during these runs.</p>
+    }
     @if (Result.Noise.Noisy)
     {
         <div class="callout callout--busy" role="status" data-testid="@($"{TestId}-noisy")">
@@ -22,7 +26,7 @@
     {
         <p class="quiet-note" data-testid="@($"{TestId}-unknown")">
             <Icon Name="warning" />
-            Noise unknown: @string.Join("; ", unknown.Select(u => u.Replace("noise unknown: ", "", StringComparison.Ordinal))). No other requests were seen, but the telemetry does not cover every run.
+            Noise unknown: @string.Join("; ", unknown.Select(u => u.Replace("noise unknown: ", "", StringComparison.Ordinal))). Requests from other clients may have gone unseen.
         </p>
     }
     else

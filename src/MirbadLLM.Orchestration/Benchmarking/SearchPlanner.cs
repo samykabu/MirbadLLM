@@ -39,7 +39,7 @@ public static class SearchPlanner
     /// and every vLLM plan stay as they were; for a llama.cpp model a selection without llama.cpp dimensions means all of
     /// them (<see cref="LlamaCppTuning.Included"/>).
     /// </summary>
-    public static readonly IReadOnlyList<TuningDimension> Full = [.. Enum.GetValues<TuningDimension>().Where(d => !LlamaCppTuning.IsLlamaCppDimension(d))];
+    public static readonly IReadOnlyList<TuningDimension> Full = [.. Enum.GetValues<TuningDimension>().Where(d => !LlamaCppTuning.IsLlamaCppDimension(d) && !SmallRuntimeTuning.IsSmallDimension(d))];
 
     /// <param name="gguf">A llama.cpp model's GGUF summary (its candidates' memory checks); ignored for vLLM.</param>
     public static TuningPlan Plan(
@@ -50,6 +50,11 @@ public static class SearchPlanner
         if (LlamaCppTuning.Applies(baseline))
         {
             return LlamaCppTuning.Plan(baseline, gguf, dimensions);
+        }
+
+        if (SmallRuntimeTuning.Applies(baseline))
+        {
+            return SmallRuntimeTuning.Plan(baseline, inspection, dimensions);
         }
 
         baseline = VllmArgsNormalizer.Apply(baseline);
@@ -151,6 +156,11 @@ public static class SearchPlanner
             return LlamaCppTuning.CandidatesFor(step, best, llama, skipped);
         }
 
+        if (context.SmallRuntime)
+        {
+            return SmallRuntimeTuning.CandidatesFor(step, best, context.Inspection, skipped);
+        }
+
         if (step.SkipReason is not null)
         {
             return [];
@@ -175,7 +185,7 @@ public static class SearchPlanner
         ArgumentNullException.ThrowIfNull(step);
         ArgumentNullException.ThrowIfNull(stepResults);
         ArgumentNullException.ThrowIfNull(context);
-        if (context.LlamaCpp is not null)
+        if (context.LlamaCpp is not null || context.SmallRuntime)
         {
             return [];
         }

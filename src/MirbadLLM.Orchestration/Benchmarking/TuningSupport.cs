@@ -3,8 +3,8 @@ using MirbadLLM.Core;
 namespace MirbadLLM.Orchestration.Benchmarking;
 
 /// <summary>
-/// Which runtimes the tuner can really search. It knows vLLM's and llama.cpp's settings; any other runtime would fall
-/// through to the vLLM search, restart the same server for every candidate and could name a winner that changes nothing.
+/// Which runtimes the tuner can really search: vLLM, llama.cpp, MLX and SGLang. NIM has no setting worth a search (only its
+/// image's own variables), so it would restart the same server for every candidate and could name a winner that changes nothing.
 /// </summary>
 public static class TuningSupport
 {
@@ -12,7 +12,7 @@ public static class TuningSupport
     public static string? RefusalFor(ModelDefinition model)
     {
         ArgumentNullException.ThrowIfNull(model);
-        if (model.Runtime == RuntimeKind.Vllm || LlamaCppTuning.Applies(model))
+        if (model.Runtime == RuntimeKind.Vllm || LlamaCppTuning.Applies(model) || SmallRuntimeTuning.Applies(model))
         {
             return null;
         }
@@ -25,6 +25,6 @@ public static class TuningSupport
             RuntimeKind.Nim => "NIM",
             _ => model.Runtime.ToString(),
         };
-        return $"Tuning isn't available for {runtime} yet. The search only changes vLLM and llama.cpp settings, so every candidate would run the same server. Benchmarks still work.";
+        return $"Tuning isn't available for {runtime}. It has no settings a search could change, so every candidate would run the same server. Benchmarks still work.";
     }
 }

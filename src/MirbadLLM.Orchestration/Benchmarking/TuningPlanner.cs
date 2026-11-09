@@ -35,6 +35,7 @@ public static class TuningPlanner
         TuningDimension.MaxNumBatchedTokens => "Max batched tokens",
         TuningDimension.KvCacheDtype => "KV cache dtype",
         _ when LlamaCppTuning.IsLlamaCppDimension(dimension) => LlamaCppTuning.StepTitle(dimension),
+        _ when SmallRuntimeTuning.IsSmallDimension(dimension) => SmallRuntimeTuning.StepTitle(dimension),
         _ => dimension.ToString(),
     };
 
@@ -49,6 +50,11 @@ public static class TuningPlanner
         if (LlamaCppTuning.Applies(baseline))
         {
             return LlamaCppTuning.Plan(baseline, gguf, dimensions);
+        }
+
+        if (SmallRuntimeTuning.Applies(baseline))
+        {
+            return SmallRuntimeTuning.Plan(baseline, inspection, dimensions);
         }
 
         baseline = VllmArgsNormalizer.Apply(baseline);
@@ -140,6 +146,11 @@ public static class TuningPlanner
             return LlamaCppTuning.CandidatesFor(step, best, new LlamaCppTuningContext(null));
         }
 
+        if (SmallRuntimeTuning.Applies(best))
+        {
+            return SmallRuntimeTuning.CandidatesFor(step, best, inspection: null);
+        }
+
         return step.SkipReason is not null
             ? []
             : step.Values.Select(v => new TuningCandidatePlan(step.Title, CandidateLabel(step.Dimension, v), Apply(step.Dimension, v, best))).ToList();
@@ -155,6 +166,7 @@ public static class TuningPlanner
             TuningDimension.MaxNumBatchedTokens => $"Batched tokens {value.Label}",
             TuningDimension.KvCacheDtype => $"KV cache {value.Label}",
             _ when LlamaCppTuning.IsLlamaCppDimension(dimension) => LlamaCppTuning.CandidateLabel(dimension, value),
+            _ when SmallRuntimeTuning.IsSmallDimension(dimension) => SmallRuntimeTuning.CandidateLabel(dimension, value),
             _ => value.Label,
         };
     }
@@ -171,6 +183,11 @@ public static class TuningPlanner
         if (LlamaCppTuning.IsLlamaCppDimension(dimension))
         {
             return LlamaCppTuning.Apply(dimension, value, best);
+        }
+
+        if (SmallRuntimeTuning.IsSmallDimension(dimension))
+        {
+            return SmallRuntimeTuning.Apply(dimension, value, best);
         }
 
         return dimension switch
@@ -197,7 +214,9 @@ public static class TuningPlanner
     public static string Fingerprint(ModelDefinition definition)
     {
         ArgumentNullException.ThrowIfNull(definition);
-        return LlamaCppTuning.Applies(definition) ? LlamaCppTuning.Fingerprint(definition) : ModelConfigHash.Compute(definition, "", 100);
+        return LlamaCppTuning.Applies(definition) ? LlamaCppTuning.Fingerprint(definition)
+            : SmallRuntimeTuning.Applies(definition) ? SmallRuntimeTuning.Fingerprint(definition)
+            : ModelConfigHash.Compute(definition, "", 100);
     }
 
     /// <summary>Memory one full-length request needs with an unquantized (auto, BF16) KV cache.</summary>

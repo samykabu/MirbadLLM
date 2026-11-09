@@ -41,6 +41,20 @@ public static class TuningDescriptions
 
     public static TuningDescription Dimension(TuningDimension dimension) => dimension switch
     {
+        TuningDimension.MlxParallel => new("Set how many requests mlx_lm.server decodes together.",
+            "More raises total throughput, and each request gets slower and needs its own KV cache."),
+        TuningDimension.MlxKvBits => new("Quantize the KV cache to fit longer contexts in less memory.",
+            "Quantized caches make the server handle one request at a time."),
+        TuningDimension.MlxDraftTokens => new("Set how many tokens the draft model proposes per step.",
+            "Too many waste work when guesses miss."),
+        TuningDimension.MlxPromptCache => new("Size the cache of prompts seen before.",
+            "It only helps requests that share a prefix, and it uses memory all the time."),
+        TuningDimension.SglangMaxRunningRequests => new("Set how many requests SGLang runs at once.",
+            "More raises total throughput until memory runs short; each request gets slower."),
+        TuningDimension.SglangSchedulePolicy => new("Choose the order waiting requests start in: first come, or longest shared prefix.",
+            "Longest prefix reuses the cache more, and a request with no shared prefix can wait longer."),
+        TuningDimension.SglangDraftDepth => new("Try drafting fewer tokens per step than the saved depth.",
+            "Fewer wastes less when guesses miss, and gains less when they hit. Deeper isn't tried, because the drafter's block size limits it."),
         TuningDimension.KvCacheDtype => new("Choose the KV-cache data type: FP8 or the model's own (auto, usually BF16).",
             "Auto doubles KV memory per token, so fewer or shorter requests fit; FP8 may cost a little speed or accuracy."),
         TuningDimension.PrefixCaching => new("Reuse the KV cache of prompt prefixes seen before instead of recomputing them.",
@@ -158,6 +172,17 @@ public static class TuningDescriptions
     public static string Summary(ModelDefinition model)
     {
         ArgumentNullException.ThrowIfNull(model);
+        if (model.Runtime == RuntimeKind.Mlx && model.Mlx is { } mlx)
+        {
+            return string.Create(Culture, $"parallel {mlx.Parallel} · KV bits {(mlx.KvBits is { } bits ? bits.ToString(Culture) : "off")} · prompt cache {mlx.PromptCacheGiB:0.##} GiB{(mlx.NumDraftTokens is { } draft ? $" · draft {draft}" : "")}");
+        }
+
+        if (model.Runtime is RuntimeKind.Sglang or RuntimeKind.Nim)
+        {
+            string args = model.Container is { ExtraArgs.Count: > 0 } container ? string.Join(' ', container.ExtraArgs) : "no extra arguments";
+            return model.Speculative is { } draft ? string.Create(Culture, $"{draft.Method} × {draft.NumSpeculativeTokens} · {args}") : args;
+        }
+
         var m = VllmArgsNormalizer.Apply(model);
         string speculative = m.Speculative switch
         {

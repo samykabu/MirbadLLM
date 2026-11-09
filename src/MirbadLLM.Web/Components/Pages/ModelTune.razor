@@ -36,7 +36,7 @@ else if (_model is not null)
     }
     else
     {
-    <p class="job-lede">Find faster @(IsLlamaCpp ? "llama-server" : "vLLM") settings for this model with a repeatable search. You apply the winner yourself; nothing changes automatically.</p>
+    <p class="job-lede">Find faster @TunedServerName settings for this model with a repeatable search. You apply the winner yourself; nothing changes automatically.</p>
 
     @if (_error is not null)
     {
@@ -143,7 +143,7 @@ else if (_model is not null)
                                 <li>
                                     <span class="plan-step-title">Baseline</span>
                                     <span class="num">@SettingChanges.Summary(preview.Baseline)</span>
-                                    <span class="muted">@(preview.ReusesRunningBaseline ? "measured on the running container, no restart" : "started with the saved settings")</span>
+                                    <span class="muted">@(preview.ReusesRunningBaseline ? "measured on the running model, no restart" : "started with the saved settings")</span>
                                 </li>
                                 @{ string? lastPhase = null; string? phaseText = null; int stepIndex = 0; }
                                 @foreach (var step in preview.Plan.Steps)
@@ -408,23 +408,34 @@ else if (_model is not null)
     /// <summary>True for a llama.cpp model: the steps are <see cref="LlamaCppTuning.Dimensions"/>, not the vLLM ones (MN-230).</summary>
     private bool IsLlamaCpp => _model is not null && LlamaCppTuning.Applies(_model);
 
+    /// <summary>True for an MLX or SGLang model, whose steps are <see cref="SmallRuntimeTuning.DimensionsFor"/>.</summary>
+    private bool IsSmallRuntime => _model is not null && SmallRuntimeTuning.Applies(_model);
+
+    private bool HasSmallTune => IsLlamaCpp || IsSmallRuntime;
+
+    private string TunedServerName => IsLlamaCpp ? "llama-server" : LlamaCppEditing.RuntimeName(_model?.Runtime ?? RuntimeKind.Vllm);
+
     private string? TuningRefusal => _model is null ? null : TuningSupport.RefusalFor(_model);
 
-    private (string Key, string Label)[] SearchOptions => IsLlamaCpp ? LlamaCppSearchOptions : VllmSearchOptions;
+    private (string Key, string Label)[] SearchOptions => HasSmallTune ? LlamaCppSearchOptions : VllmSearchOptions;
 
     /// <summary>Every step of the search this model has: the llama.cpp dimensions, else <see cref="SearchPlanner.Full"/>.</summary>
-    private IReadOnlyList<TuningDimension> AllSteps => IsLlamaCpp ? LlamaCppTuning.Dimensions : SearchPlanner.Full;
+    private IReadOnlyList<TuningDimension> AllSteps => IsLlamaCpp ? LlamaCppTuning.Dimensions
+        : IsSmallRuntime ? SmallRuntimeTuning.DimensionsFor(_model!)
+        : SearchPlanner.Full;
 
     /// <summary>True once the owner chose Custom or ticked a step by hand: the checkboxes are the plan, whatever they match.</summary>
     private bool _customSearch;
 
     /// <summary>Custom when chosen (or a step was ticked by hand), otherwise Quick or Full by the ticked steps.</summary>
     private string SearchScope => _customSearch ? "Custom"
-        : IsLlamaCpp ? (_steps.SetEquals(AllSteps) ? "Full" : "Custom")
+        : HasSmallTune ? (_steps.SetEquals(AllSteps) ? "Full" : "Custom")
         : _steps.SetEquals(SearchPlanner.Quick) ? "Quick" : _steps.SetEquals(SearchPlanner.Full) ? "Full" : "Custom";
 
-    private string SearchDescription => (IsLlamaCpp, SearchScope) switch
+    private string SearchDescription => (IsSmallRuntime ? (bool?)null : IsLlamaCpp, SearchScope) switch
     {
+        (null, "Full") => "Full: every step below, one at a time from the saved settings. Each candidate restarts the model.",
+        (null, _) => "Custom: exactly the steps ticked below. Untick a step to leave that setting at its saved value; the candidate count and time update.",
         (true, "Full") => "Full: the whole small tune — parallel slots, flash attention, KV cache types and batch × micro-batch, one dimension at a time from the saved settings, at most 12 candidates.",
         (true, _) => "Custom: exactly the steps ticked below. Untick a step to leave that dimension at its saved value; the candidate count and time update.",
         (_, "Quick") => "Quick: the capability gates, max num seqs, and speculative decoding with FULL_AND_PIECEWISE graphs — usually 8–12 candidates.",
@@ -739,7 +750,7 @@ else if (_model is not null)
             _goal = TuningGoal.Embeddings;
         }
 
-        if (IsLlamaCpp)
+        if (HasSmallTune)
         {
             // The small tune's own steps, all ticked: the vLLM Quick preset names no llama.cpp dimension, so the whole
             // tune ran while every checkbox read unticked and ticking one narrowed the plan to it (MN-230, D130).
@@ -795,7 +806,7 @@ else if (_model is not null)
 
             _currentCandidates = current;
         }
-        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or DockerApiException)
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or DockerApiException or ArgumentException or NotSupportedException)
         {
             _currentConfigHash = null;
             _currentCandidates = [];
@@ -803,7 +814,7 @@ else if (_model is not null)
     }
 
     private bool IsCurrent(TuningCandidateResult candidate) =>
-        _currentCandidates.Contains(candidate.Index) || (_currentConfigHash is not null && candidate.ConfigHash == _currentConfigHash);
+        _currentCandidates.Contains(candidate.Index) || (!string.IsNullOrEmpty(_currentConfigHash) && candidate.ConfigHash == _currentConfigHash);
 
     /// <summary>What Apply would save for <paramref name="candidate"/>: its tuned fields, normalized, on the saved definition.</summary>
     private ModelDefinition AppliedSettings(TuningCandidateResult candidate) =>

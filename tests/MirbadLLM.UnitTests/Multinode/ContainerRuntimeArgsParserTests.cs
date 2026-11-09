@@ -37,6 +37,31 @@ public sealed class ContainerRuntimeArgsParserTests
     };
 
     [Fact]
+    public void TheMetricsFlagTheBuilderAdds_IsNotAnExtraArgument_AndDoesNotSwallowTheNextOne()
+    {
+        var launched = Launched(Sglang);
+        string[] argv = [.. launched.Argv.Take(11), "--enable-metrics", .. launched.Argv.Skip(11)];
+        var parsed = ContainerRuntimeArgsParser.Parse(launched with { Argv = argv }, Sglang);
+        Assert.Equal(Sglang.Container!.ExtraArgs, parsed.Container!.ExtraArgs);
+        Assert.Empty(SettingChanges.AllRestartNeeded(parsed, Sglang));
+
+        var typed = Sglang with { Container = Sglang.Container with { ExtraArgs = ["--enable-metrics", "--tp", "2"] } };
+        Assert.Equal(["--enable-metrics", "--tp", "2"], ContainerRuntimeArgsParser.Parse(Launched(typed), typed).Container!.ExtraArgs);
+    }
+
+    [Fact]
+    public void TheTpSizeTheBuilderAdds_IsNotAnExtraArgument_ButOneTheOperatorSetStaysOne()
+    {
+        var plain = Sglang with { Container = Sglang.Container! with { ExtraArgs = [] } };
+        var launched = Launched(plain);
+        var added = ContainerRuntimeArgsParser.Parse(launched with { Argv = [.. launched.Argv, "--tp-size", "2"] }, plain);
+        Assert.Empty(added.Container!.ExtraArgs);
+
+        var typed = Sglang with { Container = Sglang.Container! with { ExtraArgs = ["--tp-size", "1"] } };
+        Assert.Equal(["--tp-size", "1"], ContainerRuntimeArgsParser.Parse(Launched(typed), typed).Container!.ExtraArgs);
+    }
+
+    [Fact]
     public void AnUnchangedSglangModel_ShowsNoChanges_ThoughTheAlgorithmIsUpperCasedWhenLaunched()
     {
         var launched = ContainerRuntimeArgsParser.Parse(Launched(Sglang), Sglang);

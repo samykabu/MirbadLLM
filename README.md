@@ -68,7 +68,7 @@ them. You do not have to do the arithmetic yourself, though: the agent reads eac
 model needs, and refuses a start that would not fit, with the reason. To look up your own machine, use
 [Will it run?](https://mirbadllm.vektragrid.com/will-it-run/) on the website.
 
-Two limits to know today. A PC node needs an NVIDIA GPU, on Windows 11 (llama.cpp) or on Linux (vLLM in Docker), and a
+Two limits to know today. A PC node needs an NVIDIA GPU, on Windows 11 (llama.cpp) or on Linux (vLLM, llama.cpp or SGLang in Docker, and NIM where it's enabled), and a
 Mac node needs Apple Silicon. AMD GPUs and CPU-only machines are not supported yet.
 
 ### Why it exists
@@ -117,7 +117,7 @@ hosted service.
   per node, a leaderboard with a full readout per model, the fleet's counters (requests served, tokens today, crash-free
   streak, error budget), service levels, and per-node headroom and disk.
 - **Benchmark and tune.** Workload presets (interactive chat, agents and tools, throughput, long documents,
-  embeddings) measure a running model. The tuner searches vLLM settings phase by phase and re-measures the leaders
+  embeddings) measure a running model. The tuner searches vLLM settings phase by phase and re-measures the leaders, with a smaller search for llama.cpp, MLX and SGLang (NIM has nothing to tune)
   before it names a winner; nothing changes until you choose **Apply**.
 - **Access control.** An admin login for the UI and the admin API, isolated API-key scopes for `/v1`, `/metrics`, and the protected stateless Streamable HTTP MCP endpoint at `/mcp`, and a Connect
   page with ready-to-paste settings for common clients, including a VS Code configuration export.

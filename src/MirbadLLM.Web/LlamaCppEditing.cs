@@ -607,7 +607,7 @@ public static class LlamaCppEditing
 public static class LlamaCppFieldHelp
 {
     public static readonly FieldHelpText Runtime = new(
-        What: "The inference engine that serves the model: vLLM, or llama.cpp (llama-server) on a node that reports it.",
+        What: "The engine that serves the model, from the runtimes this node reports.",
         Why: "The settings below belong to the runtime. llama.cpp serves one GGUF file and runs as a native process on Windows " +
              "nodes; the option is shown only for a node whose capabilities list a llama.cpp runtime. The runtime is chosen " +
              "when the model is added.",

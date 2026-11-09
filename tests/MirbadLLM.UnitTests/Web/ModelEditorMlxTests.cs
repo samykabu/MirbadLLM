@@ -168,6 +168,59 @@ public sealed class ModelEditorMlxTests : IDisposable
         Assert.DoesNotContain("Tuning", review, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Wizard_ForSglang_HasNoTuningStep_NamesItsRuntime_AndSuggestsTheNodesImages()
+    {
+        var node = MacMini() with
+        {
+            Runtimes = [new RuntimeCapability { Kind = RuntimeKind.Sglang, Delivery = LaunchDelivery.Container, Available = true }],
+            Images = [new ImageInfo { Ref = "lmsysorg/sglang:1" }, new ImageInfo { Ref = "mirbadllm/agent:1" }],
+        };
+        using var ctx = Context(new FakeModelRegistry(), node);
+        var cut = Rendered(ctx.Render<ModelEditor>(p => Quiet(p)));
+        cut.WaitForAssertion(() => Assert.NotNull(cut.Find("[data-testid=placement-runtime-sglang]")), Wait);
+        Assert.Equal("mac-mini also runs SGLang.", Text(cut, "[data-testid=placement-runtime-hint]"));
+        Assert.Equal("vLLM or SGLang", Text(cut, "[data-testid=wizard-step-where] .wizard-step-hint"));
+
+        cut.ChangeAt("[data-testid=placement-runtime-sglang]", "sglang");
+
+        cut.WaitForAssertion(() => Assert.Equal(["where", "checkpoint", "identity", "memory", "review"], Steps(cut)), Wait);
+        Assert.Equal("Container settings", Text(cut, "[data-testid=wizard-step-memory] .wizard-step-label"));
+        Assert.Contains("--mem-fraction-static", Text(cut, "[data-testid=field-container-budget-hint]"), StringComparison.Ordinal);
+        Assert.Equal(["lmsysorg/sglang:1"], cut.FindAll("[data-testid=field-image-suggestions] option").Select(o => o.GetAttribute("value")));
+    }
+
+    [Fact]
+    public async Task Wizard_ForNim_SkipsTheCheckpoint_AndSavesTokenNamesNotValues()
+    {
+        const string Digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        var node = MacMini() with { Runtimes = [new RuntimeCapability { Kind = RuntimeKind.Nim, Delivery = LaunchDelivery.Container, Available = true }] };
+        var registry = new FakeModelRegistry();
+        using var ctx = Context(registry, node);
+        var cut = Rendered(ctx.Render<ModelEditor>(p => Quiet(p)));
+        cut.WaitForAssertion(() => Assert.NotNull(cut.Find("[data-testid=placement-runtime-nim]")), Wait);
+
+        cut.ChangeAt("[data-testid=placement-runtime-nim]", "nim");
+
+        cut.WaitForAssertion(() => Assert.Equal(["where", "identity", "memory", "review"], Steps(cut)), Wait);
+        cut.Find("[data-testid=field-id]").Change("llama-nim");
+        cut.Find("[data-testid=field-served-name]").Change("meta/llama");
+        cut.Find("[data-testid=field-image]").Change("nvcr.io/nim/a:1");
+        cut.Find("[data-testid=field-image-digest]").Change(Digest);
+        cut.Find("[data-testid=field-container-env]").Change("NIM_MODEL_PROFILE=fast");
+        cut.Find("[data-testid=field-container-secret-env]").Change("NGC_API_KEY=ngc");
+        cut.Find("[data-testid=field-registry-token]").Change("ngc");
+        cut.Find("form").Submit();
+
+        cut.WaitForAssertion(() => Assert.NotNull(registry.GetAsync("llama-nim", Ct).Result), Wait);
+        var saved = (await registry.GetAsync("llama-nim", Ct))!;
+        Assert.Equal("llama-nim", saved.ModelPath);
+        Assert.Empty(saved.Sources);
+        Assert.Equal("fast", saved.Container!.Env!["NIM_MODEL_PROFILE"]);
+        Assert.Equal("ngc", saved.Container.SecretEnv!["NGC_API_KEY"]);
+        Assert.Equal(new ContainerRegistryLogin("nvcr.io", "$oauthtoken", "ngc"), saved.Container.RegistryLogin);
+    }
+
     // ================================================================ settings, estimate and save
 
     [Fact]

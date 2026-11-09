@@ -13,9 +13,9 @@
                 <div class="field-grid"><div class="field field--wide"><div class="field-head"><span class="field-label" id="source-mode-label">Checkpoint source</span><button type="button" class="info-btn" aria-label="About: Checkpoint source" popovertarget="source-mode-help" style="anchor-name: --source-mode-help" data-testid="info-toggle-source-mode"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
 <div class="help-popover" id="source-mode-help" popover role="note" aria-label="About Checkpoint source" style="position-anchor: --source-mode-help" data-testid="info-panel-source-mode"><p class="help-popover-title">Checkpoint source</p>
     <dl class="help-panel"><dt>What it is</dt>
-        <dd>Where the checkpoint files come from: a folder already on the DGX, or a fresh download from Hugging Face.</dd>
+        <dd>Where the checkpoint files come from: a folder already on the node, or a fresh download from Hugging Face.</dd>
         <dt>Why it matters</dt>
-        <dd>vLLM needs the full checkpoint (weights, config.json, tokenizer files) sitting under the models root before it can serve it. Picking a folder skips straight to configuring the model; downloading fetches the files first and then lets you configure it.</dd>
+        <dd>The runtime needs the full checkpoint (weights, config.json, tokenizer files) sitting under the models root before it can serve it. Picking a folder skips straight to configuring the model; downloading fetches the files first and then lets you configure it.</dd>
         <dt>Example</dt>
         <dd>The three checkpoints already on this box (Ornith-1.5-9B-uncensored and its two NVFP4 variants) show up under "Folder already on the DGX". A new model, e.g. a fresh Qwen3 release, would use "Download from Hugging Face".</dd></dl></div>
                         <div class="source-picker" role="radiogroup" aria-labelledby="source-mode-label"><label class="source-option" data-testid="source-folder-tab"><input type="radio" name="sourceMode" id="source-folder" checked blazor:onchange="" />
@@ -30,7 +30,7 @@
     <dl class="help-panel"><dt>What it is</dt>
         <dd>The checkpoint's folder name, relative to the models root (bound read-only at /models in the container).</dd>
         <dt>Why it matters</dt>
-        <dd>Passed straight through as --model /models/{ModelPath}. It must be the exact folder name containing config.json and the *.safetensors weight files.</dd>
+        <dd>The runtime loads this folder. It must be the exact folder name containing config.json and the *.safetensors weight files.</dd>
         <dt>Example</dt>
         <dd>Ornith-1.5-9B-uncensored, or Ornith-1.5-9B-NVFP4 for the pre-quantized variant.</dd></dl></div>
                             <select class="form-select" id="field-source-folder" data-testid="field-source-folder" value="" blazor:onchange=""><option value>No checkpoint folders found under the models root</option></select></div></div></section><form data-testid="model-form" class="form-sections" blazor:onsubmit=""><button type="submit" class="wizard-enter-guard" disabled tabindex="-1" aria-hidden="true"></button><section class="panel form-section" aria-labelledby="sec-identity" data-wizard-step="identity" hidden><div class="form-section-intro"><h2 id="sec-identity">Identity</h2>
@@ -50,7 +50,7 @@
     <dl class="help-panel"><dt>What it is</dt>
         <dd>The name clients put in the OpenAI "model" field of a chat request.</dd>
         <dt>Why it matters</dt>
-        <dd>The router matches incoming requests to an upstream by this exact name (case-insensitive), and it is passed to vLLM as --served-model-name so /v1/models advertises it too. Two models can't share one.</dd>
+        <dd>The router matches incoming requests to an upstream by this exact name (case-insensitive), and it is passed to the server so /v1/models advertises it too. Two models can't share one.</dd>
         <dt>Example</dt>
         <dd>Ornith-Uncensored-FP8 — what VS Code/Cline would put in its model picker to reach the seeded model.</dd></dl></div>
                         <input id="field-served-name" data-testid="field-served-name" autocomplete="off" spellcheck="false" aria-describedby="field-served-name-error" name="_model.ServedName" class="form-control valid" value="" blazor:onchange=""></input>
@@ -60,7 +60,7 @@
     <dl class="help-panel"><dt>What it is</dt>
         <dd>The checkpoint's folder name, relative to the models root (bound read-only at /models in the container).</dd>
         <dt>Why it matters</dt>
-        <dd>Passed straight through as --model /models/{ModelPath}. It must be the exact folder name containing config.json and the *.safetensors weight files.</dd>
+        <dd>The runtime loads this folder. It must be the exact folder name containing config.json and the *.safetensors weight files.</dd>
         <dt>Example</dt>
         <dd>Ornith-1.5-9B-uncensored, or Ornith-1.5-9B-NVFP4 for the pre-quantized variant.</dd></dl></div>
                         <input id="field-model-path" data-testid="field-model-path" autocomplete="off" spellcheck="false" aria-describedby="field-model-path-error" name="_model.ModelPath" class="form-control num valid" value="" blazor:onchange=""></input>
@@ -70,7 +70,7 @@
     <dl class="help-panel"><dt>What it is</dt>
         <dd>Labels for finding the model: built-in ones (Chat, Embedding, Vision, Tool calling, …) and your own, lowercase letters, digits and hyphens, up to 24 characters, at most 12 per model.</dd>
         <dt>Why it matters</dt>
-        <dd>The Dashboard and the Models page filter by tag (a model must have every selected tag), and the admin API accepts ?tag=…. Tags are not vLLM arguments: changing them never restarts the model. "Suggested" marks the tags the parsers, extra args and the checkpoint's config.json point to; they are only applied when you pick them.</dd>
+        <dd>The Dashboard and the Models page filter by tag (a model must have every selected tag), and the admin API accepts ?tag=…. Tags are not launch arguments: changing them never restarts the model. "Suggested" marks the tags the parsers, extra args and the checkpoint's config.json point to; they are only applied when you pick them.</dd>
         <dt>Example</dt>
         <dd>An embedding model started with --runner pooling gets Embedding suggested; Ornith-9B with the qwen3 parsers gets Chat, Tool calling and Reasoning.</dd></dl></div>
                         <div class="tag-editor" role="group" aria-labelledby="tags-label" aria-describedby="tags-hint" data-testid="tag-editor"><div class="tag-editor-row"><button type="button" class="tag-toggle tag-toggle--suggested" aria-pressed="true" title="Generates text for chat completions." data-testid="tag-toggle-chat" blazor:onclick=""><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span>Chat</span><span class="tag-suggested">· suggested</span></button><button type="button" class="tag-toggle tag-toggle--suggested" aria-pressed="true" title="Thinks before it answers; a reasoning parser splits the thinking out." data-testid="tag-toggle-reasoning" blazor:onclick=""><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span>Reasoning</span><span class="tag-suggested">· suggested</span></button><button type="button" class="tag-toggle tag-toggle--suggested" aria-pressed="true" title="Returns OpenAI tool calls through a tool-call parser." data-testid="tag-toggle-tool-calling" blazor:onclick=""><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg><span>Tool calling</span><span class="tag-suggested">· suggested</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Reads images as well as text." data-testid="tag-toggle-vision" blazor:onclick=""><span>Vision</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Takes more than one kind of input (text plus images or audio)." data-testid="tag-toggle-multimodal" blazor:onclick=""><span>Multimodal</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Turns text into vectors (/v1/embeddings), not a chat model." data-testid="tag-toggle-embedding" blazor:onclick=""><span>Embedding</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Scores how well documents match a query (/v1/score, /v1/rerank)." data-testid="tag-toggle-reranker" blazor:onclick=""><span>Reranker</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Tuned for writing and editing code." data-testid="tag-toggle-code" blazor:onclick=""><span>Code</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Decodes speculatively (MTP, n-gram or a draft model) for faster output." data-testid="tag-toggle-speculative" blazor:onclick=""><span>Speculative</span></button><button type="button" class="tag-toggle " aria-pressed="false" title="Plans or routes work, e.g. intent detection for agents." data-testid="tag-toggle-planner" blazor:onclick=""><span>Planner</span></button></div><div class="tag-editor-add"><input class="form-control" id="field-tag-input" form="tag-input-detached" data-testid="field-tag-input" aria-label="Add a custom tag" placeholder="Add your own, e.g. long-context" autocomplete="off" spellcheck="false" maxlength="40" aria-describedby="tags-hint" blazor:onkeydown="" value="" blazor:oninput="" />
@@ -304,7 +304,7 @@
         <div class="ss-dialog-body" id="dialog-n-body"><p data-testid="force-restart-numbers"> needs <strong class="num">0.0 GiB</strong>, but only
         <strong class="num">0.0 GiB</strong> is free after the
         <span class="num">0.0 GiB</span> reserve (<span class="num">0.0 GiB</span> free in total,
-        counting the <span class="num">0.0 GiB</span> its running container releases).
+        counting the <span class="num">0.0 GiB</span> the running model releases).
     </p>
     <p class="muted">
         Restarting anyway can push ComfyUI, Ollama or other models on this box out of memory, or leave this model failing while it loads.

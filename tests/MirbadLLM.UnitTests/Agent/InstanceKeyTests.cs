@@ -196,6 +196,24 @@ public sealed class InstanceKeyTests
         Assert.Empty(upstream.Seen);
     }
 
+    [Theory]
+    [InlineData(RuntimeKind.Sglang, "/metrics")]
+    [InlineData(RuntimeKind.Nim, "/v1/metrics")]
+    public async Task ContainerRuntimes_AreScraped_OnTheirOwnMetricsPath(RuntimeKind runtime, string path)
+    {
+        await using var upstream = await HeaderRecordingUpstream.StartAsync(Ct);
+        var driver = new ContainerDriverStub(upstream.BaseUri) { Runtime = runtime };
+        var sampler = new TelemetrySampler(
+            new TelemetryRing("boot-1", Options.Create(new TelemetryOptions())), new FakeMemoryProbe(8, 6), new NoGpus(), [driver],
+            new TelemetryHttpClient(), Options.Create(new TelemetryOptions()), TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TelemetrySampler>.Instance);
+
+        var sample = await sampler.SampleOnceAsync(Ct);
+
+        Assert.Single(sample!.Models);
+        Assert.Equal([path], upstream.Seen.Select(s => s.Path));
+    }
+
     [Fact]
     public async Task TheProxy_RewritesAnMlxRequestBody_BeforeTheServerSeesIt_AndRefusesAnAmbiguousOne()
     {

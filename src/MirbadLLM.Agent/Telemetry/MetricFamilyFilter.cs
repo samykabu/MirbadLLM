@@ -7,7 +7,8 @@ namespace MirbadLLM.Agent.Telemetry;
 /// <summary>
 /// Reduces a model's raw Prometheus <c>/metrics</c> text to the metric families the master reads (design §8.1):
 /// exactly the names <c>ModelKpiCalculator</c> and <c>BenchmarkSuite</c> use for vLLM, plus the llama.cpp
-/// (<c>--metrics</c>) families that map to the same KPIs (<see cref="LlamaCppMetrics.Families"/>, design-p3p4 §A.1.9).
+/// (<c>--metrics</c>) families that map to the same KPIs (<see cref="LlamaCppMetrics.Families"/>, design-p3p4 §A.1.9),
+/// SGLang's (<c>--enable-metrics</c>), and NIM's, which are vLLM's without the prefix.
 /// Lines are kept byte for byte (no parsing or reformatting; <c>PrometheusText</c> stays on the master), so the master
 /// computes identical KPIs from the filtered text.
 /// <para>A sample line is kept when its metric name is listed, or is a listed histogram's <c>_bucket</c>, <c>_sum</c> or
@@ -36,6 +37,25 @@ public static class MetricFamilyFilter
         "vllm:num_preemptions_total",
         "vllm:tool_call_parser_invocations_total",
 
+        // ModelKpiCalculator (SGLang)
+        "sglang:num_running_reqs",
+        "sglang:num_queue_reqs",
+        "sglang:token_usage",
+        "sglang:gen_throughput",
+        "sglang:generation_tokens_total",
+        "sglang:prompt_tokens_total",
+        "sglang:cached_tokens_total",
+        "sglang:num_requests_total",
+        "sglang:spec_accept_rate",
+
+        // ModelKpiCalculator (NIM)
+        "num_requests_running",
+        "num_requests_waiting",
+        "gpu_cache_usage_perc",
+        "generation_tokens_total",
+        "prompt_tokens_total",
+        "request_success_total",
+
         // BenchmarkSuite prefix-cache hit counter (names across vLLM versions)
         "vllm:prefix_cache_hits",
         "vllm:gpu_prefix_cache_hits_total",
@@ -53,6 +73,12 @@ public static class MetricFamilyFilter
         "vllm:inter_token_latency_seconds",
         "vllm:e2e_request_latency_seconds",
         "vllm:request_queue_time_seconds",
+        "sglang:time_to_first_token_seconds",
+        "sglang:inter_token_latency_seconds",
+        "sglang:e2e_request_latency_seconds",
+        "sglang:queue_time_seconds",
+        "time_to_first_token_seconds",
+        "e2e_request_latency_seconds",
     }.ToFrozenSet(StringComparer.Ordinal);
 
     private static readonly string[] HistogramSuffixes = ["_bucket", "_sum", "_count"];

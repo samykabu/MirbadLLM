@@ -34,7 +34,7 @@ public static class BenchGlossary
         "How the goal ranks candidates. Balanced: the geometric mean of the N = 1 and N = 16 gains over the baseline (×1.000 = the baseline). Many agents: N = 16 aggregate tok/s. Single user: N = 1 tok/s.";
 
     public const string Settings =
-        "The vLLM settings measured. speculative: speculative decoding (MTP × 2 = the model's own multi-token-prediction head drafts 2 tokens a step; n-gram × k drafts from the prompt). graphs: CUDA graph mode (PIECEWISE, FULL, default). seqs: max concurrent sequences. batched: max tokens scheduled per step. KV: the KV-cache data type.";
+        "The settings measured. speculative: speculative decoding (MTP × 2 = the model's own multi-token-prediction head drafts 2 tokens a step; n-gram × k drafts from the prompt). graphs: CUDA graph mode (PIECEWISE, FULL, default). seqs: max concurrent sequences. batched: max tokens scheduled per step. KV: the KV-cache data type.";
 
     public const string OutputTokens =
         "Tokens each request generates (min_tokens = max_tokens): 256 for chat-sized answers, 1,024 for long answers where decode speed dominates.";

@@ -87,6 +87,21 @@ public sealed class ModelTagsTests
     public void Suggest_GenerativeModelWithParsers_IsChatToolCallingReasoning() =>
         Assert.Equal(["chat", "reasoning", "tool-calling"], ModelTags.Suggest(Model()));
 
+    [Fact]
+    public void Suggest_AndCapabilities_ReadSglangsFlags_FromItsExtraArgs()
+    {
+        var sglang = Model() with
+        {
+            Runtime = RuntimeKind.Sglang, ToolCallParser = null, ReasoningParser = null,
+            Container = new ContainerRuntimeSettings { Image = "sglang:1", ExtraArgs = ["--tool-call-parser", "qwen3_coder", "--reasoning-parser", "qwen3", "--context-length", "131072"] },
+        };
+        Assert.Equal(["chat", "reasoning", "tool-calling"], ModelTags.Suggest(sglang));
+        Assert.True(ModelCapabilities.ToolCalling(sglang));
+        Assert.Equal(131072, ModelCapabilities.MaxModelLen(sglang));
+        Assert.Equal(["chat"], ModelTags.Suggest(sglang with { Container = sglang.Container! with { ExtraArgs = [] } }));
+        Assert.Equal(sglang.MaxModelLen, ModelCapabilities.MaxModelLen(sglang with { Container = sglang.Container! with { ExtraArgs = ["--context-length=nope"] } }));
+    }
+
     [Theory]
     [InlineData("--runner pooling")]
     [InlineData("--runner|pooling")]

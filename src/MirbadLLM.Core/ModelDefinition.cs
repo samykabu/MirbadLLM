@@ -18,6 +18,10 @@ public sealed record ModelDefinition
     /// <summary>Checkpoint directory relative to the models root (mounted at <c>/models</c> in the container).</summary>
     public required string ModelPath { get; init; }
 
+    /// <summary>False for NIM: its image fetches the model, so <see cref="ModelPath"/> is only a label and no folder is checked.</summary>
+    [JsonIgnore]
+    public bool NeedsCheckpoint => Runtime != RuntimeKind.Nim;
+
     /// <summary>Online quantization (e.g. <c>fp8</c>); null when the checkpoint is already quantized.</summary>
     public string? Quantization { get; init; }
 
@@ -253,6 +257,41 @@ public sealed record ContainerRuntimeSettings
 
     /// <summary>Validated runtime arguments appended after arguments owned by mirbadllm.</summary>
     public IReadOnlyList<string> ExtraArgs { get; init; } = [];
+
+    /// <summary>Plain environment variables. These values show in the portal and APIs, so a secret goes in <see cref="SecretEnv"/>.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, string>? Env { get; init; }
+
+    /// <summary>Secret variables: the variable's name and the name of the saved token holding its value, read only when the model starts.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyDictionary<string, string>? SecretEnv { get; init; }
+
+    /// <summary>The login for pulling <see cref="Image"/> from a private registry; null for a public image.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ContainerRegistryLogin? RegistryLogin { get; init; }
+}
+
+/// <summary>A private registry login. The password is the saved token <paramref name="TokenName"/>, sent only to <paramref name="Host"/>.</summary>
+public sealed record ContainerRegistryLogin(string Host, string Username, string TokenName);
+
+/// <summary>Reads the registry out of a container image reference.</summary>
+public static class ContainerImageRegistry
+{
+    /// <summary>The registry host of <paramref name="image"/>, or <c>docker.io</c> when it names none.</summary>
+    public static string HostOf(string image)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        int slash = image.IndexOf('/', StringComparison.Ordinal);
+        if (slash <= 0)
+        {
+            return "docker.io";
+        }
+
+        string first = image[..slash];
+        return first.Contains('.', StringComparison.Ordinal) || first.Contains(':', StringComparison.Ordinal) || first == "localhost"
+            ? first
+            : "docker.io";
+    }
 }
 
 /// <summary>

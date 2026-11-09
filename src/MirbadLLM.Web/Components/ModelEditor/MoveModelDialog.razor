@@ -317,7 +317,7 @@
         if (Target is { Discrete: true } discrete)
         {
             <GpuPicker Gpus="discrete.Gpus" Selected="_targetGpus" SelectedChanged="OnTargetGpusChangedAsync" Candidates="TargetFit(discrete.Id)"
-                       Node="@discrete.Id" TestId="move-gpus" />
+                       Node="@discrete.Id" TestId="move-gpus" Runtime="Model.Runtime" />
             if (_targetGpus.Count > 0 && _targetFit is { } selection)
             {
                 <div class="budget-check @(selection.Fits == false ? "budget-check--over" : selection.Fits == true ? "budget-check--ok" : null)" data-testid="move-fit">

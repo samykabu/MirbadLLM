@@ -7,7 +7,7 @@ This guide installs MirbadLLM in one of three layouts. Most fleets start with th
 - [Single machine](#single-machine): one Linux machine with an NVIDIA GPU runs the master and its own agent as two
   containers. It can be an old gaming tower, a GPU workstation or a DGX Spark.
 - [Add nodes](#add-nodes): this is where your spare machines join. A Windows gaming PC or gaming laptop with an
-  NVIDIA card runs llama.cpp as a native process, a Linux PC runs vLLM in containers, and an Apple Silicon Mac or
+  NVIDIA card runs llama.cpp as a native process, a Linux PC runs vLLM, llama.cpp or SGLang in containers, and NIM where it's enabled, and an Apple Silicon Mac or
   MacBook runs llama.cpp on Metal or MLX. Each one serves the models that fit its memory.
 - [Development fleet](#development-fleet): a master and two fake-runtime agents on one computer, for trying the UI or
   working on the code. No GPU or Docker is needed.
@@ -104,7 +104,7 @@ describes what it may and may not do.
 1. Open **Models** and choose **Add model**.
 2. Pick the runtime and the source, for example a Hugging Face repository or one GGUF variant from it.
 3. Enter a served name. That is the `model` value API clients send.
-4. Check the runtime settings and the memory budget. The editor estimates the budget and explains each vLLM flag.
+4. Check the runtime settings and the memory budget. The editor estimates the budget and explains each setting.
 5. Save, then choose **Start**.
 
 A start on a large model takes a few minutes while the weights load and kernels compile. The model is ready when its

@@ -81,6 +81,8 @@ public sealed class RemoteModelRuntime : IModelRuntime, IModelLauncher
     private readonly ConcurrentDictionary<string, string> _canonicalHashes = new(StringComparer.Ordinal);
 
     /// <summary>Creates the runtime.</summary>
+    private readonly ITokenStore? _tokens;
+
     public RemoteModelRuntime(
         IModelRegistry registry,
         INodeRegistry nodes,
@@ -92,8 +94,10 @@ public sealed class RemoteModelRuntime : IModelRuntime, IModelLauncher
         ILogger<RemoteModelRuntime>? logger = null,
         RemoteModelRuntimeOptions? runtimeOptions = null,
         PlacementFit? placementFit = null,
-        ModelRecoveryState? recovery = null)
+        ModelRecoveryState? recovery = null,
+        ITokenStore? tokens = null)
     {
+        _tokens = tokens;
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(nodes);
         ArgumentNullException.ThrowIfNull(cache);
@@ -259,9 +263,9 @@ public sealed class RemoteModelRuntime : IModelRuntime, IModelLauncher
         }
 
         var runtime = await _clients.GetClient(nodeId).GetRuntimeAsync(id, ct).ConfigureAwait(false);
-        if (runtime is { Runtime: RuntimeKind.LlamaCpp or RuntimeKind.Mlx, Delivery: LaunchDelivery.Process })
+        if (runtime is { Runtime: RuntimeKind.LlamaCpp or RuntimeKind.Mlx, Delivery: LaunchDelivery.Process } or { Runtime: RuntimeKind.Sglang or RuntimeKind.Nim })
         {
-            // No legacy hash for llama.cpp (design-p3p4 §A.1.6) or MLX: the launcher hash is the execution fingerprint (D125).
+            // No legacy hash for llama.cpp (design-p3p4 §A.1.6), MLX, SGLang or NIM: the launcher hash is the execution fingerprint (D125).
             return runtime.ExecutionFingerprint;
         }
 
@@ -283,6 +287,11 @@ public sealed class RemoteModelRuntime : IModelRuntime, IModelLauncher
         if (definition.Runtime == RuntimeKind.Mlx)
         {
             return LaunchSpecBuilder.BuildMlx(definition, node, tuning: false).ExecutionFingerprint;
+        }
+
+        if (definition.Runtime is RuntimeKind.Sglang or RuntimeKind.Nim)
+        {
+            return LaunchSpecBuilder.BuildAdditionalContainer(definition, node, tuning: false).ExecutionFingerprint;
         }
 
         double totalGiB = await GetTotalGiBAsync(node, ct).ConfigureAwait(false);
@@ -404,7 +413,8 @@ public sealed class RemoteModelRuntime : IModelRuntime, IModelLauncher
     {
         string id = model.Id;
         double totalGiB = await GetTotalGiBAsync(node, ct).ConfigureAwait(false);
-        var built = LaunchSpecBuilder.Build(model, node, LaunchSpecBuilder.DefaultImage(node, _options), totalGiB, tuning);
+        var credentials = await ContainerCredentials.ResolveAsync(_tokens, model, ct).ConfigureAwait(false);
+        var built = LaunchSpecBuilder.Build(model, node, LaunchSpecBuilder.DefaultImage(node, _options), totalGiB, tuning, credentials.Environment);
 
         // The host budget a llama.cpp launch sends must be the figure the fit preview showed, which for a partial
         // offload is 1 GiB plus the layers left in host RAM (MN-239-17). Only then, and only when the model carries no
@@ -424,6 +434,7 @@ public sealed class RemoteModelRuntime : IModelRuntime, IModelLauncher
             Admission = LaunchSpecBuilder.Admission(model, node, force, nodeFeatures: null, estimate),
             ExpectedConfigHash = built.LegacyConfigHash,
             ExpectedExecutionFingerprint = built.ExecutionFingerprint,
+            Registry = credentials.Registry,
         };
 
         OperationStatus accepted;

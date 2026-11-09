@@ -308,7 +308,7 @@ public sealed class RestorePlanner(
                 sources.Add(new RestoreSourcePreview(source, false, bytes, error));
             }
 
-            bool checkpointPresent = nodeFolders.IsPresent(model.ModelPath);
+            bool checkpointPresent = !model.NeedsCheckpoint || nodeFolders.IsPresent(model.ModelPath);
             bool primaryHasSource = model.Sources.Any(s => string.Equals(s.Folder, model.ModelPath, StringComparison.Ordinal));
             var missing = sources.Where(s => !s.Present).ToList();
 
