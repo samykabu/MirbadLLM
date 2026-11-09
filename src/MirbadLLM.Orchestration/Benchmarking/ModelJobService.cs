@@ -1519,7 +1519,8 @@ public sealed class ModelJobService(
         var benchmarkStart = _time.GetUtcNow();
         try
         {
-            var target = await TargetAsync(job, settings, status, ct).ConfigureAwait(false);
+            // A tuning candidate skips the thinking questions: they add minutes per candidate and tune nothing.
+            var target = await TargetAsync(job, settings, status, ct).ConfigureAwait(false) with { Thinks = false };
             result = await suite.RunAsync(target,
                 SuiteProgress(job, benchmarkStart, remainingAfter: perCandidate * remaining), ct).ConfigureAwait(false);
         }

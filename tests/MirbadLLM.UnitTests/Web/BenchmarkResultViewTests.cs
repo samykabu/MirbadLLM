@@ -53,6 +53,24 @@ public sealed class BenchmarkResultViewTests
     }
 
     [Fact]
+    public void AThinkingResult_ShowsWhatThinkingCosts_AndNothingWithoutOne()
+    {
+        using var ctx = new Bunit.BunitContext();
+        var withThinking = MakeResult() with { Thinking = new ThinkingResult(8, 7, 1, 0, 9.4, 8.1, 212, 24.5, 4096) };
+
+        var cut = ctx.Render<BenchmarkResultView>(p => p.Add(x => x.Result, withThinking).Add(x => x.TestId, "bench"));
+
+        string text = cut.Find("[data-testid=bench-thinking]").TextContent;
+        Assert.Contains("7 / 8", text, StringComparison.Ordinal);
+        Assert.Contains("212", text, StringComparison.Ordinal);
+        Assert.Contains("24.5", text, StringComparison.Ordinal);
+        Assert.Contains("still thinking at 4,096 tokens", text, StringComparison.Ordinal);
+
+        var plain = ctx.Render<BenchmarkResultView>(p => p.Add(x => x.Result, MakeResult()).Add(x => x.TestId, "plain"));
+        Assert.Empty(plain.FindAll("[data-testid=plain-thinking]"));
+    }
+
+    [Fact]
     public void BarListStillRenders_BelowTheTable_NotBesideIt()
     {
         using var ctx = new Bunit.BunitContext();

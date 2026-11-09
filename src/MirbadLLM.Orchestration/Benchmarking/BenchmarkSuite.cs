@@ -89,6 +89,7 @@ public sealed class BenchmarkSuite(
         return new BenchmarkTarget(modelId, settings.ServedName, baseUri, ModelCapabilities.MaxModelLen(settings), PoolingDetection.Detect(settings), slots, preset, repetitions)
         {
             Runtime = settings.Runtime,
+            Thinks = NoThinking.Offered(settings),
         };
     }
 
@@ -114,7 +115,7 @@ public sealed class BenchmarkSuite(
         }
 
         var chatLevels = ChatLevels(target);
-        int totalSteps = 3 + (chatLevels.Count * options.Runs) + (options.IncludePrefill ? 2 : 0);
+        int totalSteps = 3 + (chatLevels.Count * options.Runs) + (options.IncludePrefill ? 2 : 0) + (target.Thinks ? 1 : 0);
         int step = 0;
         void Report(string phase) => progress?.Report(new BenchmarkProgress(phase, ++step, totalSteps));
 
@@ -147,12 +148,13 @@ public sealed class BenchmarkSuite(
 
         Report("Objective questions");
         var answers = await QaAsync(target, ct).ConfigureAwait(false);
+        var thinking = await ThinkingIfReasoningAsync(target, Report, ct).ConfigureAwait(false);
 
         var guardrails = new GuardrailResult(toolValid, toolDetail, answers.Count(a => a.Correct), answers.Count, answers);
         var noise = await EvaluateNoiseAsync(target, windows, ct).ConfigureAwait(false);
         var measured = ApplyNoise(levels, noise);
         return new BenchmarkResult(measured, prefill, guardrails, BuildNoise(target, measured.SelectMany(l => l.Runs).Select(r => r.SameModelRunningMax - r.Concurrency), noise,
-            measured.SelectMany(l => l.Runs).Select(r => r.Server))) { SpecAcceptanceRate = AcceptanceDuring(target, windows) };
+            measured.SelectMany(l => l.Runs).Select(r => r.Server))) { SpecAcceptanceRate = AcceptanceDuring(target, windows), Thinking = thinking };
     }
 
     /// <summary>Per-metric median across repetitions; the level is noisy when any repetition was.</summary>
@@ -698,6 +700,147 @@ public sealed class BenchmarkSuite(
         return answers;
     }
 
+    /// <summary>Token limit per thinking request: room to think, and a bound on how long one question can take.</summary>
+    public const int ThinkingMaxTokens = 4096;
+
+    private Task<ThinkingResult?> ThinkingIfReasoningAsync(BenchmarkTarget target, Action<string> report, CancellationToken ct)
+    {
+        if (!target.Thinks)
+        {
+            return Task.FromResult<ThinkingResult?>(null);
+        }
+
+        report("Objective questions, thinking on");
+        return ThinkingAsync(target, ct)!;
+    }
+
+    /// <summary>
+    /// The objective questions again, one at a time, with thinking on: when the thinking starts and ends, when the answer
+    /// starts, and whether it is right. A failed request counts as an error; a reply cut off before any answer, as unanswered.
+    /// </summary>
+    private async Task<ThinkingResult?> ThinkingAsync(BenchmarkTarget target, CancellationToken ct)
+    {
+        var answered = new List<ThinkingSample>();
+        int correct = 0, unanswered = 0, errors = 0;
+        foreach (var question in BenchmarkPrompts.Questions)
+        {
+            ThinkingSample sample;
+            try
+            {
+                sample = await StreamThinkingAsync(target, question.Question, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is BenchmarkRequestException or HttpRequestException or JsonException
+                || (ex is OperationCanceledException && !ct.IsCancellationRequested))
+            {
+                errors++;
+                continue;
+            }
+
+            if (sample.AnswerAt is null)
+            {
+                unanswered++;
+                continue;
+            }
+
+            answered.Add(sample);
+            correct += question.Pattern.IsMatch(sample.Answer.Trim()) ? 1 : 0;
+        }
+
+        return new ThinkingResult(
+            BenchmarkPrompts.Questions.Count,
+            correct,
+            unanswered,
+            errors,
+            Median(answered.Select(s => s.AnswerAt!.Value)),
+            Median(answered.Select(s => s.AnswerAt!.Value - (s.ThinkingAt ?? s.AnswerAt!.Value))),
+            Median(answered.Select(s => s.ThinkingTokens)),
+            Median(answered.Where(s => s.Total > s.FirstTokenAt).Select(s => s.CompletionTokens / (s.Total - s.FirstTokenAt))),
+            ThinkingMaxTokens);
+    }
+
+    private async Task<ThinkingSample> StreamThinkingAsync(BenchmarkTarget target, string question, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["model"] = target.ServedName,
+            ["messages"] = new[] { new { role = "user", content = question } },
+            ["max_tokens"] = ThinkingMaxTokens,
+            ["temperature"] = 0,
+            ["stream"] = true,
+            ["stream_options"] = new { include_usage = true },
+            ["chat_template_kwargs"] = new { enable_thinking = true },
+        };
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(options.RequestTimeout);
+        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(target.BaseUri, "v1/chat/completions"))
+        {
+            Content = JsonContent.Create(body, options: JsonOptions),
+        };
+
+        long start = Stopwatch.GetTimestamp();
+        using var response = await Http(target).SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            string text = await response.Content.ReadAsStringAsync(cts.Token).ConfigureAwait(false);
+            throw new BenchmarkRequestException((int)response.StatusCode, Truncate(text, 300));
+        }
+
+        double? thinkingAt = null, answerAt = null;
+        int thinkingChars = 0, completionTokens = 0, chunks = 0;
+        var answer = new StringBuilder();
+        await using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
+        using var reader = new StreamReader(stream);
+        while (await reader.ReadLineAsync(cts.Token).ConfigureAwait(false) is { } line)
+        {
+            string data = line.StartsWith("data:", StringComparison.Ordinal) ? line[5..].Trim() : "";
+            if (data.Length == 0 || data == "[DONE]")
+            {
+                continue;
+            }
+
+            using var doc = JsonDocument.Parse(data);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("usage", out var usage) && usage.ValueKind == JsonValueKind.Object &&
+                usage.TryGetProperty("completion_tokens", out var tokens) && tokens.TryGetInt32(out int n))
+            {
+                completionTokens = n;
+            }
+
+            if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0 ||
+                !choices[0].TryGetProperty("delta", out var delta) || delta.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            double now = Stopwatch.GetElapsedTime(start).TotalSeconds;
+            foreach (string field in (string[])["reasoning_content", "reasoning"])
+            {
+                if (HasText(delta, field))
+                {
+                    thinkingAt ??= now;
+                    thinkingChars += delta.GetProperty(field).GetString()!.Length;
+                    chunks++;
+                }
+            }
+
+            // shortcut: a server without a reasoning parser puts <think>…</think> in the content, which reads as the answer here.
+            if (HasText(delta, "content"))
+            {
+                answerAt ??= now;
+                answer.Append(delta.GetProperty("content").GetString());
+                chunks++;
+            }
+        }
+
+        double total = Stopwatch.GetElapsedTime(start).TotalSeconds;
+        int replyTokens = completionTokens > 0 ? completionTokens : chunks;
+        double share = thinkingChars + answer.Length == 0 ? 0 : (double)thinkingChars / (thinkingChars + answer.Length);
+        return new ThinkingSample(thinkingAt, answerAt, answer.ToString(), replyTokens * share, replyTokens, Math.Min(thinkingAt ?? total, answerAt ?? total), total);
+    }
+
+    private sealed record ThinkingSample(double? ThinkingAt, double? AnswerAt, string Answer, double ThinkingTokens, int CompletionTokens, double FirstTokenAt, double Total);
+
     private async Task<JsonDocument> PostJsonAsync(BenchmarkTarget target, object body, CancellationToken ct)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -880,7 +1023,7 @@ public sealed class BenchmarkSuite(
         int mixedConcurrency = Math.Min(16, Math.Min(target.MaxNumSeqs, options.MaxConcurrency));
 
         int total = 1 + (profile.Tools ? reps : 0) + (lengths.Count * levels.Count * reps) +
-            (longTargets.Count > 0 ? 1 + (longTargets.Count * reps) : 0) + (shared ? 1 + reps : 0) + (mixedTarget > 0 ? reps : 0) + 1;
+            (longTargets.Count > 0 ? 1 + (longTargets.Count * reps) : 0) + (shared ? 1 + reps : 0) + (mixedTarget > 0 ? reps : 0) + 1 + (target.Thinks ? 1 : 0);
         int step = 0;
         void Report(string phase) => progress?.Report(new BenchmarkProgress(phase, ++step, total));
         string tag = WorkloadPrompts.RandomWords(_random, 1);
@@ -951,6 +1094,7 @@ public sealed class BenchmarkSuite(
 
         Report("Objective questions");
         var answers = await QaAsync(target, ct).ConfigureAwait(false);
+        var thinking = await ThinkingIfReasoningAsync(target, Report, ct).ConfigureAwait(false);
 
         var guardrails = new GuardrailResult(
             tools is null || tools.Valid == tools.Total,
@@ -965,7 +1109,7 @@ public sealed class BenchmarkSuite(
             BuildNoise(target, measured.SelectMany(l => l.Runs).Select(r => r.SameModelRunningMax - r.Concurrency), noise,
                 measured.SelectMany(l => l.Runs).Select(r => r.Server)), null,
             BenchmarkResult.CurrentSchemaVersion, profile.Goal, reps, longPrompts, sharedPrefix, tools,
-            mixed, preemptions, pool.Max(s => s.KvUsage)) { SpecAcceptanceRate = AcceptanceDuring(target, windows) };
+            mixed, preemptions, pool.Max(s => s.KvUsage)) { SpecAcceptanceRate = AcceptanceDuring(target, windows), Thinking = thinking };
     }
 
     private async Task<RunMeasurement> RunChatLevelAsync(

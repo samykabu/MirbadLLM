@@ -92,6 +92,68 @@ public sealed class BenchmarkSuiteTests
         Assert.All(handler.Requests, req => Assert.Equal("ss-qwen", req.RequestUri!.Host));
     }
 
+    /// <summary>A reasoning model: streams 30 thinking characters, then the answer, for each objective question.</summary>
+    private static LockedHandler FakeThinker(int cutOff = 0, int failures = 0)
+    {
+        var inner = FakeVllm();
+        int cutLeft = cutOff, failLeft = failures;
+        return new LockedHandler
+        {
+            Handler = request =>
+            {
+                string body = request.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+                if (!body.Contains("\"enable_thinking\":true", StringComparison.Ordinal))
+                {
+                    return inner.Handler(request);
+                }
+
+                if (failLeft-- > 0)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent("busy") };
+                }
+
+                using var doc = JsonDocument.Parse(body);
+                string question = doc.RootElement.GetProperty("messages")[0].GetProperty("content").GetString()!;
+                string answer = BenchmarkPrompts.Questions.First(q => q.Question == question).Expected;
+                var sse = new StringBuilder();
+                for (int i = 0; i < 3; i++)
+                {
+                    sse.Append("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"0123456789\"}}]}\n\n");
+                }
+
+                if (cutLeft-- <= 0)
+                {
+                    sse.Append(JsonSerializer.Serialize(new { choices = new[] { new { delta = new { content = answer } } } }).Insert(0, "data: ")).Append("\n\n");
+                }
+
+                sse.Append("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":40}}\n\n");
+                sse.Append("data: [DONE]\n\n");
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(sse.ToString(), Encoding.UTF8, "text/event-stream") };
+            },
+        };
+    }
+
+    [Fact]
+    public async Task AReasoningModel_IsAskedTheQuestionsAgainWithThinkingOn()
+    {
+        var handler = FakeThinker(cutOff: 1, failures: 1);
+        var suite = new BenchmarkSuite(new HttpClient(handler), null, SmallOptions());
+        var progress = new List<BenchmarkProgress>();
+
+        var result = await suite.RunAsync(Target with { Thinks = true }, new SyncProgress(progress.Add), TestContext.Current.CancellationToken);
+
+        var thinking = Assert.IsType<ThinkingResult>(result.Thinking);
+        Assert.Equal((8, 6, 1, 1), (thinking.Questions, thinking.Correct, thinking.Unanswered, thinking.Errors));
+        Assert.True(thinking.ThinkingTokensMedian > 30); // 30 of the reply's characters are thinking, out of 40 tokens
+        Assert.Equal(BenchmarkSuite.ThinkingMaxTokens, thinking.MaxTokens);
+        Assert.Contains(progress, p => p.Phase == "Objective questions, thinking on");
+        Assert.Equal(progress.Count, progress[^1].TotalSteps);
+
+        // Everything else still runs with thinking off.
+        Assert.Equal(8, handler.RequestBodies.Count(b => b.Contains("\"enable_thinking\":true", StringComparison.Ordinal)));
+        Assert.Null((await new BenchmarkSuite(new HttpClient(FakeVllm()), null, SmallOptions()).RunAsync(Target, null, TestContext.Current.CancellationToken)).Thinking);
+    }
+
     [Fact]
     public async Task Guardrails_ValidToolCall_AndAllAnswersRight()
     {
