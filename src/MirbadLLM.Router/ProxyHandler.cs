@@ -278,7 +278,7 @@ internal static partial class ProxyHandler
             context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
 
             var upstreamStream = await response.Content.ReadAsStreamAsync(ct);
-            await CopyStreamAsync(upstreamStream, context.Response.Body, ct);
+            await CopyStreamAsync(upstreamStream, context.Response, response, ct);
             return response.IsSuccessStatusCode;
         }
         catch (Exception ex) when (ex is HttpRequestException or IOException && !ct.IsCancellationRequested)
@@ -719,7 +719,7 @@ internal static partial class ProxyHandler
             context.Features.Get<IHttpResponseBodyFeature>()?.DisableBuffering();
 
             var upstreamStream = await response.Content.ReadAsStreamAsync(ct);
-            await CopyStreamAsync(upstreamStream, context.Response.Body, ct);
+            await CopyStreamAsync(upstreamStream, context.Response, response, ct);
             return response.IsSuccessStatusCode;
         }
     }
@@ -765,15 +765,41 @@ internal static partial class ProxyHandler
         }
     }
 
-    /// <summary>Await-write-then-flush per read (backpressure: a slow client slows the upstream read), 16 KiB buffer (design §7.2).</summary>
-    private static async Task CopyStreamAsync(Stream source, Stream destination, CancellationToken ct)
+    /// <summary>
+    /// Await-write-then-flush per read (backpressure: a slow client slows the upstream read), 16 KiB buffer (design §7.2). A
+    /// streamed answer (<c>text/event-stream</c>) goes through <see cref="SseReasoningNullFilter"/>, which can change its
+    /// length, so its Content-Length is dropped.
+    /// </summary>
+    private static async Task CopyStreamAsync(Stream source, HttpResponse destination, HttpResponseMessage upstream, CancellationToken ct)
     {
+        var filter = string.Equals(upstream.Content.Headers.ContentType?.MediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase)
+            ? new SseReasoningNullFilter()
+            : null;
+        if (filter is not null)
+        {
+            destination.ContentLength = null;
+        }
+
         var buffer = new byte[Protocol.ProxyCopyBufferBytes];
         int read;
         while ((read = await source.ReadAsync(buffer, ct)) > 0)
         {
-            await destination.WriteAsync(buffer.AsMemory(0, read), ct);
-            await destination.FlushAsync(ct);
+            if (filter is null)
+            {
+                await destination.Body.WriteAsync(buffer.AsMemory(0, read), ct);
+            }
+            else if (filter.Process(buffer.AsSpan(0, read)) is { Length: > 0 } lines)
+            {
+                await destination.Body.WriteAsync(lines, ct);
+            }
+
+            await destination.Body.FlushAsync(ct);
+        }
+
+        if (filter?.Flush() is { Length: > 0 } rest)
+        {
+            await destination.Body.WriteAsync(rest, ct);
+            await destination.Body.FlushAsync(ct);
         }
     }
 }

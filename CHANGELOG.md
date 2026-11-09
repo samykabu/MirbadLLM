@@ -6,6 +6,7 @@ private development history.
 
 ## Unreleased
 
+- Streamed answers no longer carry SGLang's `"reasoning_content": null` on every chunk, which GitHub Copilot appended to the model's reasoning as the text "null"
 - A model tagged Reasoning is also served as `<name>-nothink`, the same model with thinking switched off, so clients that can't send `chat_template_kwargs` (Copilot, Cline) can choose it by name. `/v1/models` lists it, and it takes no extra memory
 - Access > Connect: the VS Code entry uses Copilot's Custom Endpoint format (`chatLanguageModels.json`), turns `vision` on for Vision models, and lists the no-thinking names; Continue and Cline show them too
 - Playground: a model tagged Vision or Multimodal takes images; attach up to 4 (8 MB each) with **Image**
