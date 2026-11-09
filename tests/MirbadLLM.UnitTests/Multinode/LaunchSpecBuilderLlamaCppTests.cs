@@ -510,9 +510,12 @@ public sealed class LaunchSpecBuilderLlamaCppTests
         var own = model with { Container = model.Container! with { Env = new Dictionary<string, string> { ["SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION"] = "true" } } };
         Assert.Equal("true", LaunchSpecBuilder.Build(own, ContainerNode(), "unused", 120, false, nodeFeatures: features).Spec.Env["SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION"]);
 
-        // A node that can't take variables still starts the model.
-        var older = LaunchSpecBuilder.Build(model, ContainerNode(), "unused", 120, false, nodeFeatures: [AgentFeatures.RuntimeSglangContainer]);
-        Assert.Empty(older.Spec.Env);
+        // A unified node like the DGX doesn't report launch.env, and its container driver still takes variables.
+        var unified = LaunchSpecBuilder.Build(model, ContainerNode(), "unused", 120, false, nodeFeatures: [AgentFeatures.RuntimeSglangContainer]);
+        Assert.Equal("false", unified.Spec.Env["SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION"]);
+
+        var nim = ContainerModel(RuntimeKind.Nim) with { Container = new ContainerRuntimeSettings { Image = "nvcr.io/nim/a:1", ImageDigest = Digest } };
+        Assert.Equal("served", LaunchSpecBuilder.Build(nim, ContainerNode(), "unused", 120, false, nodeFeatures: [AgentFeatures.RuntimeNimContainer]).Spec.Env["NIM_SERVED_MODEL_NAME"]);
     }
 
     [Fact]
