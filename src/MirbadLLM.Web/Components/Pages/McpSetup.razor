@@ -35,7 +35,7 @@
             <dt>MCP Read</dt>
             <dd>Looks at nodes, models, downloads, jobs and results. Start with this one.</dd>
             <dt>MCP Operator</dt>
-            <dd>Also deploys, starts, stops and deletes models, and runs benchmarks and tuning. It can choose any container image, which then runs on the node with GPU access, unless that node only allows approved digests.</dd>
+            <dd>Also deploys, changes, starts, stops and deletes models, reads model logs, and runs benchmarks and tuning. It can choose any container image, which then runs on the node with GPU access, unless that node only allows approved digests.</dd>
         </dl>
         <p class="field-hint mcp-note">Create either one on <a href="access/keys">API keys</a>. A key is shown once and can be revoked there.</p>
     </section>
@@ -144,7 +144,7 @@
                             }
                         </td>
                         <td data-label="Key">
-                            <span class="tag-chip">@(tool.ReadOnly ? "MCP Read" : "MCP Operator")</span>
+                            <span class="tag-chip">@(tool.NeedsOperator ? "MCP Operator" : "MCP Read")</span>
                             @if (tool.Destructive)
                             {
                                 <span class="tag-chip">Destructive</span>

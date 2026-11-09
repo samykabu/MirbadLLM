@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -381,6 +382,164 @@ public sealed class McpEndpointTests : IDisposable
         Assert.Contains("\"isError\":true", unknown, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Update_SavesOnlyWhatIsNamed_WithoutRestarting_AndListsTheChange()
+    {
+        using var client = Client();
+        const string Digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        string key = await NodeReporting(Capabilities(new RuntimeCapability { Kind = RuntimeKind.Sglang, Delivery = LaunchDelivery.Container, Available = true }));
+        await CallTool(client, key, "mirbad_deploy_model", new
+        {
+            modelId = "sg", servedName = "sg", repoId = "org/sg", folder = "sg", nodeId = "dgx", runtime = "sglang", image = "sglang:1", imageDigest = Digest, memoryBudgetGiB = 48,
+            speculativeMethod = "DFLASH", speculativeTokens = 16, draftFolder = "sg-dflash",
+        });
+
+        string updated = await CallTool(client, key, "mirbad_update_model", new { modelId = "sg", extraArgs = Parsers, speculativeTokens = 8 });
+
+        Assert.DoesNotContain("\"isError\":true", updated, StringComparison.Ordinal);
+        Assert.Contains("Container extra args: none \\u2192 --tool-call-parser qwen3_coder", updated, StringComparison.Ordinal);
+        Assert.Contains("mirbad_stop_model", updated, StringComparison.Ordinal);
+        var model = await Models().GetAsync("sg");
+        Assert.Equal(Parsers, model!.Container!.ExtraArgs);
+        Assert.Equal(Digest, model.Container.ImageDigest);
+        Assert.Equal(48, model.MemoryBudgetGiB);
+        Assert.Equal("DFLASH", model.Speculative!.Method);
+        Assert.Equal(8, model.Speculative.NumSpeculativeTokens);
+        Assert.Equal("/models/sg-dflash", model.Speculative.DraftModel);
+        Assert.Equal(ModelState.Stopped, (await _factory.Services.GetRequiredService<IModelRuntime>().GetStatusAsync("sg")).State);
+
+        string same = await CallTool(client, key, "mirbad_update_model", new { modelId = "sg" });
+        Assert.Contains("Nothing changed.", same, StringComparison.Ordinal);
+
+        // A digest belongs to one image, so a new image doesn't keep the old one's.
+        await CallTool(client, key, "mirbad_update_model", new { modelId = "sg", image = "sglang:2", extraArgs = Array.Empty<string>(), speculativeOff = true });
+        model = await Models().GetAsync("sg");
+        Assert.Equal("sglang:2", model!.Container!.Image);
+        Assert.Null(model.Container.ImageDigest);
+        Assert.Empty(model.Container.ExtraArgs);
+        Assert.Null(model.Speculative);
+    }
+
+    [Theory]
+    [InlineData("--port", null, "--port")]
+    [InlineData(null, "fp8", "does not use kvCacheDtype")]
+    public async Task Update_RefusesWhatTheRuntimeCannotDo_AndChangesNothing(string? flag, string? kv, string message)
+    {
+        using var client = Client();
+        string key = await NodeReporting(Capabilities(new RuntimeCapability { Kind = RuntimeKind.Sglang, Delivery = LaunchDelivery.Container, Available = true }));
+        await CallTool(client, key, "mirbad_deploy_model", new { modelId = "sg", servedName = "sg", repoId = "org/sg", folder = "sg", nodeId = "dgx", runtime = "sglang", image = "sglang:1" });
+
+        string refused = await CallTool(client, key, "mirbad_update_model", new
+        {
+            modelId = "sg", extraArgs = flag is null ? null : new[] { flag, "9000" }, kvCacheDtype = kv,
+        });
+
+        Assert.Contains("\"isError\":true", refused, StringComparison.Ordinal);
+        Assert.Contains(message, refused, StringComparison.Ordinal);
+        Assert.Empty((await Models().GetAsync("sg"))!.Container!.ExtraArgs);
+    }
+
+    [Fact]
+    public async Task Update_OnVllm_ChangesGpus_AndSpeculativeOffIsRefusedWhereItMeansNothing()
+    {
+        using var client = Client();
+        string key = await NodeReporting(Capabilities(Vllm) with
+        {
+            Memory = new NodeMemoryInfo(MemoryModel.Discrete, 64),
+            Features = [AgentFeatures.GpuSelectionUuids],
+            Gpus =
+            [
+                new GpuCapability { Index = 0, Uuid = "GPU-A", Name = "RTX" },
+                new GpuCapability { Index = 1, Uuid = "GPU-B", Name = "RTX" },
+            ],
+        });
+        await CallTool(client, key, "mirbad_deploy_model", new { modelId = "on-gpu", servedName = "x", repoId = "org/x", folder = "x", nodeId = "dgx", gpuIndices = FirstGpu });
+
+        string updated = await CallTool(client, key, "mirbad_update_model", new { modelId = "on-gpu", gpuIndices = SecondGpu, kvCacheDtype = "fp8" });
+
+        Assert.DoesNotContain("\"isError\":true", updated, StringComparison.Ordinal);
+        var model = await Models().GetAsync("on-gpu");
+        Assert.Equal(["GPU-B"], model!.Placement!.GpuUuids);
+        Assert.Equal("fp8", model.KvCacheDtype);
+
+        string mixed = await CallTool(client, key, "mirbad_update_model", new { modelId = "on-gpu", speculativeOff = true, speculativeTokens = 2 });
+        Assert.Contains("cannot be combined", mixed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Update_NeedsAnOperatorKey_AndAnExistingModel()
+    {
+        using var client = Client();
+        var read = await Keys().CreateAsync("reader", ApiKeyScope.McpRead);
+        var op = await Keys().CreateAsync("operator", ApiKeyScope.McpOperator);
+
+        string denied = await CallTool(client, read.FullKey, "mirbad_update_model", new { modelId = "nope" });
+        Assert.Contains("Operator scope", denied, StringComparison.Ordinal);
+
+        string unknown = await CallTool(client, op.FullKey, "mirbad_update_model", new { modelId = "nope" });
+        Assert.Contains("was not found", unknown, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Logs_NeedAnOperatorKey_AreLimited_AndAreEmptyWithNoInstance()
+    {
+        using var client = Client();
+        string key = await NodeReporting(Capabilities(Vllm));
+        var read = await Keys().CreateAsync("reader", ApiKeyScope.McpRead);
+        await CallTool(client, key, "mirbad_deploy_model", new { modelId = "plain", servedName = "p", repoId = "org/p", folder = "p", nodeId = "dgx" });
+
+        string denied = await CallTool(client, read.FullKey, "mirbad_get_model_logs", new { modelId = "plain" });
+        Assert.Contains("Operator scope", denied, StringComparison.Ordinal);
+
+        string tooMany = await CallTool(client, key, "mirbad_get_model_logs", new { modelId = "plain", tail = 2001 });
+        Assert.Contains("tail must be between", tooMany, StringComparison.Ordinal);
+
+        string empty = await CallTool(client, key, "mirbad_get_model_logs", new { modelId = "plain" });
+        Assert.DoesNotContain("\"isError\":true", empty, StringComparison.Ordinal);
+        Assert.Contains("\"lines\":[]", empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Logs_ReturnWithoutFollowing_AndKeepTheNewestLinesWhenLong()
+    {
+        var logs = new LogRuntime();
+        using var factory = _factory.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IModelRuntime>(logs)));
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var op = await factory.Services.GetRequiredService<IApiKeyStore>().CreateAsync("operator", ApiKeyScope.McpOperator);
+        await factory.Services.GetRequiredService<IModelRegistry>().UpsertAsync(new ModelDefinition { Id = "m", ServedName = "m", ModelPath = "m" });
+
+        string result = await CallTool(client, op.FullKey, "mirbad_get_model_logs", new { modelId = "m", tail = 3 });
+
+        Assert.Equal((3, false), logs.LastRead);
+        Assert.Contains("\"truncated\":true", result, StringComparison.Ordinal);
+        Assert.Contains("newest", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("oldest", result, StringComparison.Ordinal);
+    }
+
+    /// <summary>Serves a log whose oldest line alone is over the limit.</summary>
+    private sealed class LogRuntime : IModelRuntime
+    {
+        public (int Tail, bool Follow) LastRead { get; private set; }
+
+        public Task<IReadOnlyList<ModelStatus>> ListStatusAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<ModelStatus>>([]);
+
+        public Task<ModelStatus> GetStatusAsync(string id, CancellationToken ct = default) => Task.FromResult(new ModelStatus(id, ModelState.Stopped));
+
+        public Task<ModelStatus> StartAsync(string id, bool force = false, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task StopAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+
+        public async IAsyncEnumerable<string> StreamLogsAsync(string id, int tail = 200, bool follow = true, [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            LastRead = (tail, follow);
+            yield return "oldest" + new string('x', 100_000);
+            await Task.Yield();
+            yield return "newest";
+        }
+    }
+
+    private static readonly string[] Parsers = ["--tool-call-parser", "qwen3_coder", "--reasoning-parser", "qwen3"];
+    private static readonly int[] SecondGpu = [1];
     private static readonly int[] FirstGpu = [0];
     private static readonly string[] ReservedPort = ["--port", "9000"];
     private static readonly RuntimeCapability Vllm = new() { Kind = RuntimeKind.Vllm, Delivery = LaunchDelivery.Container, Available = true };

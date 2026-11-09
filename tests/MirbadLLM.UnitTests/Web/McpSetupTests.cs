@@ -23,8 +23,9 @@ public sealed class McpSetupTests
     [Fact]
     public void Catalog_SplitsReadAndOperatorTools_AndMarksDestructiveOnes()
     {
-        Assert.Equal(11, McpToolCatalog.All.Count(t => t.ReadOnly));
-        Assert.Equal(8, McpToolCatalog.All.Count(t => !t.ReadOnly));
+        Assert.Equal(11, McpToolCatalog.All.Count(t => !t.NeedsOperator));
+        Assert.Equal(10, McpToolCatalog.All.Count(t => t.NeedsOperator));
+        Assert.True(McpToolCatalog.All.Single(t => t.Name == "mirbad_get_model_logs").ReadOnly);
         Assert.Equal(
             ["mirbad_stop_model", "mirbad_delete_model", "mirbad_cancel_job"],
             McpToolCatalog.All.Where(t => t.Destructive).Select(t => t.Name));
@@ -46,7 +47,7 @@ public sealed class McpSetupTests
         {
             string row = cut.Find($"[data-testid=mcp-tool-{tool.Name}]").TextContent;
             Assert.Contains(tool.Description, row, StringComparison.Ordinal);
-            Assert.Contains(tool.ReadOnly ? "MCP Read" : "MCP Operator", row, StringComparison.Ordinal);
+            Assert.Contains(tool.NeedsOperator ? "MCP Operator" : "MCP Read", row, StringComparison.Ordinal);
         }
     }
 
