@@ -708,7 +708,7 @@ public static class LaunchSpecBuilder
 
         // SGLang's /health otherwise queues a one-token request, which can outlast the agent's 3 s probe while a long prompt
         // is processing. The model then reads Starting and the router refuses it. A stuck model still shows through the stall warning.
-        if (model.Runtime == RuntimeKind.Sglang && NodeReports(node, AgentFeatures.LaunchEnv, nodeFeatures))
+        if (model.Runtime == RuntimeKind.Sglang)
         {
             variables.TryAdd(SglangHealthGenerationVariable, "false");
         }
@@ -719,12 +719,9 @@ public static class LaunchSpecBuilder
         }
 
         // The names come from the settings, so a build without the values (the restart-pending check) has the same fingerprint.
+        // No launch.env check: only discrete nodes report that feature (D101), and any agent that reports these runtimes has a
+        // container driver that accepts variables (ContainerRuntimeDriver.AcceptsEnvironment), the unified DGX included.
         string[] secretNames = [.. (settings.SecretEnv?.Keys ?? []).Concat(environment.SecretNames).Distinct(StringComparer.Ordinal)];
-        if ((variables.Count > 0 || secretNames.Length > 0) && !NodeReports(node, AgentFeatures.LaunchEnv, nodeFeatures))
-        {
-            throw new NotSupportedException(
-                $"Model '{model.Id}' sets environment variables, but node '{node.Id}' does not support them (feature '{AgentFeatures.LaunchEnv}').");
-        }
 
         var gpuUuids = PlacedGpuUuids(model);
         if (gpuUuids.Count > 0 && !NodeReports(node, AgentFeatures.GpuSelectionUuids, nodeFeatures))
