@@ -253,6 +253,43 @@ public sealed class ChatTests
     }
 
     [Fact]
+    public void AVisionModelTakesAnImageAndSendsItWhileAPlainModelOffersNoAttachButton()
+    {
+        using var ctx = new Bunit.BunitContext();
+        ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+        ctx.Services.AddSingleton<IModelEndpointResolver>(new FakeModelEndpointResolver(
+        [
+            new("v", "vision-model", new Uri("http://v/"), ModelState.Ready),
+            new("t", "text-model", new Uri("http://t/"), ModelState.Ready),
+        ]));
+        ctx.Services.AddSingleton<IModelRegistry>(new FakeModelRegistry(
+        [
+            new ModelDefinition { Id = "v", ServedName = "vision-model", ModelPath = "v", Tags = [ModelTags.Vision] },
+            new ModelDefinition { Id = "t", ServedName = "text-model", ModelPath = "t" },
+        ]));
+        var chatClient = new FakeChatClient();
+        ctx.Services.AddSingleton<IChatClient>(chatClient);
+        var cut = ctx.Render<Chat>();
+
+        cut.Find("[data-testid=chat-model-select]").Change("text-model");
+        Assert.Empty(cut.FindAll("[data-testid=chat-attach]"));
+
+        cut.Find("[data-testid=chat-model-select]").Change("vision-model");
+        cut.FindComponent<Microsoft.AspNetCore.Components.Forms.InputFile>().UploadFiles(
+            InputFileContent.CreateFromBinary([1, 2, 3], "cat.png", contentType: "image/png"),
+            InputFileContent.CreateFromBinary([1], "notes.txt", contentType: "text/plain"));
+        Assert.Single(cut.FindAll("[data-testid=chat-attachments] li"));
+        Assert.Contains("notes.txt", cut.Find("[data-testid=chat-error]").TextContent, StringComparison.Ordinal);
+
+        // An image alone can be sent.
+        cut.Find("[data-testid=chat-send]").Click();
+        var sent = chatClient.LastRequest!.Messages[^1];
+        Assert.Equal(["data:image/png;base64,AQID"], sent.Images);
+        Assert.Empty(cut.FindAll("[data-testid=chat-attachments]"));
+        Assert.Single(cut.FindAll("[data-testid=chat-message-images] img"));
+    }
+
+    [Fact]
     public void DisabledSendSaysWhyAndTheSuggestedPromptFillsTheMessage()
     {
         using var ctx = new Bunit.BunitContext();

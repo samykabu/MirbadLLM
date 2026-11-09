@@ -104,3 +104,35 @@ export function downloadUrl(url, fileName) {
     a.remove();
     return true;
 }
+
+// Side panel (Ui/Drawer): a press outside it closes it. Presses inside a dialog or popover (the top layer, such as a
+// row menu) and on elements marked data-drawer-keep (rows that switch the panel to another item) don't count.
+export function closeOnPressOutside(panel, dotnetHelper) {
+    stopClosingOnPressOutside(panel);
+    if (!panel) {
+        return;
+    }
+
+    const handler = (e) => {
+        if (!panel.isConnected) {
+            stopClosingOnPressOutside(panel);
+            return;
+        }
+
+        const target = e.target;
+        if (!(target instanceof Element) || panel.contains(target) || target.closest('dialog, [popover], [data-drawer-keep]')) {
+            return;
+        }
+
+        dotnetHelper.invokeMethodAsync('PressedOutside');
+    };
+    panel._pressOutside = handler;
+    document.addEventListener('pointerdown', handler, true);
+}
+
+export function stopClosingOnPressOutside(panel) {
+    if (panel && panel._pressOutside) {
+        document.removeEventListener('pointerdown', panel._pressOutside, true);
+        delete panel._pressOutside;
+    }
+}

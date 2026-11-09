@@ -64,7 +64,10 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
         }
     }
 
-    public async Task<ApiKeyCreated> CreateAsync(string name, ApiKeyScope scope, CancellationToken ct = default)
+    public Task<ApiKeyCreated> CreateAsync(string name, ApiKeyScope scope, CancellationToken ct = default)
+        => CreateAsync(name, [scope], ct);
+
+    public async Task<ApiKeyCreated> CreateAsync(string name, IReadOnlyCollection<ApiKeyScope> scopes, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -75,19 +78,19 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
         var record = new ApiKeyRecord(
             Id: Guid.NewGuid().ToString("N"),
             Name: name.Trim(),
-            Scope: scope,
+            Scope: default,
             KeyHash: Hash(fullKey),
             Prefix: DisplayPrefix(fullKey),
             CreatedAt: _timeProvider.GetUtcNow(),
             LastUsedAt: null,
-            RevokedAt: null);
+            RevokedAt: null).WithScopes(scopes);
 
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             await EnsureInitializedAsync(ct).ConfigureAwait(false);
             _keys.Add(record);
-            _everConfiguredScopes.Add(scope);
+            _everConfiguredScopes.UnionWith(record.Scopes);
 
             await FlushUnlockedAsync(ct).ConfigureAwait(false);
         }
@@ -114,6 +117,31 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
             _keys[index] = _keys[index] with { RevokedAt = _timeProvider.GetUtcNow() };
             await FlushUnlockedAsync(ct).ConfigureAwait(false);
             return true;
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task<ApiKeyRecord?> UpdateScopesAsync(string id, IReadOnlyCollection<ApiKeyScope> scopes, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await EnsureInitializedAsync(ct).ConfigureAwait(false);
+            int index = _keys.FindIndex(k => k.Id == id);
+            if (index < 0 || !_keys[index].IsActive)
+            {
+                return null;
+            }
+
+            var updated = _keys[index].WithScopes(scopes);
+            _keys[index] = updated;
+            _everConfiguredScopes.UnionWith(updated.Scopes);
+            await FlushUnlockedAsync(ct).ConfigureAwait(false);
+            ApiKeyLog.ScopesChanged(_logger, updated.Name, updated.Id, updated.Scopes);
+            return updated;
         }
         finally
         {
@@ -156,7 +184,7 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
         try
         {
             await EnsureInitializedAsync(ct).ConfigureAwait(false);
-            return _keys.Exists(k => k.IsActive && k.Scope == scope);
+            return _keys.Exists(k => k.IsActive && k.Grants(scope));
         }
         finally
         {
@@ -255,7 +283,7 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
 
                 _keys.Add(record with { KeyHash = record.KeyHash.ToLowerInvariant() });
                 added++;
-                _everConfiguredScopes.Add(record.Scope);
+                _everConfiguredScopes.UnionWith(record.Scopes);
             }
 
             if (added > 0)
@@ -314,7 +342,7 @@ public sealed class JsonApiKeyStore : IApiKeyStore, IDisposable
                     _everConfiguredScopes.Add(ApiKeyScope.Metrics);
                 }
                 // A partially migrated document remains fail-closed for every scope represented by a record.
-                _everConfiguredScopes.UnionWith(_keys.Select(k => k.Scope));
+                _everConfiguredScopes.UnionWith(_keys.SelectMany(k => k.Scopes));
             }
             else
             {
@@ -401,6 +429,9 @@ internal static partial class ApiKeyLog
 {
     [LoggerMessage(Level = LogLevel.Information, Message = "API keys: deleted revoked key '{Name}' ({Id}, {Scope} scope)")]
     public static partial void Deleted(ILogger logger, string name, string id, ApiKeyScope scope);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "API keys: key '{Name}' ({Id}) now has scopes {Scopes}")]
+    public static partial void ScopesChanged(ILogger logger, string name, string id, IReadOnlyList<ApiKeyScope> scopes);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "API keys: imported {Added} key records from a backup ({Skipped} already present)")]
     public static partial void Imported(ILogger logger, int added, int skipped);

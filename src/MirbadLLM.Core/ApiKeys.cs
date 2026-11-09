@@ -1,6 +1,8 @@
+using System.Text.Json.Serialization;
+
 namespace MirbadLLM.Core;
 
-/// <summary>What a managed API key is allowed to reach.</summary>
+/// <summary>What a managed API key is allowed to reach. A key holds one or more of these.</summary>
 public enum ApiKeyScope
 {
     /// <summary>Grants <c>/v1/*</c> (the OpenAI-compatible router).</summary>
@@ -21,6 +23,9 @@ public enum ApiKeyScope
 /// (<see cref="KeyHash"/>, lowercase hex) and a short display prefix (<see cref="Prefix"/>, the first 8
 /// characters after <c>ssk_</c>). The full key is only ever available once, at creation, via
 /// <see cref="ApiKeyCreated"/>.
+/// <para>A key holds <see cref="Scope"/> plus any <see cref="ExtraScopes"/>; check access with <see cref="Grants"/>.
+/// The split keeps old files and backups valid, and an older version that reads this file honours
+/// <see cref="Scope"/> alone, so a downgrade can only take access away.</para>
 /// </summary>
 public sealed record ApiKeyRecord(
     string Id,
@@ -30,9 +35,34 @@ public sealed record ApiKeyRecord(
     string Prefix,
     DateTimeOffset CreatedAt,
     DateTimeOffset? LastUsedAt,
-    DateTimeOffset? RevokedAt)
+    DateTimeOffset? RevokedAt,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IReadOnlyList<ApiKeyScope>? ExtraScopes = null)
 {
     public bool IsActive => RevokedAt is null;
+
+    /// <summary>Every scope this key holds.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<ApiKeyScope> Scopes => [Scope, .. ExtraScopes ?? []];
+
+    public bool Grants(ApiKeyScope scope) => Scope == scope || (ExtraScopes?.Contains(scope) ?? false);
+
+    /// <summary>This record holding exactly <paramref name="scopes"/>.</summary>
+    /// <exception cref="ArgumentException">No scope, or a value that is not a scope.</exception>
+    public ApiKeyRecord WithScopes(IEnumerable<ApiKeyScope> scopes)
+    {
+        ApiKeyScope[] distinct = [.. scopes.Distinct().Order()];
+        if (distinct.Length == 0)
+        {
+            throw new ArgumentException("A key needs at least one scope.", nameof(scopes));
+        }
+
+        if (!distinct.All(Enum.IsDefined))
+        {
+            throw new ArgumentException("Unknown scope.", nameof(scopes));
+        }
+
+        return this with { Scope = distinct[0], ExtraScopes = distinct.Length > 1 ? distinct[1..] : null };
+    }
 }
 
 /// <summary>Returned once, at creation time: the persisted record plus the full plaintext key.</summary>
@@ -68,6 +98,18 @@ public interface IApiKeyStore
     /// and returns the plaintext key alongside the stored record. The plaintext is never retrievable again.</summary>
     Task<ApiKeyCreated> CreateAsync(string name, ApiKeyScope scope, CancellationToken ct = default);
 
+    /// <summary>As the single-scope overload, for a key holding several scopes.</summary>
+    /// <exception cref="ArgumentException">No scope, or a value that is not a scope.</exception>
+    Task<ApiKeyCreated> CreateAsync(string name, IReadOnlyCollection<ApiKeyScope> scopes, CancellationToken ct = default);
+
+    /// <summary>
+    /// Replaces the scopes of an active key, keeping the key itself, and applies from the next request. Returns the
+    /// updated record, or null when <paramref name="id"/> is unknown or revoked. Raises the "ever had a key of this
+    /// scope" flag for every scope given (see <see cref="HasAnyKeyAsync"/>) and never lowers one.
+    /// </summary>
+    /// <exception cref="ArgumentException">No scope, or a value that is not a scope.</exception>
+    Task<ApiKeyRecord?> UpdateScopesAsync(string id, IReadOnlyCollection<ApiKeyScope> scopes, CancellationToken ct = default);
+
     /// <summary>Marks a key revoked. Returns false when <paramref name="id"/> is unknown or already revoked.</summary>
     Task<bool> RevokeAsync(string id, CancellationToken ct = default);
 
@@ -78,11 +120,11 @@ public interface IApiKeyStore
     /// </summary>
     Task<ApiKeyDeleteResult> DeleteAsync(string id, CancellationToken ct = default);
 
-    /// <summary>True when at least one active (non-revoked) key with the given scope exists.</summary>
+    /// <summary>True when at least one active (non-revoked) key holding the given scope exists.</summary>
     Task<bool> HasActiveKeyAsync(ApiKeyScope scope, CancellationToken ct = default);
 
     /// <summary>
-    /// True when a key with the given scope has ever been created — active or revoked. This is the gate
+    /// True when a key holding the given scope has ever existed — active or revoked. This is the gate
     /// used to decide whether auth is <em>required</em> at all: it is a one-way switch, so revoking your
     /// only key does not silently reopen the endpoint (use <see cref="HasActiveKeyAsync"/> when you need
     /// "is there a currently-usable key", not "has this ever been configured").

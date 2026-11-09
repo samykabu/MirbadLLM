@@ -87,6 +87,27 @@ public sealed class RouterModelsTests
     }
 
     [Fact]
+    public async Task GetModels_ListsAReasoningModelAgainWithoutThinking()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var resolver = new FakeModelEndpointResolver();
+        resolver.Set(new ModelEndpoint("q", "qwen", new Uri("http://upstream-q/"), ModelState.Ready));
+        resolver.Set(new ModelEndpoint("p", "plain", new Uri("http://upstream-p/"), ModelState.Ready));
+        var registry = new FakeModelRegistry()
+            .Add(new ModelDefinition { Id = "q", ServedName = "qwen", ModelPath = "q", Tags = [ModelTags.Reasoning] })
+            .Add(new ModelDefinition { Id = "p", ServedName = "plain", ModelPath = "p" });
+
+        using var app = await RouterHostFactory.CreateAsync(resolver, new FakeModelRuntime(),
+            configureServices: services => services.AddSingleton<IModelRegistry>(registry));
+        using var client = app.GetTestClient();
+
+        using var response = await client.GetAsync("/v1/models", ct);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+
+        Assert.Equal(["plain", "qwen", "qwen-nothink"], document.RootElement.GetProperty("data").EnumerateArray().Select(e => e.GetProperty("id").GetString()).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public async Task GetModels_NoReadyModels_ReturnsEmptyList()
     {
         var ct = TestContext.Current.CancellationToken;

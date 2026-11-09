@@ -242,13 +242,26 @@ public sealed class RouterChatClient(
     private static object BuildBody(ChatRequest request) => new
     {
         model = request.ServedName,
-        messages = request.Messages.Select(m => new { role = m.Role, content = m.Content }),
+        messages = request.Messages.Select(m => new { role = m.Role, content = Content(m) }),
         temperature = request.Temperature,
         max_tokens = request.MaxTokens,
         stream = true,
         stream_options = new { include_usage = true },
         chat_template_kwargs = new { enable_thinking = request.EnableThinking },
     };
+
+    /// <summary>The OpenAI content: the text alone, or text and image parts when the message carries images.</summary>
+    public static object Content(ChatMessage message)
+    {
+        if (message.Images is not { Count: > 0 } images)
+        {
+            return message.Content;
+        }
+
+        List<object> parts = message.Content.Length == 0 ? [] : [new { type = "text", text = message.Content }];
+        parts.AddRange(images.Select(url => new { type = "image_url", image_url = new { url } }));
+        return parts;
+    }
 
     private static ChatChunk? TryParseChunk(string json)
     {

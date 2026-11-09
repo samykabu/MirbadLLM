@@ -75,12 +75,16 @@ else
         var pageRows = Pager.Slice(shown.OrderBy(r => IsRunning(r) ? 0 : 1).ToList(), _page, _size);
         <div class="panel panel--scroll-x models-panel">
             <table class="data-table models-table" data-testid="models-table" data-tour="models-list">
-                <caption class="visually-hidden">Models: placement, state, token throughput, requests and actions</caption>
+                <caption class="visually-hidden">Models: placement, state, memory, context, KV cache, speculative decoding, token throughput, requests and actions</caption>
                 <thead>
                     <tr>
                         <th scope="col">Model</th>
                         <th scope="col">Where</th>
                         <th scope="col" class="col-state">State</th>
+                        <th scope="col" class="col-num" title="Memory reserved for it on its node (its budget)">Memory</th>
+                        <th scope="col" class="col-num" title="Context length in tokens">Context</th>
+                        <th scope="col" class="col-opt">KV cache</th>
+                        <th scope="col" class="col-opt">Speculative</th>
                         <th scope="col" class="col-num">Tok/s</th>
                         <th scope="col" class="col-num">Requests</th>
                         <th scope="col"><span class="visually-hidden">Actions</span></th>
@@ -91,7 +95,7 @@ else
                     {
                         var groupRows = pageRows.Where(r => IsRunning(r) == active).ToList();
                         bool expanded = active ? _showRunning : _showStopped;
-                        <tr class="models-group"><th colspan="6"><button @onclick:stopPropagation="true" @onkeydown:stopPropagation="true" type="button" aria-expanded="@expanded" data-testid="@(active ? "models-running-group" : "models-stopped-group")" @onclick="() => ToggleGroup(active)"><Icon Name="@(expanded ? "chevron-down" : "chevron-right")" /> @(active ? "Running" : "Stopped") · @shown.Count(r => IsRunning(r) == active)</button></th></tr>
+                        <tr class="models-group"><th colspan="10"><button @onclick:stopPropagation="true" @onkeydown:stopPropagation="true" type="button" aria-expanded="@expanded" data-testid="@(active ? "models-running-group" : "models-stopped-group")" @onclick="() => ToggleGroup(active)"><Icon Name="@(expanded ? "chevron-down" : "chevron-right")" /> @(active ? "Running" : "Stopped") · @shown.Count(r => IsRunning(r) == active)</button></th></tr>
                         @if (expanded)
                         {
                     @for (int i = 0; i < groupRows.Count; i++)
@@ -101,7 +105,7 @@ else
                         var state = row.Status.State;
                         var router = _routerStats.GetValueOrDefault(d.ServedName);
                         bool first = d.Id == pageRows[0].Definition.Id;
-                        <tr @key="d.Id" class="models-row" tabindex="0" @ref="_rowRefs[d.Id]" aria-label="@($"Show details for {d.ServedName}")" @onclick="() => OpenDetails(d.Id)" @onkeydown="e => OnRowKey(e, d.Id)" data-state="@state.ToString().ToLowerInvariant()" data-testid="@($"models-row-{d.Id}")">
+                        <tr @key="d.Id" class="models-row" tabindex="0" @ref="_rowRefs[d.Id]" aria-label="@($"Show details for {d.ServedName}")" @onclick="() => OpenDetails(d.Id)" @onkeydown="e => OnRowKey(e, d.Id)" data-drawer-keep data-state="@state.ToString().ToLowerInvariant()" data-testid="@($"models-row-{d.Id}")">
                             <td class="col-primary">
                                 <span class="models-swatch" style="@($"background:{_colors.GetValueOrDefault(d.Id)}")" aria-hidden="true"></span>
                                 <a @onclick:stopPropagation="true" @onkeydown:stopPropagation="true" class="models-name" href="@($"models/{d.Id}/overview")" data-testid="@($"models-link-{d.Id}")">@foreach (string part in NameParts(d.ServedName)) { <span class="models-name-part">@part</span><wbr /> }</a>
@@ -175,6 +179,10 @@ else
                                     </p>
                                 }
                             </td>
+                            <td data-label="Memory" class="num col-num" data-testid="@($"models-memory-{d.Id}")">@UiFormat.GiB(d.MemoryBudgetGiB)</td>
+                            <td data-label="Context" class="num col-num" data-testid="@($"models-context-{d.Id}")">@UiFormat.ContextLength(ModelCapabilities.MaxModelLen(d))</td>
+                            <td data-label="KV cache" class="num col-opt" data-testid="@($"models-kv-{d.Id}")">@UiFormat.KvCacheLabel(d)</td>
+                            <td data-label="Speculative" class="num col-opt" data-testid="@($"models-spec-{d.Id}")">@UiFormat.SpeculativeLabel(d.Speculative)</td>
                             <td data-label="tok/s" class="num col-num">
                                 <div class="models-rate">
                                     <Sparkline Values="@Trend(d)" Color="@_colors.GetValueOrDefault(d.Id)" Label="Throughput, last 3 minutes" />
@@ -269,17 +277,19 @@ else
                 <RingGauge Percent="@(load?.KvCacheUsage * 100)" Label="KV cache" Size="56" ShowValue="true" />
             </div>
             <LineChart Title="Throughput, last 3 minutes" Unit="tok/s" Height="120" Series="@DetailSeries(definition)" />
-            <h3 class="panel-label">Placement</h3>
+            <h3 class="panel-label">Placement and settings</h3>
             <dl class="kv">
                 <dt>Node</dt><dd>@if (definition.Placement?.NodeId is { } nodeId) { <a href="@($"nodes/{Uri.EscapeDataString(nodeId)}")">@(NodeOf(nodeId)?.Name ?? nodeId)</a> } else { @:Not placed
                 }</dd>
                 <dt>Runtime</dt><dd>@FleetNodes.RuntimeLabel(definition.Runtime)</dd>
                 <dt>OS</dt><dd>@(definition.Placement?.NodeId is { } placedId ? NodeOf(placedId)?.Capabilities?.Os.Description ?? UiFormat.Missing : UiFormat.Missing)</dd>
-                <dt>Budget</dt><dd class="num">@UiFormat.GiB(definition.MemoryBudgetGiB)</dd>
-                <dt>Context</dt><dd class="num">@ModelCapabilities.MaxModelLen(definition).ToString("#,0", CultureInfo.InvariantCulture)</dd>
+                <dt>Memory reserved</dt><dd class="num">@UiFormat.GiB(definition.MemoryBudgetGiB)</dd>
+                <dt>Context</dt><dd class="num">@ModelCapabilities.MaxModelLen(definition).ToString("#,0", CultureInfo.InvariantCulture) tokens</dd>
+                <dt>KV cache</dt><dd class="num" data-testid="models-detail-kv">@UiFormat.KvCacheLabel(definition)</dd>
+                <dt>Speculative</dt><dd class="num" data-testid="models-detail-spec">@UiFormat.SpeculativeLabel(definition.Speculative)</dd>
                 @if (definition.Container is { } container && definition.Runtime is RuntimeKind.Sglang or RuntimeKind.Nim)
                 {
-                    <dt>Image</dt><dd class="num" data-testid="models-detail-image">@container.Image</dd>
+                    <dt>Image</dt><dd class="num kv-full models-detail-image" data-testid="models-detail-image">@container.Image</dd>
                 }
             </dl>
             <h3 class="panel-label">Router, since controller start</h3>

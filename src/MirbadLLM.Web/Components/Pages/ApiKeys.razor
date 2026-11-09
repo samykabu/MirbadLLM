@@ -9,7 +9,7 @@
 <AccessHeader Current="AccessPage.Keys" KeyCount="@_keys.Count(k => k.IsActive)" />
 
 <p class="keys-intro" data-testid="keys-intro">
-    Inference keys call models on <code>/v1</code>; metrics keys read <code>/metrics</code>. MCP Read and MCP Operator keys authenticate remote clients at <code>/mcp</code>.
+    A key holds one or more scopes, and you can change them later. Inference calls models on <code>/v1</code>; Metrics reads <code>/metrics</code>; MCP Read and MCP Operator authenticate remote clients at <code>/mcp</code>.
     MCP Read cannot mutate state. A key is shown once, so copy it straight into the client.
 </p>
 
@@ -61,7 +61,14 @@
                     {
                         <tr data-testid="key-row-@key.Id">
                             <td class="col-primary">@key.Name<div class="muted keys-created">created <span class="num">@key.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</span></div></td>
-                            <td data-label="Scope"><span class="tag-chip">@key.Scope</span></td>
+                            <td data-label="Scope">
+                                <div class="key-scope-chips" data-testid="scopes-@key.Id">
+                                    @foreach (var scope in key.Scopes)
+                                    {
+                                        <span class="tag-chip">@ScopeLabel(scope)</span>
+                                    }
+                                </div>
+                            </td>
                             <td data-label="Key"><code class="num">ssk_@(key.Prefix)&hellip;</code></td>
                             <td data-label="Last used" class="num">@(key.LastUsedAt is null ? "Never" : key.LastUsedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm"))</td>
                             <td data-label="Status">
@@ -72,6 +79,10 @@
                             <td class="col-actions">
                                 @if (key.IsActive)
                                 {
+                                    <button class="btn btn-sm btn-outline-secondary" type="button" data-testid="edit-scopes-@key.Id"
+                                            aria-label="@($"Edit scopes of {key.Name}")" @onclick="() => AskEditScopes(key)">
+                                        Edit scopes
+                                    </button>
                                     <button class="btn btn-sm btn-outline-danger" type="button" data-testid="revoke-@key.Id"
                                             aria-label="@($"Revoke {key.Name}")" @onclick="() => AskRevoke(key)">
                                         Revoke
@@ -119,17 +130,13 @@
                     <div id="key-name-error"><ValidationMessage For="() => _newKey.Name" /></div>
                 </div>
                 <div class="field">
-                    <span class="field-label" id="key-scope-label">Scope</span>
-                    <div id="key-scope" class="segmented" role="radiogroup" data-testid="field-key-scope" aria-labelledby="key-scope-label" aria-describedby="key-scope-hint">
-                        <InputRadioGroup @bind-Value="_newKey.Scope">
-                            <label class="segmented-option"><InputRadio Value="ApiKeyScope.Inference" data-testid="key-scope-inference" /><span>Inference</span></label>
-                            <label class="segmented-option"><InputRadio Value="ApiKeyScope.Metrics" data-testid="key-scope-metrics" /><span>Metrics</span></label>
-                            <label class="segmented-option"><InputRadio Value="ApiKeyScope.McpRead" data-testid="key-scope-mcp-read" /><span>MCP Read</span></label>
-                            <label class="segmented-option"><InputRadio Value="ApiKeyScope.McpOperator" data-testid="key-scope-mcp-operator" /><span>MCP Operator</span></label>
-                        </InputRadioGroup>
+                    <span class="field-label" id="key-scope-label">Scopes</span>
+                    <div id="key-scope" role="group" data-testid="field-key-scope" aria-labelledby="key-scope-label" aria-describedby="key-scope-hint">
+                        @ScopePicker(_newScopes, "key-scope")
                     </div>
-                    <span class="field-hint" id="key-scope-hint">MCP Read lists fleet state; MCP Operator also deploys, starts, stops, deletes, benchmarks and tunes through /mcp.</span>
+                    <span class="field-hint" id="key-scope-hint">Pick everything this key may reach. You can change it later with Edit scopes.</span>
                 </div>
+                @GateWarning(_newScopes)
                 <div class="ss-dialog-actions">
                     <button type="button" class="btn btn-outline-secondary" data-testid="add-key-cancel" @onclick="CloseAddAsync">Cancel</button>
                     <button type="submit" class="btn btn-primary" data-testid="create-key-submit"><Icon Name="key" /> Create key</button>
@@ -158,11 +165,24 @@
     </div>
 </dialog>
 
+<ConfirmDialog @bind-Open="_editOpen" Title="@($"Edit scopes of {_editTarget?.Name}")" ConfirmLabel="Save scopes"
+               ConfirmDisabled="@(_editScopes.Count == 0 || (_editTarget is not null && _editScopes.SetEquals(_editTarget.Scopes)))"
+               OnConfirm="ConfirmEditScopesAsync" TestId="edit-scopes-dialog">
+    @if (_editTarget is not null)
+    {
+        <div role="group" aria-label="Scopes" data-testid="edit-scopes-picker">
+            @ScopePicker(_editScopes, "edit-scope")
+        </div>
+        <p class="field-hint">The key stays the same, so clients need no new setup. A change applies from their next request, and they lose whatever you uncheck.</p>
+        @GateWarning(_editScopes)
+    }
+</ConfirmDialog>
+
 <ConfirmDialog @bind-Open="_revokeOpen" Title="@($"Revoke {_revokeTarget?.Name}?")" ConfirmLabel="Revoke key" Destructive="true"
                OnConfirm="ConfirmRevokeAsync" TestId="revoke-dialog" ConfirmTestId="@($"confirm-revoke-{_revokeTarget?.Id}")">
     <p>
         Clients using <code class="num">ssk_@(_revokeTarget?.Prefix)&hellip;</code> start getting <strong>401 Unauthorized</strong> on
-        @EndpointFor(_revokeTarget?.Scope) immediately. This can't be undone; create a new key to restore access.
+        @EndpointsOf(_revokeTarget) immediately. This can't be undone; create a new key to restore access.
     </p>
 </ConfirmDialog>
 
@@ -174,10 +194,24 @@
 </ConfirmDialog>
 
 @code {
+    private static readonly (ApiKeyScope Scope, string TestId, string Label, string Hint)[] ScopeChoices =
+    [
+        (ApiKeyScope.Inference, "inference", "Inference", "Call models on /v1. Also reads /metrics."),
+        (ApiKeyScope.Metrics, "metrics", "Metrics", "Read /metrics."),
+        (ApiKeyScope.McpRead, "mcp-read", "MCP Read", "Look at nodes, models, downloads, jobs and results through /mcp."),
+        (ApiKeyScope.McpOperator, "mcp-operator", "MCP Operator", "Everything in MCP Read, and also deploy, change, start, stop and delete models, read their logs, benchmark and tune."),
+    ];
+
     private List<ApiKeyRecord> _keys = [];
     private int _page = 1;
     private int? _size;
     private readonly NewKeyModel _newKey = new();
+    private readonly HashSet<ApiKeyScope> _newScopes = [ApiKeyScope.Inference];
+    private bool _inferenceEverConfigured;
+    private bool _metricsEverConfigured;
+    private bool _editOpen;
+    private ApiKeyRecord? _editTarget;
+    private HashSet<ApiKeyScope> _editScopes = [];
     private string? _createdKey;
     private string? _createError;
     private string? _error;
@@ -223,7 +257,8 @@
         _createError = null;
         _copied = false;
         _newKey.Name = "";
-        _newKey.Scope = ApiKeyScope.Inference;
+        _newScopes.Clear();
+        _newScopes.Add(ApiKeyScope.Inference);
         _addOpen = true;
     }
 
@@ -246,6 +281,8 @@
     {
         var all = await ApiKeyStore.ListAsync();
         _keys = all.OrderByDescending(k => k.CreatedAt).ToList();
+        _inferenceEverConfigured = await ApiKeyStore.HasAnyKeyAsync(ApiKeyScope.Inference);
+        _metricsEverConfigured = await ApiKeyStore.HasAnyKeyAsync(ApiKeyScope.Metrics);
     }
 
     private async Task CreateAsync()
@@ -258,9 +295,15 @@
             return;
         }
 
+        if (_newScopes.Count == 0)
+        {
+            _createError = "Pick at least one scope.";
+            return;
+        }
+
         try
         {
-            var created = await ApiKeyStore.CreateAsync(name, _newKey.Scope);
+            var created = await ApiKeyStore.CreateAsync(name, _newScopes);
             _createdKey = created.FullKey;
             _copied = false;
             _newKey.Name = "";
@@ -270,6 +313,25 @@
         {
             _createError = ex.Message;
         }
+    }
+
+    private void AskEditScopes(ApiKeyRecord key)
+    {
+        _editTarget = key;
+        _editScopes = [.. key.Scopes];
+        _editOpen = true;
+    }
+
+    private async Task ConfirmEditScopesAsync()
+    {
+        if (_editTarget is null)
+        {
+            return;
+        }
+
+        var updated = await ApiKeyStore.UpdateScopesAsync(_editTarget.Id, _editScopes);
+        _error = updated is null ? $"{_editTarget.Name} has been revoked, so its scopes can't change." : null;
+        await LoadAsync();
     }
 
     private void AskRevoke(ApiKeyRecord key)
@@ -323,18 +385,69 @@
         }
     }
 
-    private static string EndpointFor(ApiKeyScope? scope) => scope switch
+    private static string EndpointFor(ApiKeyScope scope) => scope switch
     {
         ApiKeyScope.Metrics => "/metrics",
         ApiKeyScope.McpRead or ApiKeyScope.McpOperator => "/mcp",
         _ => "/v1",
     };
 
+    private static string EndpointsOf(ApiKeyRecord? key)
+        => key is null ? "/v1" : string.Join(", ", key.Scopes.Select(EndpointFor).Distinct());
+
+    private static string ScopeLabel(ApiKeyScope scope) => ScopeChoices.First(c => c.Scope == scope).Label;
+
+    private static void ToggleScope(HashSet<ApiKeyScope> selected, ApiKeyScope scope, ChangeEventArgs e)
+    {
+        if (e.Value is true)
+        {
+            selected.Add(scope);
+        }
+        else
+        {
+            selected.Remove(scope);
+        }
+    }
+
+    private RenderFragment ScopePicker(HashSet<ApiKeyScope> selected, string testIdPrefix) => @<div class="key-scope-list">
+        @foreach (var choice in ScopeChoices)
+        {
+            <label class="form-check">
+                <input type="checkbox" class="form-check-input" checked="@selected.Contains(choice.Scope)" data-testid="@($"{testIdPrefix}-{choice.TestId}")"
+                       @onchange="e => ToggleScope(selected, choice.Scope, e)" />
+                <span>@choice.Label<span class="key-scope-hint">@choice.Hint</span></span>
+            </label>
+        }
+    </div>;
+
+    // The first key holding one of these scopes closes its endpoint to clients without a key, for good (IApiKeyStore.HasAnyKeyAsync).
+    private RenderFragment GateWarning(HashSet<ApiKeyScope> selected)
+    {
+        List<string> closing = [];
+        if (selected.Contains(ApiKeyScope.Inference) && !_inferenceEverConfigured)
+        {
+            closing.Add("/v1");
+        }
+
+        if (selected.Contains(ApiKeyScope.Metrics) && !_metricsEverConfigured)
+        {
+            closing.Add("/metrics");
+        }
+
+        if (closing.Count == 0)
+        {
+            return _ => { };
+        }
+
+        return @<div class="callout callout--busy" role="status" data-testid="key-gate-warning">
+            <Icon Name="warning" />
+            <div class="callout-body">This is the first key for <code>@string.Join(" and ", closing)</code>. From then on, every client there needs a key, and deleting this key doesn't undo that.</div>
+        </div>;
+    }
+
     private sealed class NewKeyModel
     {
         [Required]
         public string Name { get; set; } = "";
-
-        public ApiKeyScope Scope { get; set; } = ApiKeyScope.Inference;
     }
 }

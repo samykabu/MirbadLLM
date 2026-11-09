@@ -51,6 +51,7 @@ public sealed class LegacyApiAuditFilter : IEndpointFilter
         new("POST", "/api/models/{id}/tuning/{runId}/candidates/{index:int}/apply", AuditActions.ModelUpdate, ModelRouteValue: "id", TargetRouteValue: "runId", Detail: "tuning candidate applied"),
         new("POST", "/api/keys/", AuditActions.ApiKey, Detail: "create"),
         new("POST", "/api/keys/{id}/revoke", AuditActions.ApiKey, TargetRouteValue: "id", Detail: "revoke"),
+        new("PUT", "/api/keys/{id}/scopes", AuditActions.ApiKey, TargetRouteValue: "id", Detail: "change scopes"),
         new("DELETE", "/api/keys/{id}", AuditActions.ApiKey, TargetRouteValue: "id", Detail: "delete"),
         new("POST", "/api/services/whitelist", AuditActions.HostService, Detail: "whitelist add"),
         new("PATCH", "/api/services/whitelist/{name}", AuditActions.HostService, TargetRouteValue: "name", Detail: "whitelist update"),

@@ -168,6 +168,47 @@ public sealed class RouterProxyTests
         Assert.Equal("api_error", document.RootElement.GetProperty("error").GetProperty("type").GetString());
     }
 
+    [Fact]
+    public async Task ANoThinkName_ReachesTheSameModelWithThinkingOff_AndARealModelOfThatNameWins()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var resolver = new FakeModelEndpointResolver();
+        resolver.Set(new ModelEndpoint("q", "qwen", new Uri("http://upstream-q/"), ModelState.Ready));
+        resolver.Set(new ModelEndpoint("r", "real-nothink", new Uri("http://upstream-real/"), ModelState.Ready));
+        resolver.Set(new ModelEndpoint("b", "real", new Uri("http://upstream-base/"), ModelState.Ready));
+        var sent = new List<(string Host, string Body)>();
+        var handler = new FakeUpstreamHandler
+        {
+            Handler = async (request, handlerCt) =>
+            {
+                sent.Add((request.RequestUri!.Host, await request.Content!.ReadAsStringAsync(handlerCt)));
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(new { }) };
+            },
+        };
+        using var app = await RouterHostFactory.CreateAsync(resolver, new FakeModelRuntime(), configureServices: services => ConfigureUpstream(services, handler));
+        using var client = app.GetTestClient();
+
+        using (await client.PostAsJsonAsync("/v1/chat/completions", new { model = "qwen-nothink", messages = Array.Empty<object>(), chat_template_kwargs = new { other = 1 } }, ct))
+        {
+        }
+
+        using (await client.PostAsJsonAsync("/v1/chat/completions", new { model = "real-nothink" }, ct))
+        {
+        }
+
+        Assert.Equal("upstream-q", sent[0].Host);
+        using (var body = JsonDocument.Parse(sent[0].Body))
+        {
+            Assert.Equal("qwen", body.RootElement.GetProperty("model").GetString());
+            var kwargs = body.RootElement.GetProperty("chat_template_kwargs");
+            Assert.False(kwargs.GetProperty("enable_thinking").GetBoolean());
+            Assert.Equal(1, kwargs.GetProperty("other").GetInt32());
+        }
+
+        Assert.Equal("upstream-real", sent[1].Host);
+        Assert.Contains("\"real-nothink\"", sent[1].Body, StringComparison.Ordinal);
+    }
+
     internal static void ConfigureUpstream(IServiceCollection services, HttpMessageHandler handler)
         => services.AddHttpClient(RouterExtensions.UpstreamHttpClientName)
             .ConfigurePrimaryHttpMessageHandler(() => handler);

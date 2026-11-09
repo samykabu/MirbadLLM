@@ -449,7 +449,7 @@ public sealed class UiComponentTests
     }
 
     [Fact]
-    public void Drawer_Closed_RendersNothingInside_Open_EscAndTheButtonClose()
+    public async Task Drawer_Closed_RendersNothingInside_Open_EscAndTheButtonClose()
     {
         using var ctx = new Bunit.BunitContext();
         ctx.JSInterop.Mode = JSRuntimeMode.Loose;
@@ -481,5 +481,10 @@ public sealed class UiComponentTests
         Assert.Equal(1, closes);
         cut.Find("[data-testid=drawer-close]").Click();
         Assert.Equal(2, closes);
+
+        // Opening asks interop.js to watch for a press outside; that press closes it like the button.
+        Assert.Contains(ctx.JSInterop.Invocations, i => i.Identifier == "closeOnPressOutside");
+        await cut.InvokeAsync(() => cut.Instance.PressedOutside());
+        Assert.Equal(3, closes);
     }
 }

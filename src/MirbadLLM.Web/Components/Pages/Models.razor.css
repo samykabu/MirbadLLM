@@ -327,6 +327,8 @@
 .models-detail-hero > div { display: grid; gap: 8px; }
 .models-detail-hero strong { font-size: 24px; }
 .models-detail-hero small { font-size: 12px; color: var(--ss-text-muted); }
+/* An image reference has no spaces: it wraps anywhere under its label instead of pushing the values out of the panel. */
+.models-detail-image { overflow-wrap: anywhere; font-size: var(--ss-fs-100); }
 .models-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
 @container (max-width: 759.98px) {
     .models-table .models-group { display: block; padding: 8px; }

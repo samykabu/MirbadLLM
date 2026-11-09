@@ -57,7 +57,7 @@ property.
 
 ## MCP clients
 
-The master exposes a stateless Streamable HTTP endpoint at `/mcp`. It has no environment-variable key setting: create revocable **MCP Read** or **MCP Operator** keys in **Access → API keys**. Inference, metrics, and browser credentials do not authenticate MCP. Requests are limited to 256 KiB and 120 per minute per server instance; tool pagination is capped at 100 items.
+The master exposes a stateless Streamable HTTP endpoint at `/mcp`. It has no environment-variable key setting: create revocable keys with the **MCP Read** or **MCP Operator** scope in **Access → API keys**. Keys without an MCP scope and browser credentials do not authenticate MCP. Requests are limited to 256 KiB and 120 per minute per server instance; tool pagination is capped at 100 items.
 
 **Access → MCP** lists every tool and gives setup steps filled in with your address, plus a prompt that asks an agent to configure itself.
 

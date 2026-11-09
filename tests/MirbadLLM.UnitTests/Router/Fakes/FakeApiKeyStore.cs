@@ -59,6 +59,36 @@ internal sealed class FakeApiKeyStore : IApiKeyStore
         return Task.FromResult(new ApiKeyCreated(record, plainKey));
     }
 
+    public async Task<ApiKeyCreated> CreateAsync(string name, IReadOnlyCollection<ApiKeyScope> scopes, CancellationToken ct = default)
+    {
+        if (scopes.Count == 0)
+        {
+            throw new ArgumentException("A key needs at least one scope.", nameof(scopes));
+        }
+
+        var created = await CreateAsync(name, scopes.First(), ct);
+        return created with { Record = (await UpdateScopesAsync(created.Record.Id, scopes, ct))! };
+    }
+
+    public Task<ApiKeyRecord?> UpdateScopesAsync(string id, IReadOnlyCollection<ApiKeyScope> scopes, CancellationToken ct = default)
+    {
+        int index = _all.FindIndex(r => r.Id == id && r.RevokedAt is null);
+        if (index < 0)
+        {
+            return Task.FromResult<ApiKeyRecord?>(null);
+        }
+
+        var updated = _all[index].WithScopes(scopes);
+        _all[index] = updated;
+        _everCreated.UnionWith(updated.Scopes);
+        foreach (var plain in _byPlainKey.Where(kv => kv.Value.Id == id).Select(kv => kv.Key).ToList())
+        {
+            _byPlainKey[plain] = updated;
+        }
+
+        return Task.FromResult<ApiKeyRecord?>(updated);
+    }
+
     public Task<bool> RevokeAsync(string id, CancellationToken ct = default)
     {
         int index = _all.FindIndex(r => r.Id == id && r.RevokedAt is null);
@@ -102,15 +132,15 @@ internal sealed class FakeApiKeyStore : IApiKeyStore
 
         // Mirrors JsonApiKeyStore: HasAnyKeyAsync stays a one-way switch even after the last key of a scope
         // is deleted, so it is tracked separately from _all rather than derived by scanning it.
-        _everCreated.Add(removed.Scope);
+        _everCreated.UnionWith(removed.Scopes);
         return Task.FromResult(ApiKeyDeleteResult.Deleted);
     }
 
     public Task<bool> HasActiveKeyAsync(ApiKeyScope scope, CancellationToken ct = default)
-        => Task.FromResult(_all.Exists(r => r.IsActive && r.Scope == scope));
+        => Task.FromResult(_all.Exists(r => r.IsActive && r.Grants(scope)));
 
     public Task<bool> HasAnyKeyAsync(ApiKeyScope scope, CancellationToken ct = default)
-        => Task.FromResult(_all.Exists(r => r.Scope == scope) || _everCreated.Contains(scope));
+        => Task.FromResult(_all.Exists(r => r.Grants(scope)) || _everCreated.Contains(scope));
 
     public Task<ApiKeyRecord?> FindByPresentedKeyAsync(string presentedKey, CancellationToken ct = default)
         => Task.FromResult(_byPlainKey.TryGetValue(presentedKey, out var record) && record.IsActive ? record : null);
@@ -130,7 +160,7 @@ internal sealed class FakeApiKeyStore : IApiKeyStore
             }
 
             _all.Add(record);
-            _everCreated.Add(record.Scope);
+            _everCreated.UnionWith(record.Scopes);
             Imported.Add(record);
             added++;
         }

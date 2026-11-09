@@ -99,10 +99,51 @@ public sealed class ModelsPageTests
         var detail = cut.Find("[data-testid=models-drawer]");
         Assert.Contains("12.0 GiB", detail.TextContent, StringComparison.Ordinal);
         Assert.Contains("Context", detail.TextContent, StringComparison.Ordinal);
+        Assert.Contains("Memory reserved", detail.TextContent, StringComparison.Ordinal);
+        Assert.Equal("fp8", cut.Find("[data-testid=models-detail-kv]").TextContent);
+        Assert.Equal("Off", cut.Find("[data-testid=models-detail-spec]").TextContent);
         Assert.Contains("model=alpha", ctx.Services.GetRequiredService<NavigationManager>().Uri, StringComparison.Ordinal);
         detail.KeyDown(new KeyboardEventArgs { Key = "Escape" });
         Assert.Empty(cut.FindAll("[data-testid=models-drawer]"));
         Assert.DoesNotContain("model=", ctx.Services.GetRequiredService<NavigationManager>().Uri, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Rows_ShowMemoryContextKvAndSpeculative_AndALongImageWrapsInThePanel()
+    {
+        var sglang = MakeModel("sg", budget: 84) with
+        {
+            Runtime = RuntimeKind.Sglang,
+            Container = new ContainerRuntimeSettings { Image = "lmsysorg/sglang@sha256:" + new string('a', 64), ExtraArgs = ["--kv-cache-dtype", "fp8_e4m3", "--context-length", "131072"] },
+            Speculative = new SpeculativeDecoding("DFLASH", 8),
+        };
+        using var ctx = Context(new FakeModelRuntime(), models: [sglang]);
+        var cut = ctx.Render<Models>();
+
+        Assert.Equal("84.0 GiB", cut.Find("[data-testid=models-memory-sg]").TextContent);
+        Assert.Equal("131,072", cut.Find("[data-testid=models-context-sg]").TextContent);
+        Assert.Equal("fp8_e4m3", cut.Find("[data-testid=models-kv-sg]").TextContent);
+        Assert.Equal("DFLASH × 8", cut.Find("[data-testid=models-spec-sg]").TextContent);
+
+        cut.Find("[data-testid=models-row-sg]").Click();
+        Assert.Contains("kv-full", cut.Find("[data-testid=models-detail-image]").ClassName, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(RuntimeKind.Sglang, "auto (default)")]
+    [InlineData(RuntimeKind.Mlx, "Full precision")]
+    [InlineData(RuntimeKind.LlamaCpp, "f16 (default)")]
+    [InlineData(RuntimeKind.Nim, "NIM default")]
+    public void KvCacheLabel_NamesEachRuntimesDefault(RuntimeKind runtime, string label)
+        => Assert.Equal(label, UiFormat.KvCacheLabel(MakeModel("m") with { Runtime = runtime }));
+
+    [Fact]
+    public void KvCacheLabel_ReadsEachRuntimesSetting()
+    {
+        Assert.Equal("q8_0", UiFormat.KvCacheLabel(MakeModel("m") with { Runtime = RuntimeKind.LlamaCpp, LlamaCpp = new LlamaCppSettings { ModelFile = "m.gguf", CacheTypeK = "q8_0", CacheTypeV = "q8_0" } }));
+        Assert.Equal("K q8_0 · V f16", UiFormat.KvCacheLabel(MakeModel("m") with { Runtime = RuntimeKind.LlamaCpp, LlamaCpp = new LlamaCppSettings { ModelFile = "m.gguf", CacheTypeK = "q8_0", CacheTypeV = "f16" } }));
+        Assert.Equal("4-bit", UiFormat.KvCacheLabel(MakeModel("m") with { Runtime = RuntimeKind.Mlx, Mlx = new MlxSettings { ModelFolder = "m", KvBits = 4 } }));
+        Assert.Equal("fp8_e5m2", UiFormat.KvCacheLabel(MakeModel("m") with { Runtime = RuntimeKind.Sglang, Container = new ContainerRuntimeSettings { Image = "i", ExtraArgs = ["--kv-cache-dtype=fp8_e5m2"] } }));
     }
 
     [Fact]

@@ -52,6 +52,27 @@ public sealed class McpSetupTests
     }
 
     [Fact]
+    public async Task KeyPanel_ListsActiveKeysWithAnMcpScope_AndTheTabShowsTheKeyCount()
+    {
+        using var ctx = new BunitContext();
+        var store = new MirbadLLM.UnitTests.Router.Fakes.FakeApiKeyStore();
+        store.AddActiveKey("ssk_inference1", ApiKeyScope.Inference, "chat-app");
+        var both = store.AddActiveKey("ssk_laptop1234", ApiKeyScope.McpRead, "laptop");
+        await store.UpdateScopesAsync(both.Id, [ApiKeyScope.Inference, ApiKeyScope.McpRead, ApiKeyScope.McpOperator], Xunit.TestContext.Current.CancellationToken);
+        store.AddRevokedKey("ssk_oldreader1", ApiKeyScope.McpRead, "old-reader");
+        ctx.Services.AddSingleton<IApiKeyStore>(store);
+
+        var cut = Render(ctx);
+
+        string keys = cut.Find("[data-testid=mcp-keys]").TextContent;
+        Assert.Contains("laptop", keys, StringComparison.Ordinal);
+        Assert.Contains("MCP Operator", keys, StringComparison.Ordinal);
+        Assert.DoesNotContain("chat-app", keys, StringComparison.Ordinal);
+        Assert.DoesNotContain("old-reader", keys, StringComparison.Ordinal);
+        Assert.Equal("2", cut.Find("[data-testid=access-tab-keys] .access-tab-count").TextContent);
+    }
+
+    [Fact]
     public void ClientTabs_FillInThisAddress_AndNeverExpandTheKeyInTheShell()
     {
         using var ctx = new BunitContext();

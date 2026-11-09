@@ -67,3 +67,11 @@
 .chat-intro-text { font-size: 13px; }
 @media (max-width: 639.98px) { .chat-intro { padding: 12px 0; } }
 @media (max-width:760px) { .chat-picker { flex-wrap:wrap; } .chat-picker .field { grid-template-columns:minmax(0,1fr); gap:var(--ss-sp-1); } }
+
+/* Images: attached ones wait above the composer with a remove button; sent ones sit in the message. */
+.chat-attach { align-self: stretch; display: inline-flex; align-items: center; gap: var(--ss-sp-1); cursor: pointer; }
+.chat-attachments { display: flex; flex-wrap: wrap; gap: var(--ss-sp-2); margin: 0 0 var(--ss-sp-2); padding: 0; list-style: none; }
+.chat-attachments li { position: relative; }
+.chat-attachment-remove { position: absolute; top: -8px; right: -8px; background: var(--ss-panel); border: 1px solid var(--ss-border); border-radius: 50%; }
+.chat-thumbs { display: flex; flex-wrap: wrap; gap: var(--ss-sp-2); margin: var(--ss-sp-1) 0; }
+.chat-thumb { width: 72px; height: 72px; object-fit: cover; border: 1px solid var(--ss-border); border-radius: var(--ss-radius); }

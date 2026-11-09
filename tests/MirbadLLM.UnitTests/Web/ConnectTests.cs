@@ -51,7 +51,7 @@ public sealed class ConnectTests
         ctx.Services.AddSingleton<IModelEndpointResolver>(new FakeModelEndpointResolver(endpoints));
         ctx.Services.AddSingleton<IModelRegistry>(new FakeModelRegistry(
         [
-            new ModelDefinition { Id = "big", ServedName = "Big-Model", ModelPath = "b", MaxModelLen = 262_144 },
+            new ModelDefinition { Id = "big", ServedName = "Big-Model", ModelPath = "b", MaxModelLen = 262_144, Tags = [ModelTags.Reasoning, ModelTags.Vision] },
             new ModelDefinition { Id = "small", ServedName = "Small-Model", ModelPath = "s", MaxModelLen = 32_768 },
         ]));
         ctx.Services.AddSingleton(Options.Create(new MirbadLLMOptions()));
@@ -60,7 +60,16 @@ public sealed class ConnectTests
         var cut = ctx.Render<Connect>(parameters => parameters.AddCascadingValue(httpContext));
 
         string snippet = cut.Find("[data-testid=vscode-snippet]").TextContent;
-        Assert.Contains("\"vendor\": \"customoai\"", snippet);
+        Assert.Contains("\"vendor\": \"customendpoint\"", snippet);
+        Assert.Contains("\"apiType\": \"chat-completions\"", snippet);
+        using var parsed = System.Text.Json.JsonDocument.Parse(snippet);
+        var models = parsed.RootElement[0].GetProperty("models");
+        Assert.Equal(["Big-Model", "Big-Model-nothink", "Small-Model"], models.EnumerateArray().Select(m => m.GetProperty("id").GetString()));
+        Assert.True(models[0].GetProperty("vision").GetBoolean());
+        Assert.True(models[0].GetProperty("thinking").GetBoolean());
+        Assert.False(models[1].GetProperty("thinking").GetBoolean());
+        Assert.False(models[2].GetProperty("vision").GetBoolean());
+        Assert.Contains("Big-Model-nothink", cut.Find("[data-testid=nothink-hint]").TextContent, StringComparison.Ordinal);
         Assert.Contains("\"url\": \"http://spark:8080/v1/chat/completions\"", snippet);
         Assert.Contains("\"maxInputTokens\": 245760", snippet);   // 262,144 - 16,384
         Assert.Contains("\"maxInputTokens\": 24576", snippet);    // 32,768 - 8,192 (a quarter)

@@ -110,6 +110,15 @@
                 <div class="msg @(isUser ? "msg--user" : "msg--assistant")" data-testid="chat-message-@message.Role"
                      aria-live="@(isUser ? null : "off")" aria-busy="@(message.IsStreaming ? "true" : null)">
                     <span class="msg-role">@(isUser ? "You" : message.Model ?? "Assistant")</span>
+                    @if (message.Images.Count > 0)
+                    {
+                        <div class="chat-thumbs" data-testid="chat-message-images">
+                            @foreach (var image in message.Images)
+                            {
+                                <img class="chat-thumb" src="@image" alt="Attached image" />
+                            }
+                        </div>
+                    }
                     @if (!string.IsNullOrEmpty(message.Reasoning))
                     {
                         <details class="msg-reasoning" open="@(!message.ReasoningCollapsed)" data-testid="chat-reasoning">
@@ -177,7 +186,28 @@
             {
                 <div class="callout callout--failed" role="alert" data-testid="chat-error"><Icon Name="state-failed" /><div class="callout-body">@_error</div></div>
             }
+            @if (_attachments.Count > 0)
+            {
+                <ul class="chat-attachments" aria-label="Images to send" data-testid="chat-attachments">
+                    @foreach (var attachment in _attachments)
+                    {
+                        <li>
+                            <img class="chat-thumb" src="@attachment.DataUrl" alt="@attachment.Name" />
+                            <button type="button" class="icon-btn chat-attachment-remove" aria-label="@($"Remove {attachment.Name}")"
+                                    data-testid="chat-attachment-remove" @onclick="() => _attachments.Remove(attachment)"><Icon Name="close" /></button>
+                        </li>
+                    }
+                </ul>
+            }
             <div class="chat-composer">
+                @if (SelectedPlace?.AcceptsImages == true)
+                {
+                    <label class="btn btn-outline-secondary chat-attach" title="Attach images (up to @MaxImages, @(MaxImageBytes / 1024 / 1024) MB each)">
+                        <Icon Name="upload" /> <span>Image</span>
+                        <InputFile class="visually-hidden" accept="image/png,image/jpeg,image/webp,image/gif" multiple
+                                   OnChange="AttachAsync" data-testid="chat-attach" />
+                    </label>
+                }
                 <label for="chat-input" class="visually-hidden">Message</label>
                 <textarea id="chat-input" class="form-control" rows="2" placeholder="@(string.IsNullOrEmpty(_selectedModel) ? "Message" : $"Message {_selectedModel}")"
                           aria-describedby="chat-hint" data-testid="chat-input" @bind="_input" @bind:event="oninput"></textarea>
@@ -196,7 +226,7 @@
                 {
                     <span class="chat-send-reason" id="chat-send-reason" data-testid="chat-send-reason">@reason</span>
                 }
-                <span>Enter sends. Shift+Enter adds a new line.</span>
+                <span>Enter sends. Shift+Enter adds a new line.@(SelectedPlace?.AcceptsImages == true ? $" This model reads images: attach up to {MaxImages}." : "")</span>
             </p>
         </div>
     </section>
@@ -231,7 +261,15 @@
         public TimeSpan? TimeToFirstToken { get; set; }
 
         public double? OutputTokensPerSecond { get; set; }
+
+        public IReadOnlyList<string> Images { get; init; } = [];
     }
+
+    private sealed record Attachment(string Name, string DataUrl);
+
+    private const int MaxImages = 4;
+    private const long MaxImageBytes = 8 * 1024 * 1024;
+    private readonly List<Attachment> _attachments = [];
 
     private LiveDataService? _live;
     private IDisposable? _liveSubscription;
@@ -249,7 +287,8 @@
         _sending ? null
         : _models.Count == 0 ? "Send needs a Ready model; none is Ready."
         : string.IsNullOrEmpty(_selectedModel) ? "Choose a model to send."
-        : string.IsNullOrWhiteSpace(_input) ? "Type a message to send."
+        : _attachments.Count > 0 && SelectedPlace?.AcceptsImages != true ? "This model doesn't read images. Remove them, or choose a model tagged Vision."
+        : string.IsNullOrWhiteSpace(_input) && _attachments.Count == 0 ? "Type a message to send."
         : null;
 
     private void UseSuggestion() => _input = SuggestedPrompt;
@@ -273,7 +312,34 @@
     private string SettingsRest =>
         $"· temp {_temperature.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)} · {_maxTokens} tokens{(_thinkingEnabled ? " · thinking" : "")}";
 
-    private bool CanSend => !_sending && !string.IsNullOrWhiteSpace(_input) && !string.IsNullOrEmpty(_selectedModel);
+    private bool CanSend => SendBlockedReason is null && !_sending;
+
+    private async Task AttachAsync(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        foreach (var file in e.GetMultipleFiles(MaxImages))
+        {
+            if (_attachments.Count >= MaxImages)
+            {
+                _error = $"A message takes up to {MaxImages} images.";
+                break;
+            }
+
+            if (!file.ContentType.StartsWith("image/", StringComparison.Ordinal) || file.Size > MaxImageBytes)
+            {
+                _error = $"{file.Name} wasn't attached: only images up to {MaxImageBytes / 1024 / 1024} MB can be sent.";
+                continue;
+            }
+
+            using var buffer = new MemoryStream();
+            await using (var stream = file.OpenReadStream(MaxImageBytes))
+            {
+                await stream.CopyToAsync(buffer);
+            }
+
+            _attachments.Add(new Attachment(file.Name, $"data:{file.ContentType};base64,{Convert.ToBase64String(buffer.ToArray())}"));
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -339,6 +405,7 @@
     {
         _cts?.Cancel();
         _messages.Clear();
+        _attachments.Clear();
         _error = null;
         _announcement = null;
     }
@@ -354,12 +421,13 @@
 
         _error = null;
         _announcement = null;
-        var userMessage = new ChatMessageVm { Role = "user", Content = _input.Trim() };
+        var userMessage = new ChatMessageVm { Role = "user", Content = _input.Trim(), Images = [.. _attachments.Select(a => a.DataUrl)] };
         _messages.Add(userMessage);
         _input = "";
+        _attachments.Clear();
 
         // At this point _messages ends with userMessage and the assistant reply has not been added yet.
-        var history = _messages.Select(m => new ChatMessage(m.Role, m.Content)).ToList();
+        var history = _messages.Select(m => new ChatMessage(m.Role, m.Content, m.Images.Count == 0 ? null : m.Images)).ToList();
         if (!string.IsNullOrWhiteSpace(_systemPrompt))
         {
             history.Insert(0, new ChatMessage("system", _systemPrompt));
