@@ -6,6 +6,8 @@ private development history.
 
 ## Unreleased
 
+- A busy SGLang model no longer reads as Starting, which made the router refuse its requests while a long prompt was processing. It takes one restart to apply
+- The Add model wizard moves keyboard focus to the step it opens, password managers leave the registry login alone, and the Overview and Tune help no longer describe settings a runtime doesn't have
 - Tuning works on MLX (parallel requests, KV bits, draft tokens, prompt cache) and SGLang (max running requests, schedule policy, draft depth); NIM stays benchmark-only because it has nothing to tune
 - Benchmarks size their load and prompts for each runtime, report speculative acceptance where the server does, count tokens on servers that report no usage, and no longer claim "as requested" on runtimes whose logs they can't read
 - NIM: secrets such as `NGC_API_KEY` come from saved tokens, private images can be pulled with a registry login, the served name is enforced, and no checkpoint folder is needed in the wizard, moves, restores or MCP

@@ -499,6 +499,23 @@ public sealed class LaunchSpecBuilderLlamaCppTests
     }
 
     [Fact]
+    public void SglangContainer_KeepsHealthChecksFromQueueing_UnlessTheModelSaysOtherwise()
+    {
+        var model = ContainerModel(RuntimeKind.Sglang) with { Container = new ContainerRuntimeSettings { Image = "lmsysorg/sglang:1" } };
+        string[] features = [AgentFeatures.RuntimeSglangContainer, AgentFeatures.LaunchEnv];
+
+        var built = LaunchSpecBuilder.Build(model, ContainerNode(), "unused", 120, false, nodeFeatures: features);
+        Assert.Equal("false", built.Spec.Env["SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION"]);
+
+        var own = model with { Container = model.Container! with { Env = new Dictionary<string, string> { ["SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION"] = "true" } } };
+        Assert.Equal("true", LaunchSpecBuilder.Build(own, ContainerNode(), "unused", 120, false, nodeFeatures: features).Spec.Env["SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION"]);
+
+        // A node that can't take variables still starts the model.
+        var older = LaunchSpecBuilder.Build(model, ContainerNode(), "unused", 120, false, nodeFeatures: [AgentFeatures.RuntimeSglangContainer]);
+        Assert.Empty(older.Spec.Env);
+    }
+
+    [Fact]
     public void SglangContainer_SetsTpSize_FromTheGpuCount_UnlessExtraArgsSetIt()
     {
         var node = ContainerNode();

@@ -68,7 +68,7 @@
     ];
 
     var TIPS = {
-        tune: 'New to tuning? Pick a goal below, starting with Quick: it finds a faster setting and never applies anything without asking. The time it takes is shown under the goals.',
+        tune: 'New to tuning? Pick a goal below: the search finds a faster setting and never applies anything without asking. The time it takes is shown under the goals.',
         overview: 'Pick the time window here and a node on the scope cards; select a leaderboard row for its full readout. History is kept for one hour; a "—" means the node does not report that value.'
     };
 
