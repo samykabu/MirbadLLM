@@ -13,8 +13,8 @@ public static class ModelFieldHelp
     // --- Source ---
 
     public static readonly FieldHelpText SourceMode = new(
-        What: "Where the checkpoint files come from: a folder already on the DGX, or a fresh download from Hugging Face.",
-        Why: "vLLM needs the full checkpoint (weights, config.json, tokenizer files) sitting under the models root " +
+        What: "Where the checkpoint files come from: a folder already on the node, or a fresh download from Hugging Face.",
+        Why: "The runtime needs the full checkpoint (weights, config.json, tokenizer files) sitting under the models root " +
              "before it can serve it. Picking a folder skips straight to configuring the model; downloading fetches " +
              "the files first and then lets you configure it.",
         Example: "The three checkpoints already on this box (Ornith-1.5-9B-uncensored and its two NVFP4 variants) show up " +
@@ -41,7 +41,7 @@ public static class ModelFieldHelp
 
     public static readonly FieldHelpText Folder = new(
         What: "The destination folder name under the models root (mounted at /models in every container).",
-        Why: "This becomes the --model /models/{folder} argument vLLM is started with, so it must be unique and match " +
+        Why: "This is the folder the runtime loads, so it must be unique and match " +
              "exactly. Left blank, it defaults to the part of the repo id after the last '/'.",
         Example: "Repo ornith-ai/Ornith-1.5-9B with a blank folder downloads into /models/Ornith-1.5-9B.");
 
@@ -55,7 +55,7 @@ public static class ModelFieldHelp
 
     public static readonly FieldHelpText AllowPatterns = new(
         What: "Glob patterns of files to fetch from the repo (comma-separated); everything else in the repo is skipped.",
-        Why: "Most repos also carry files vLLM never reads (README, sample images, alternate formats like GGUF or ONNX). " +
+        Why: "Most repos also carry files the model doesn't need (README, sample images, alternate formats like GGUF or ONNX). " +
              "Restricting the download to weights, config and tokenizer files avoids pulling gigabytes you don't need.",
         Example: "The default — *.json, *.safetensors, *.jinja, *.txt, tokenizer*, *.model — is exactly what the three " +
                  "Ornith checkpoints on this box consist of.");
@@ -71,12 +71,12 @@ public static class ModelFieldHelp
     public static readonly FieldHelpText ServedName = new(
         What: "The name clients put in the OpenAI \"model\" field of a chat request.",
         Why: "The router matches incoming requests to an upstream by this exact name (case-insensitive), and it is " +
-             "passed to vLLM as --served-model-name so /v1/models advertises it too. Two models can't share one.",
+             "passed to the server so /v1/models advertises it too. Two models can't share one.",
         Example: "Ornith-Uncensored-FP8 — what VS Code/Cline would put in its model picker to reach the seeded model.");
 
     public static readonly FieldHelpText ModelPath = new(
         What: "The checkpoint's folder name, relative to the models root (bound read-only at /models in the container).",
-        Why: "Passed straight through as --model /models/{ModelPath}. It must be the exact folder name containing " +
+        Why: "The runtime loads this folder. It must be the exact folder name containing " +
              "config.json and the *.safetensors weight files.",
         Example: "Ornith-1.5-9B-uncensored, or Ornith-1.5-9B-NVFP4 for the pre-quantized variant.");
 
@@ -187,7 +187,7 @@ public static class ModelFieldHelp
 
     public static readonly FieldHelpText SglangSpeculativeDraftModel = new(
         What: "Path of the draft checkpoint as the container sees it under /models. Leave it empty for NGRAM.",
-        Why: "Add the same folder under Extra checkpoints so it is downloaded with the model and on a move or restore.",
+        Why: "Add the same folder under Extra checkpoints so a move or restore can download it; a move is refused without it.",
         Example: "/models/my-model-DFlash");
 
     public static readonly FieldHelpText SpeculativeExtra = new(
@@ -250,7 +250,7 @@ public static class ModelFieldHelp
         What: "Labels for finding the model: built-in ones (Chat, Embedding, Vision, Tool calling, …) and your own, " +
               "lowercase letters, digits and hyphens, up to 24 characters, at most 12 per model.",
         Why: "The Dashboard and the Models page filter by tag (a model must have every selected tag), and the admin API " +
-             "accepts ?tag=…. Tags are not vLLM arguments: changing them never restarts the model. \"Suggested\" marks " +
+             "accepts ?tag=…. Tags are not launch arguments: changing them never restarts the model. \"Suggested\" marks " +
              "the tags the parsers, extra args and the checkpoint's config.json point to; they are only applied when you pick them.",
         Example: "An embedding model started with --runner pooling gets Embedding suggested; Ornith-9B with the qwen3 parsers " +
                  "gets Chat, Tool calling and Reasoning.");
@@ -283,7 +283,7 @@ public static class ModelFieldHelp
     // --- Placement (P2, MN-118) ---
 
     public static readonly FieldHelpText Node = new(
-        What: "The machine this model runs on: the DGX or a Linux PC joined as a node. Its checkpoint folder, image and " +
+        What: "The machine this model runs on: any node that has joined. Its checkpoint folder, image and " +
               "memory are that node's.",
         Why: "Each node has its own models root and memory, so the folder list, the fit check and the GPUs below all follow " +
              "the node. Once the model is saved, changing the node is a move (download there, stop here, start there), " +
@@ -291,18 +291,18 @@ public static class ModelFieldHelp
         Example: "dgx for a large model that needs the GB10's 128 GiB; pc-office for a small embedding model on a 16 GiB card.");
 
     public static readonly FieldHelpText Gpus = new(
-        What: "The GPUs of a discrete node the model runs on. One GPU, or several of the same model and memory, which vLLM " +
-              "then uses in tensor parallel. Saved by the GPU's UUID; the index is shown for orientation only.",
-        Why: "vLLM takes one --gpu-memory-utilization for all its GPUs, so tensor parallel needs equal cards. The memory " +
+        What: "The GPUs of a discrete node the model runs on. One GPU, or several of the same model and memory for " +
+              "tensor parallel. Saved by the GPU's UUID; the index is shown for orientation only.",
+        Why: "Tensor parallel needs equal cards. The memory " +
              "budget is the total over the ticked GPUs and is split evenly. The UUID keeps the model on its card if a driver " +
              "update renumbers the GPUs. Changing GPUs is a normal edit that needs a restart; a raw --tensor-parallel-size " +
              "in Extra args is replaced by the number of ticked GPUs.",
         Example: "GPU 0 alone for a 9B model in 14 GiB; GPU 0 and GPU 1 (two RTX 5060 Ti 16 GB) for a model that needs 28 GiB.");
 
     public static readonly FieldHelpText Runtime = new(
-        What: "The inference engine that serves the model. vLLM is the only one available now; llama.cpp comes later.",
-        Why: "Every setting on this page is a vLLM setting. A node lists the runtimes it can run in its capabilities.",
-        Example: "vLLM for every model today.");
+        What: "The engine that serves the model, from the runtimes this node reports.",
+        Why: "The settings on this page belong to the runtime. A node lists the runtimes it can run in its capabilities.",
+        Example: "vLLM for most models on a Linux node.");
 
     public static readonly FieldHelpText KeepServing = new(
         What: "Keep answering requests for this model while a benchmark or tuning job runs on another model on the same node.",

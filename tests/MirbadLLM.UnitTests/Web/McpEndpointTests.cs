@@ -235,16 +235,16 @@ public sealed class McpEndpointTests : IDisposable
 
         string elsewhere = await CallTool(client, key, "mirbad_deploy_model", new
         {
-            modelId = "from-registry", servedName = "x", repoId = "org/x", folder = "x", nodeId = "dgx", runtime = "nim", image = "registry.example/nim:1", imageDigest = Digest,
+            modelId = "from-registry", servedName = "x", nodeId = "dgx", runtime = "nim", image = "registry.example/nim:1", imageDigest = Digest,
         });
         Assert.DoesNotContain("\"isError\":true", elsewhere, StringComparison.Ordinal);
         Assert.Contains("planningNotes", elsewhere, StringComparison.Ordinal);
         Assert.Equal("registry.example/nim:1", (await Models().GetAsync("from-registry"))!.Container!.Image);
 
-        await CallTool(client, key, "mirbad_deploy_model", new { modelId = "on-node", servedName = "y", repoId = "org/y", folder = "y", nodeId = "dgx", runtime = "nim", image = "nim:on-node" });
+        await CallTool(client, key, "mirbad_deploy_model", new { modelId = "on-node", servedName = "y", nodeId = "dgx", runtime = "nim", image = "nim:on-node" });
         Assert.Equal(Digest, (await Models().GetAsync("on-node"))!.Container!.ImageDigest);
 
-        string badDigest = await CallTool(client, key, "mirbad_deploy_model", new { modelId = "bad", servedName = "z", repoId = "org/z", folder = "z", nodeId = "dgx", runtime = "nim", image = "nim:1", imageDigest = "latest" });
+        string badDigest = await CallTool(client, key, "mirbad_deploy_model", new { modelId = "bad", servedName = "z", nodeId = "dgx", runtime = "nim", image = "nim:1", imageDigest = "latest" });
         Assert.Contains("imageDigest must be", badDigest, StringComparison.Ordinal);
     }
 
@@ -264,10 +264,6 @@ public sealed class McpEndpointTests : IDisposable
         var model = await Models().GetAsync("sg");
         Assert.Equal("DFLASH", model!.Speculative!.Method);
         Assert.Equal("/models/sg-dflash", model.Speculative.DraftModel);
-
-        string tuning = await CallTool(client, key, "mirbad_start_tuning", new { modelId = "sg" });
-        Assert.Contains("\"isError\":true", tuning, StringComparison.Ordinal);
-        Assert.Contains("Tuning isn", tuning, StringComparison.Ordinal);
 
         string refused = await CallTool(client, key, "mirbad_deploy_model", new
         {
@@ -321,7 +317,7 @@ public sealed class McpEndpointTests : IDisposable
         {
             string result = await CallTool(client, key, "mirbad_deploy_model", new
             {
-                modelId = id, servedName = id, repoId = "org/" + id, folder = id, nodeId = "dgx", runtime, image, imageDigest, modelFile, extraArgs = args,
+                modelId = id, servedName = id, repoId = runtime == "nim" ? null : "org/" + id, folder = runtime == "nim" ? null : id, nodeId = "dgx", runtime, image, imageDigest, modelFile, extraArgs = args,
             });
             Assert.DoesNotContain("\"isError\":true", result, StringComparison.Ordinal);
         }
@@ -536,6 +532,53 @@ public sealed class McpEndpointTests : IDisposable
             await Task.Yield();
             yield return "newest";
         }
+    }
+
+    [Fact]
+    public async Task Deploy_OnNim_NeedsNoFolder_AndRefusesOne_WhileOthersStillNeedIt()
+    {
+        using var client = Client();
+        const string Digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        string key = await NodeReporting(Capabilities(new RuntimeCapability { Kind = RuntimeKind.Nim, Delivery = LaunchDelivery.Container, Available = true }));
+
+        string saved = await CallTool(client, key, "mirbad_deploy_model", new { modelId = "nim-a", servedName = "meta/llama", nodeId = "dgx", runtime = "nim", image = "nvcr.io/nim/a:1", imageDigest = Digest });
+        Assert.DoesNotContain("\"isError\":true", saved, StringComparison.Ordinal);
+        Assert.Contains("NGC_API_KEY", saved, StringComparison.Ordinal);
+        var model = await Models().GetAsync("nim-a");
+        Assert.Empty(model!.Sources);
+        Assert.False(model.NeedsCheckpoint);
+
+        string tuning = await CallTool(client, key, "mirbad_start_tuning", new { modelId = "nim-a" });
+        Assert.Contains("Tuning isn", tuning, StringComparison.Ordinal);
+
+        string withFolder = await CallTool(client, key, "mirbad_deploy_model", new { modelId = "nim-b", servedName = "b", nodeId = "dgx", runtime = "nim", image = "nvcr.io/nim/a:1", imageDigest = Digest, folder = "b" });
+        Assert.Contains("does not use repoId", withFolder, StringComparison.Ordinal);
+
+        string withoutFolder = await CallTool(client, key, "mirbad_deploy_model", new { modelId = "vllm-c", servedName = "c", nodeId = "dgx" });
+        Assert.Contains("repoId and folder are required", withoutFolder, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Update_CannotChangeTheImageOrCommand_OfAModelWithSecrets()
+    {
+        using var client = Client();
+        const string Digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        string key = await NodeReporting(Capabilities(new RuntimeCapability { Kind = RuntimeKind.Nim, Delivery = LaunchDelivery.Container, Available = true }));
+        await CallTool(client, key, "mirbad_deploy_model", new { modelId = "nim-a", servedName = "a", nodeId = "dgx", runtime = "nim", image = "nvcr.io/nim/a:1", imageDigest = Digest });
+        var stored = (await Models().GetAsync("nim-a"))!;
+        await Models().UpsertAsync(stored with
+        {
+            Container = stored.Container! with { SecretEnv = new Dictionary<string, string> { ["NGC_API_KEY"] = "ngc" } },
+        });
+
+        foreach (object arguments in new object[] { new { modelId = "nim-a", image = "evil.example/nim:1" }, new { modelId = "nim-a", extraArgs = Parsers } })
+        {
+            string refused = await CallTool(client, key, "mirbad_update_model", arguments);
+            Assert.Contains("only be changed in the portal", refused, StringComparison.Ordinal);
+        }
+
+        Assert.Equal("nvcr.io/nim/a:1", (await Models().GetAsync("nim-a"))!.Container!.Image);
+        Assert.DoesNotContain("\"isError\":true", await CallTool(client, key, "mirbad_update_model", new { modelId = "nim-a", memoryBudgetGiB = 40 }), StringComparison.Ordinal);
     }
 
     private static readonly string[] Parsers = ["--tool-call-parser", "qwen3_coder", "--reasoning-parser", "qwen3"];

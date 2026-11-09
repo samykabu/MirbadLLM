@@ -49,8 +49,9 @@ public sealed partial class MirbadMcpTools(
         "speculative decoding on vllm, sglang and mlx, never on llamacpp or nim; sglang needs speculativeMethod, an algorithm such as DFLASH, EAGLE3, STANDALONE or NGRAM. " +
         "(3) A deploy only proves the settings are valid. " + UnprovenSpeculativeNote + " " +
         "(4) " + UnprovenImageNote + " " +
-        "(5) Tuning works only on vllm and llamacpp. On mlx, sglang and nim it is refused because it could not change anything; mirbad_start_benchmark still works there. " +
-        "(6) mirbad_update_model saves settings without restarting. A running model keeps its old settings until mirbad_stop_model and then mirbad_start_model, and clients get 503 until it is Ready again, so ask before restarting a model people are using.";
+        "(5) Tuning works on vllm, llamacpp, mlx and sglang, and every candidate restarts the model. On nim it is refused because it could not change anything; mirbad_start_benchmark still works there. " +
+        "(6) mirbad_update_model saves settings without restarting. A running model keeps its old settings until mirbad_stop_model and then mirbad_start_model, and clients get 503 until it is Ready again, so ask before restarting a model people are using. " +
+        "(7) nim takes no repoId or folder, because its image fetches the model. Its NGC_API_KEY and any other secret or registry login can only be set in the portal, from a saved token.";
 
     [McpServerTool(Name = "mirbad_get_fleet_health", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
     [Description("Summarize controller, node, model, download, and job health.")]
@@ -232,9 +233,9 @@ public sealed partial class MirbadMcpTools(
     public async Task<object> DeployModel(
         string modelId,
         string servedName,
-        string repoId,
-        string folder,
         string nodeId,
+        [Description("Hugging Face repository. Required except on nim, which refuses it.")] string? repoId = null,
+        [Description("Folder under the models root. Required except on nim, which refuses it.")] string? folder = null,
         string? revision = null,
         IReadOnlyList<string>? allowPatterns = null,
         [Description("Runtime that serves the model.")] RuntimeKind runtime = RuntimeKind.Vllm,
@@ -254,11 +255,17 @@ public sealed partial class MirbadMcpTools(
     {
         RequireOperator();
         ValidateModelId(modelId);
+        bool nim = runtime == RuntimeKind.Nim;
+        if (nim && (repoId is not null || folder is not null || revision is not null || allowPatterns is not null || draftRepoId is not null))
+            throw new McpException("The Nim runtime's image fetches the model, so it does not use repoId, folder, revision, allowPatterns or draftRepoId; no state was changed.");
+        if (!nim && (repoId is null || folder is null))
+            throw new McpException("repoId and folder are required unless the runtime is nim.");
+        folder ??= modelId; // Only a label on NIM.
         ValidateFolder(folder);
         if (draftFolder is not null) ValidateFolder(draftFolder);
         if (string.IsNullOrWhiteSpace(servedName) || servedName.Length > 200)
             throw new McpException("servedName is required and must be at most 200 characters.");
-        if (!RepoIdRegex().IsMatch(repoId))
+        if (!nim && !RepoIdRegex().IsMatch(repoId!))
             throw new McpException("repoId must be a Hugging Face owner/repository identifier.");
         if (allowPatterns is { Count: > 32 } || allowPatterns?.Any(p => string.IsNullOrWhiteSpace(p) || p.Length > 200 || p.Contains("..", StringComparison.Ordinal)) == true)
             throw new McpException("allowPatterns may contain at most 32 non-empty repository-relative glob patterns without '..'.");
@@ -279,9 +286,10 @@ public sealed partial class MirbadMcpTools(
             Id = modelId,
             ServedName = servedName,
             ModelPath = folder,
-            Sources = draftRepoId is null
-                ? [new ModelSource(repoId, folder, revision, patterns)]
-                : [new ModelSource(repoId, folder, revision, patterns), new ModelSource(draftRepoId, draftFolder!)],
+            Sources = nim ? []
+                : draftRepoId is null
+                ? [new ModelSource(repoId!, folder, revision, patterns)]
+                : [new ModelSource(repoId!, folder, revision, patterns), new ModelSource(draftRepoId, draftFolder!)],
             Placement = new ModelPlacement(selected.NodeId, GpuIndices: gpuIndices),
         };
         if (memoryBudgetGiB is { } budget) model = model with { MemoryBudgetGiB = budget };
@@ -333,13 +341,20 @@ public sealed partial class MirbadMcpTools(
             throw new McpException(ex.Message, ex);
         }
 
+        if (nim)
+        {
+            await Audit(AuditActions.ModelCreate, modelId, selected.NodeId, AuditResults.Accepted, "MCP deploy").ConfigureAwait(false);
+            string[] nimNotes = [UnprovenImageNote];
+            return new { model, nodeId = selected.NodeId, planningNotes = nimNotes, nextAction = "Set NGC_API_KEY as a secret variable in the portal, then call mirbad_start_model." };
+        }
+
         try
         {
             // The small drafter goes first, so a refused draft leaves no large download running for a deleted model.
             DownloadStatus? draft = draftRepoId is null
                 ? null
                 : await selected.Value.StartAsync(new DownloadRequest(draftRepoId, Folder: draftFolder), ct).ConfigureAwait(false);
-            DownloadStatus state = await selected.Value.StartAsync(new DownloadRequest(repoId, revision, Folder: folder, AllowPatterns: patterns), ct).ConfigureAwait(false);
+            DownloadStatus state = await selected.Value.StartAsync(new DownloadRequest(repoId!, revision, Folder: folder, AllowPatterns: patterns), ct).ConfigureAwait(false);
             await Audit(AuditActions.ModelCreate, modelId, selected.NodeId, AuditResults.Accepted, "MCP deploy and download started").ConfigureAwait(false);
             string[] notes =
             [
@@ -385,6 +400,9 @@ public sealed partial class MirbadMcpTools(
             throw new McpException("speculativeOff cannot be combined with speculativeMethod, speculativeTokens or draftFolder; no state was changed.");
         if (speculativeOff && before.Runtime is RuntimeKind.LlamaCpp or RuntimeKind.Nim)
             throw new McpException($"The {before.Runtime} runtime does not use speculativeOff; no state was changed.");
+        // A new image or command would run with the model's secrets, and a caller here can't otherwise read them.
+        if (before.Container?.SecretEnv is { Count: > 0 } && (image is not null || extraArgs is not null))
+            throw new McpException($"Model '{modelId}' has secret variables, so its image and extra arguments can only be changed in the portal; no state was changed.");
         if (gpuIndices is not null && before.Placement is null)
             throw new McpException($"Model '{modelId}' is not placed on a node, so it has no GPUs to select; no state was changed.");
 
@@ -635,7 +653,7 @@ public sealed partial class MirbadMcpTools(
     }
 
     [McpServerTool(Name = "mirbad_start_tuning", ReadOnly = false, Destructive = false, Idempotent = false, OpenWorld = false, UseStructuredContent = true, OutputSchemaType = typeof(JsonObject))]
-    [Description("Start a tuning job on a vllm or llamacpp model and return immediately; the winner is never applied automatically. Other runtimes are refused.")]
+    [Description("Start a tuning job on a vllm, llamacpp, mlx or sglang model and return immediately; every candidate restarts the model and the winner is never applied automatically. nim is refused.")]
     public async Task<object> StartTuning(string modelId, TuningGoal goal = TuningGoal.Balanced, IReadOnlyList<TuningDimension>? dimensions = null, CancellationToken ct = default)
     {
         RequireOperator();

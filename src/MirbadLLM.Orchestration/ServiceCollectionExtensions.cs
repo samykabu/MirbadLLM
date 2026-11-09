@@ -305,7 +305,8 @@ public static class ServiceCollectionExtensions
             // The same preview instance the editor and /api/nodes/{id}/fit use, so a llama.cpp launch's host budget is
             // the number the operator was shown and the GGUF read is usually already cached (MN-239-17, item 12).
             sp.GetRequiredService<PlacementFit>(),
-            sp.GetRequiredService<ModelRecoveryState>()));
+            sp.GetRequiredService<ModelRecoveryState>(),
+            sp.GetService<ITokenStore>()));
         services.AddSingleton<IModelRuntime>(sp => sp.GetRequiredService<RemoteModelRuntime>());
         services.AddSingleton<IModelLauncher>(sp => sp.GetRequiredService<RemoteModelRuntime>());
 

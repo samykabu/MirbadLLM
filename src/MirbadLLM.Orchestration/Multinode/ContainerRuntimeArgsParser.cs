@@ -18,7 +18,8 @@ public static class ContainerRuntimeArgsParser
         var launched = template with
         {
             Runtime = launch.Runtime,
-            Container = new ContainerRuntimeSettings
+            // Keeps the saved variables and login: a launch doesn't report secrets, and they show through the fingerprint.
+            Container = (template.Container ?? new ContainerRuntimeSettings { Image = "" }) with
             {
                 Image = launch.Image ?? "",
                 ImageDigest = launch.ImageDigest,
@@ -26,6 +27,11 @@ public static class ContainerRuntimeArgsParser
                 ExtraArgs = template.Container?.ExtraArgs ?? [],
             },
         };
+        if (launch.Runtime == RuntimeKind.Nim && launch.Env.TryGetValue(LaunchSpecBuilder.NimServedNameVariable, out string? served) && served is { Length: > 0 })
+        {
+            launched = launched with { ServedName = served };
+        }
+
         return launch.Runtime == RuntimeKind.Sglang ? ParseSglang(launch.Argv, launched) : launched;
     }
 
@@ -36,15 +42,23 @@ public static class ContainerRuntimeArgsParser
         [
             "--model-path", "--served-model-name", "--host", "--port", "--speculative-algorithm", "--speculative-draft-model-path",
             .. algorithm is null ? Array.Empty<string>() : [SglangSpeculativeArgs.DepthFlag(algorithm)],
+            // The builder adds this from the GPU count unless the saved arguments set it.
+            .. LaunchSpecBuilder.SetsSglangTpSize(model.Container!.ExtraArgs) ? Array.Empty<string>() : ["--tp-size"],
         ];
 
         var extra = new List<string>();
         int start = argv.ToList().IndexOf("sglang.launch_server") + 1;
+        // The builder adds this flag itself unless the saved arguments do; it takes no value.
+        bool metricsAreOurs = !model.Container!.ExtraArgs.Contains(LaunchSpecBuilder.SglangEnableMetrics, StringComparer.Ordinal);
         for (int i = start; i < argv.Count; i++)
         {
             if (owned.Contains(argv[i], StringComparer.Ordinal))
             {
                 i++;
+            }
+            else if (metricsAreOurs && argv[i] == LaunchSpecBuilder.SglangEnableMetrics)
+            {
+                continue;
             }
             else
             {

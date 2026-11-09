@@ -171,7 +171,7 @@ public sealed partial class TelemetrySampler(
     /// <summary>Every Ready instance of every driver, scraped in parallel, in model-id order.</summary>
     private async Task<IReadOnlyList<ModelMetricsScrape>> ScrapeModelsAsync(CancellationToken ct)
     {
-        var ready = new Dictionary<string, IRuntimeDriver>(StringComparer.Ordinal);
+        var ready = new Dictionary<string, (IRuntimeDriver Driver, RuntimeKind Runtime)>(StringComparer.Ordinal);
         foreach (var driver in _drivers)
         {
             IReadOnlyList<RuntimeStatus> instances;
@@ -187,24 +187,24 @@ public sealed partial class TelemetrySampler(
 
             foreach (var instance in instances)
             {
-                // Only vLLM and llama.cpp have confirmed metric-family mappings. Other runtimes intentionally leave
-                // engine KPIs absent rather than treating similarly named vendor metrics as equivalent.
-                if (instance.State == ModelState.Ready && instance.Runtime is RuntimeKind.Vllm or RuntimeKind.LlamaCpp)
+                // mlx_lm.server has no metrics endpoint, so MLX stays out instead of failing every pass.
+                if (instance.State == ModelState.Ready && instance.Runtime != RuntimeKind.Mlx)
                 {
-                    ready.TryAdd(instance.ModelId, driver);
+                    ready.TryAdd(instance.ModelId, (driver, instance.Runtime));
                 }
             }
         }
 
         var scrapes = await Task.WhenAll(ready
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
-            .Select(kv => ScrapeAsync(kv.Key, kv.Value, ct))).ConfigureAwait(false);
+            .Select(kv => ScrapeAsync(kv.Key, kv.Value.Driver, kv.Value.Runtime, ct))).ConfigureAwait(false);
         return scrapes.OfType<ModelMetricsScrape>().ToList();
     }
 
     /// <summary>One model's scrape; null when it stopped running in between (no upstream any more).</summary>
-    private async Task<ModelMetricsScrape?> ScrapeAsync(string modelId, IRuntimeDriver driver, CancellationToken ct)
+    private async Task<ModelMetricsScrape?> ScrapeAsync(string modelId, IRuntimeDriver driver, RuntimeKind runtime, CancellationToken ct)
     {
+        string path = runtime == RuntimeKind.Nim ? "v1/metrics" : "metrics";
         try
         {
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -217,17 +217,22 @@ public sealed partial class TelemetrySampler(
             }
 
             string? apiKey = await driver.GetUpstreamApiKeyAsync(modelId, timeoutCts.Token).ConfigureAwait(false);
-            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(upstream, "metrics"));
+            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(upstream, path));
             if (apiKey is { Length: > 0 })
             {
                 request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
             }
 
             using var response = await http.Client.SendAsync(request, timeoutCts.Token).ConfigureAwait(false);
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound && runtime is RuntimeKind.Sglang or RuntimeKind.Nim)
+            {
+                return null; // Started without metrics (SGLang before --enable-metrics): not a failure to report every pass.
+            }
+
             if (!response.IsSuccessStatusCode)
             {
                 LogScrapeStatus(logger, modelId, (int)response.StatusCode);
-                return Failed(modelId, string.Create(CultureInfo.InvariantCulture, $"/metrics answered HTTP {(int)response.StatusCode}."));
+                return Failed(modelId, string.Create(CultureInfo.InvariantCulture, $"/{path} answered HTTP {(int)response.StatusCode}."));
             }
 
             string text = await response.Content.ReadAsStringAsync(timeoutCts.Token).ConfigureAwait(false);
@@ -237,7 +242,7 @@ public sealed partial class TelemetrySampler(
         {
             LogScrapeTimedOut(logger, modelId);
             return Failed(modelId, string.Create(CultureInfo.InvariantCulture,
-                $"/metrics did not answer within {_options.ScrapeTimeout.TotalSeconds:0.#} s."));
+                $"/{path} did not answer within {_options.ScrapeTimeout.TotalSeconds:0.#} s."));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

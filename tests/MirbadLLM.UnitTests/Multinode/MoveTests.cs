@@ -121,6 +121,7 @@ public sealed class MoveTests
             [
                 MoveCluster.Model("m1", "m1-ckpt"),
                 MoveCluster.Model("manual", "manual-ckpt") with { Sources = [] },
+                MoveCluster.Model("drafted", "drafted-ckpt") with { Speculative = new SpeculativeDecoding("dflash", 8) { DraftModel = "/models/drafted-draft" } },
                 MoveCluster.Model("held", "held-ckpt"),
             ]);
         await using var master = await cluster.StartMasterAsync();
@@ -133,6 +134,7 @@ public sealed class MoveTests
         }, Ct);
 
         await master.AssertProblemAsync("/api/models/manual/move", new { targetNodeId = MoveCluster.Target }, HttpStatusCode.Conflict, ErrorCodes.ModelNotMovable);
+        await master.AssertProblemAsync("/api/models/drafted/move", new { targetNodeId = MoveCluster.Target }, HttpStatusCode.Conflict, ErrorCodes.ModelNotMovable);
         await master.AssertProblemAsync("/api/models/m1/move", new { targetNodeId = MoveCluster.Source }, HttpStatusCode.BadRequest, ErrorCodes.InvalidRequest);
         await master.AssertProblemAsync("/api/models/m1/move", new { targetNodeId = "pc-drained", password = MoveCluster.Password }, HttpStatusCode.Conflict, ErrorCodes.NodeDraining);
         await master.AssertProblemAsync("/api/models/m1/move", new { targetNodeId = "pc-old", password = MoveCluster.Password }, HttpStatusCode.Conflict, ErrorCodes.NodeRevoked);

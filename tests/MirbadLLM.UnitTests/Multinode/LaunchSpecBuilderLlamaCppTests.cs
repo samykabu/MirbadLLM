@@ -492,9 +492,30 @@ public sealed class LaunchSpecBuilderLlamaCppTests
 
         Assert.Equal(8000, built.Spec.ContainerPort);
         Assert.Equal("/health", built.Spec.HealthPath);
+        Assert.Contains("--enable-metrics", built.Spec.Argv);
         Assert.Contains("/models/repo/model", built.Spec.Argv);
         Assert.Contains("served", built.Spec.Argv);
         Assert.Equal(["--tp", "2"], built.Spec.Argv.TakeLast(2));
+    }
+
+    [Fact]
+    public void SglangContainer_SetsTpSize_FromTheGpuCount_UnlessExtraArgsSetIt()
+    {
+        var node = ContainerNode();
+        ModelDefinition On(int gpus, params string[] extra) => ContainerModel(RuntimeKind.Sglang) with
+        {
+            Container = new ContainerRuntimeSettings { Image = "lmsysorg/sglang:1", ImageDigest = Digest, ExtraArgs = extra },
+            Placement = new ModelPlacement(node.Id, [.. Enumerable.Range(0, gpus).Select(i => $"GPU-{i}")]),
+        };
+        IReadOnlyList<string> Argv(ModelDefinition model) => LaunchSpecBuilder.Build(model, node, "unused", 120, false,
+            nodeFeatures: [AgentFeatures.RuntimeSglangContainer, AgentFeatures.GpuSelectionUuids]).Spec.Argv;
+
+        Assert.Equal("2", Argv(On(2))[Argv(On(2)).ToList().IndexOf("--tp-size") + 1]);
+        // One GPU keeps the same arguments, so a running model's fingerprint doesn't change.
+        Assert.DoesNotContain("--tp-size", Argv(On(1)));
+        Assert.DoesNotContain("--tp-size", Argv(On(2, "--tp", "1")));
+        Assert.DoesNotContain("--tp-size", Argv(On(2, "--tp=1")));
+        Assert.Equal(["--tp-size", "1"], Argv(On(2, "--tp-size", "1")).TakeLast(2));
     }
 
     [Theory]
@@ -583,8 +604,122 @@ public sealed class LaunchSpecBuilderLlamaCppTests
 
         Assert.Equal("/v1/health/ready", built.Spec.HealthPath);
         Assert.Equal(["NGC_API_KEY"], built.Spec.SecretEnvNames);
+        Assert.Equal("served", built.Spec.Env["NIM_SERVED_MODEL_NAME"]);
         Assert.Single(built.Spec.Mounts);
         Assert.Equal(LogicalVolumes.Cache, built.Spec.Mounts[0].Volume);
+    }
+
+    [Fact]
+    public void NimContainer_SendsSavedVariables_AndTheFingerprintIgnoresASecretsValue()
+    {
+        var model = ContainerModel(RuntimeKind.Nim) with
+        {
+            Container = new ContainerRuntimeSettings
+            {
+                Image = "nvcr.io/nim/a:1",
+                ImageDigest = Digest,
+                Env = new Dictionary<string, string> { ["NIM_MODEL_PROFILE"] = "fast" },
+                SecretEnv = new Dictionary<string, string> { ["NGC_API_KEY"] = "my ngc key" },
+            },
+        };
+        string[] features = [AgentFeatures.RuntimeNimContainer, AgentFeatures.LaunchEnv];
+        var withValue = LaunchSpecBuilder.Build(model, ContainerNode(), "unused", 120, false,
+            new LaunchEnvironment(new Dictionary<string, string> { ["NGC_API_KEY"] = "secret" }, ["NGC_API_KEY"]), features);
+        var withoutValue = LaunchSpecBuilder.Build(model, ContainerNode(), "unused", 120, false, nodeFeatures: features);
+
+        Assert.Equal("secret", withValue.Spec.Env["NGC_API_KEY"]);
+        Assert.Equal("fast", withValue.Spec.Env["NIM_MODEL_PROFILE"]);
+        Assert.Equal(["NGC_API_KEY"], withoutValue.Spec.SecretEnvNames);
+        Assert.False(withoutValue.Spec.Env.ContainsKey("NGC_API_KEY"));
+        Assert.Equal(withValue.ExecutionFingerprint, withoutValue.ExecutionFingerprint);
+    }
+
+    [Theory]
+    [InlineData("NGC_API_KEY", "looks like a secret")]
+    [InlineData("MY_token", "looks like a secret")]
+    [InlineData("1BAD", "not a valid")]
+    [InlineData("NIM_SERVED_MODEL_NAME", "set from the served name")]
+    public void ContainerVariables_RefuseWhatMustNotBePlain(string name, string message)
+    {
+        var settings = new ContainerRuntimeSettings { Image = "a:1", Env = new Dictionary<string, string> { [name] = "x" } };
+        Assert.Contains(message, LaunchSpecBuilder.ContainerEnvProblem(settings), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("nvcr.io/nim/a:1", null)]
+    [InlineData("nvcr.io/nim/a@sha256:abc", null)]
+    [InlineData("evil.example/nim:1", "but the image is on evil.example")]
+    [InlineData("nim/a:1", "but the image is on docker.io")]
+    public void ARegistryLogin_IsOnlyForItsOwnRegistry(string image, string? message)
+    {
+        var settings = new ContainerRuntimeSettings { Image = image, RegistryLogin = new ContainerRegistryLogin("nvcr.io", "$oauthtoken", "ngc") };
+        string? problem = LaunchSpecBuilder.ContainerEnvProblem(settings);
+        if (message is null)
+        {
+            Assert.Null(problem);
+        }
+        else
+        {
+            Assert.Contains(message, problem, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task Credentials_ComeFromSavedTokens_AndAMissingOneStopsTheStart()
+    {
+        var tokens = new OneToken("NGC", "the-value");
+        var model = ContainerModel(RuntimeKind.Nim) with
+        {
+            Container = new ContainerRuntimeSettings
+            {
+                Image = "nvcr.io/nim/a:1",
+                SecretEnv = new Dictionary<string, string> { ["NGC_API_KEY"] = "ngc" },
+                RegistryLogin = new ContainerRegistryLogin("nvcr.io", "$oauthtoken", "ngc"),
+            },
+        };
+
+        var resolved = await ContainerCredentials.ResolveAsync(tokens, model, Xunit.TestContext.Current.CancellationToken);
+
+        Assert.Equal("the-value", resolved.Environment.Variables["NGC_API_KEY"]);
+        Assert.Equal(["NGC_API_KEY"], resolved.Environment.SecretNames);
+        Assert.Equal("the-value", resolved.Registry!.Password);
+        Assert.DoesNotContain("the-value", resolved.Registry.ToString(), StringComparison.Ordinal);
+
+        var missing = await Assert.ThrowsAsync<ModelStartConflictException>(() => ContainerCredentials.ResolveAsync(new OneToken("other", "x"), model, Xunit.TestContext.Current.CancellationToken));
+        Assert.Contains("'ngc'", missing.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("the-value", missing.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RegistryPassword_IsRedacted_InAStoredPayload_AndInTheDockerHeaderGoesToItsHost()
+    {
+        var login = new RegistryCredentials { Username = "$oauthtoken", Password = "the-value" };
+        string header = login.ToDockerHeader("nvcr.io").Replace('-', '+').Replace('_', '/');
+        string json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(header));
+        Assert.Contains("\"serveraddress\":\"nvcr.io\"", json, StringComparison.Ordinal);
+        Assert.Contains("the-value", json, StringComparison.Ordinal);
+
+        var pull = new ImagePullRequest { OperationId = "op", IssuedAt = DateTimeOffset.UnixEpoch, ExpiresAt = DateTimeOffset.UnixEpoch, Image = "nvcr.io/nim/a:1", Registry = login };
+        string stored = OperationPayload.Redact(System.Text.Json.JsonSerializer.SerializeToElement(pull, AgentJson.Options)).GetRawText();
+        Assert.DoesNotContain("the-value", stored, StringComparison.Ordinal);
+    }
+
+    private sealed class OneToken(string name, string value) : ITokenStore
+    {
+        public Task<IReadOnlyList<SavedToken>> ListAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<SavedToken>>([new SavedToken("id", name, "alue", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch)]);
+
+        public Task<string?> GetValueAsync(string id, CancellationToken ct = default) => Task.FromResult<string?>(id == "id" ? value : null);
+
+        public Task<SavedToken> AddAsync(string name, string value, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<SavedToken?> UpdateAsync(string id, string name, string? value, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<bool> DeleteAsync(string id, CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<SavedTokenSecret>> ExportAsync(CancellationToken ct = default) => throw new NotSupportedException();
+
+        public Task<SavedTokenImportResult> ImportAsync(IReadOnlyList<SavedTokenSecret> tokens, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private const string Digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

@@ -500,7 +500,7 @@ public sealed class ModelEditorTests : IDisposable
         var options = cut.FindAll("[data-testid=field-gguf-variant] option");
         Assert.Equal(2, options.Count);
         Assert.Contains(options, o => o.TextContent.Contains("Q4_K_M") && o.TextContent.Contains("1 file"));
-        Assert.Contains("MirbadLLM runs models with vLLM", cut.Find("[data-testid=gguf-runtime-note]").TextContent);
+        Assert.Contains("vLLM's GGUF support is experimental", cut.Find("[data-testid=gguf-runtime-note]").TextContent);
 
         // Picking the first variant sets Allow patterns to exactly its files.
         Assert.Equal("model-Q4_K_M-00001-of-00001.gguf", ((IHtmlInputElement)cut.Find("[data-testid=field-allow-patterns]")).Value);

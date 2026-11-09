@@ -779,6 +779,11 @@ public sealed class ModelJobService(
             return LlamaCppTuning.MergeTuned(saved, candidateSettings);
         }
 
+        if (SmallRuntimeTuning.Applies(saved))
+        {
+            return SmallRuntimeTuning.MergeTuned(saved, candidateSettings);
+        }
+
         var w = VllmArgsNormalizer.Apply(candidateSettings);
         return VllmArgsNormalizer.Apply(VllmArgsNormalizer.Apply(saved) with
         {
@@ -834,7 +839,7 @@ public sealed class ModelJobService(
     /// A classic goal asked for a vLLM model is kept exactly as before.
     /// </summary>
     private static TuningGoal EffectiveGoal(ModelDefinition model, TuningGoal goal) =>
-        WorkloadProfiles.IsPreset(goal) || LlamaCppTuning.Applies(model)
+        WorkloadProfiles.IsPreset(goal) || LlamaCppTuning.Applies(model) || SmallRuntimeTuning.Applies(model)
             ? WorkloadProfiles.PresetFor(goal, PoolingDetection.Detect(model) != PoolingMode.None)
             : goal;
 
@@ -1538,6 +1543,11 @@ public sealed class ModelJobService(
     /// </summary>
     private async Task<(IReadOnlyList<string> Notes, string? KvPool)> ReadRuntimeNotesAsync(string modelId, ModelDefinition requested, CancellationToken ct)
     {
+        if (requested.Runtime != RuntimeKind.Vllm)
+        {
+            return ([], null); // The parser only knows vLLM's log lines, so "as requested" would be a claim nothing checked.
+        }
+
         var lines = new List<string>();
         try
         {

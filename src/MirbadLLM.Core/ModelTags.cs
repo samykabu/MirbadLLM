@@ -132,10 +132,13 @@ public static class ModelTags
     /// <paramref name="hasVisionConfig"/> whether it has a <c>vision_config</c>. Suggestions only — the editor shows
     /// them and never applies them on its own, except to prefill a brand-new model whose tags were not touched.
     /// </summary>
+    private static bool HasFlag(IReadOnlyList<string> args, string flag) => args.Any(a => a.TrimStart().StartsWith(flag, StringComparison.Ordinal));
+
     public static IReadOnlyList<string> Suggest(ModelDefinition model, string? architecture = null, bool hasVisionConfig = false)
     {
         ArgumentNullException.ThrowIfNull(model);
-        var args = model.ExtraArgs ?? [];
+        // A container runtime keeps its flags in its own list, and the editor's lines can hold a flag with its value.
+        IReadOnlyList<string> args = [.. model.ExtraArgs ?? [], .. model.Container?.ExtraArgs ?? []];
         string names = $"{model.ServedName} {model.ModelPath}";
 
         bool reranker = HasArg(args, "--convert", "classify") || HasArg(args, "--task", "score") ||
@@ -147,12 +150,12 @@ public static class ModelTags
         if (!pooling)
         {
             suggested.Add(Chat);
-            if (!string.IsNullOrWhiteSpace(model.ToolCallParser))
+            if (!string.IsNullOrWhiteSpace(model.ToolCallParser) || HasFlag(args, "--tool-call-parser"))
             {
                 suggested.Add(ToolCalling);
             }
 
-            if (!string.IsNullOrWhiteSpace(model.ReasoningParser))
+            if (!string.IsNullOrWhiteSpace(model.ReasoningParser) || HasFlag(args, "--reasoning-parser"))
             {
                 suggested.Add(Reasoning);
             }
@@ -168,7 +171,7 @@ public static class ModelTags
             suggested.Add(Reranker);
         }
 
-        if (model.Speculative is not null || args.Any(a => a.TrimStart().StartsWith("--speculative-config", StringComparison.Ordinal)))
+        if (model.Speculative is not null || HasFlag(args, "--speculative-config") || HasFlag(args, "--speculative-algorithm"))
         {
             suggested.Add(Speculative);
         }

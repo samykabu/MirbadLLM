@@ -120,6 +120,49 @@ public sealed class ModelEditorLlamaCppTests
     }
 
     [Fact]
+    public async Task FleetOfOneWithDiscreteGpus_ChoosesGpus_AndSavesThemOnAnExistingModel()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "ss-one-discrete-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            const string Gpu1 = "GPU-second";
+            var twoGpus = WindowsPc() with
+            {
+                Features = [AgentFeatures.GpuSelectionUuids],
+                Runtimes = [],
+                Gpus =
+                [
+                    new GpuCapability { Index = 0, Uuid = Gpu0, Name = "NVIDIA GeForce RTX 5060 Ti", MemoryTotalGiB = 16 },
+                    new GpuCapability { Index = 1, Uuid = Gpu1, Name = "NVIDIA GeForce RTX 5060 Ti", MemoryTotalGiB = 16 },
+                ],
+            };
+            var model = new ModelDefinition { Id = "m", ServedName = "m", ModelPath = "m", Placement = new ModelPlacement("pc-office", [Gpu0], [0]) };
+            using var ctx = new BunitContext();
+            OneNode(ctx, root, twoGpus);
+            var registry = (FakeModelRegistry)ctx.Services.GetRequiredService<IModelRegistry>();
+            await registry.UpsertAsync(model, Xunit.TestContext.Current.CancellationToken);
+
+            // A new model must choose, and the step says so.
+            var add = ctx.Render<ModelEditor>(p => Quiet(p));
+            add.WaitForElement("[data-testid=single-node-gpus]", Wait);
+            Assert.Equal("GPUs", add.Find("[data-testid=wizard-step-where] .wizard-step-label").TextContent.Trim());
+            Assert.Equal("Choose at least one GPU.", add.Find("[data-testid=wizard-next-hint]").TextContent.Trim());
+
+            // An existing model shows its GPUs, and a change is saved on its placement.
+            var edit = ctx.Render<ModelEditor>(p => p.Add(x => x.Id, "m"));
+            edit.WaitForElement("[data-testid=single-node-gpus]", Wait);
+            edit.Find($"[data-testid=single-node-gpus-check-{Gpu1}]").Change(true);
+            edit.Find("form").Submit();
+            edit.WaitForAssertion(() => Assert.Equal(2, registry.GetAsync("m", Xunit.TestContext.Current.CancellationToken).Result!.Placement!.GpuUuids!.Count), Wait);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void RuntimeOption_StaysHiddenOnAFleetOfOneNodeWithoutLlamaCpp()
     {
         // The DGX's own page is exactly as before: no runtime option where there is no second runtime.

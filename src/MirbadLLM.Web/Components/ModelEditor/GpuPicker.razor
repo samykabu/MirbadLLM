@@ -104,6 +104,14 @@
                 <span>One GPU (<code>--split-mode none</code>), or several of any size: llama.cpp splits the layers by their budgets. GPUs are saved by their UUID, so the model keeps its card if the indices change.</span>
             }
         }
+        else if (Selected.Count > 1 && Runtime == RuntimeKind.Sglang)
+        {
+            <span>SGLang runs on <span class="num">@Selected.Count</span> GPUs in tensor parallel (<code>--tp-size @Selected.Count</code>), unless Extra args set it.</span>
+        }
+        else if (Selected.Count > 1 && Runtime == RuntimeKind.Nim)
+        {
+            <span>NIM's container sees these <span class="num">@Selected.Count</span> GPUs, and the image decides how to use them.</span>
+        }
         else if (Selected.Count > 1)
         {
             <span>vLLM runs on <span class="num">@Selected.Count</span> GPUs in tensor parallel (<code>--tensor-parallel-size @Selected.Count</code>), the memory budget split evenly across them.</span>
@@ -152,6 +160,10 @@
     /// </summary>
     [Parameter]
     public bool AllowUnequal { get; set; }
+
+    /// <summary>The model's runtime, for the text about several GPUs.</summary>
+    [Parameter]
+    public RuntimeKind Runtime { get; set; } = RuntimeKind.Vllm;
 
     /// <summary>The per-GPU budgets in <see cref="Selected"/> order (null = not typed); used with <see cref="AllowUnequal"/>.</summary>
     [Parameter]

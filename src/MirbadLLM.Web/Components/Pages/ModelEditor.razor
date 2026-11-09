@@ -46,7 +46,7 @@ else
                 }
                 else
                 {
-                    <span>Register a checkpoint as a vLLM model. Fields fill in from the checkpoint; every setting has an info button.</span>
+                    <span>Register a checkpoint @(_runtime == RuntimeKind.Vllm ? "as a vLLM model" : "to serve with " + LlamaCppEditing.RuntimeName(_runtime)). Fields fill in from the checkpoint; every setting has an info button.</span>
                 }
             </Subtitle>
         </PageHeader>
@@ -55,7 +55,7 @@ else
     {
         <ModelHeader ModelId="@(Id ?? "")" Current="settings" StatusChanged="OnHeaderStatusAsync" />
         <p class="editor-lede" data-testid="editor-lede">
-            Every setting is @(IsLlamaCpp ? "a llama-server" : IsMlx ? "an mlx_lm.server" : "a vLLM") launch argument: a running model picks changes up when it restarts. Saving asks whether to restart now.
+            Every setting is @(IsLlamaCpp ? "a llama-server" : IsMlx ? "an mlx_lm.server" : "a " + LlamaCppEditing.RuntimeName(_runtime)) launch argument: a running model picks changes up when it restarts. Saving asks whether to restart now.
         </p>
     }
 
@@ -150,16 +150,27 @@ else
                 @placement
             }
         }
-        else if (IsNew && RuntimePicker.Offers(_singleNode, _runtime))
+        else if (IsNew && SingleNodeHasWhereStep)
         {
-            @* A fleet of one that offers a runtime choice: the runtime decides what a checkpoint is (a folder or a GGUF), so it comes first. *@
+            @* A fleet of one that offers a runtime choice: the runtime decides what a checkpoint is (a folder or a GGUF), so it comes first. A discrete node also needs its GPUs picked. *@
             <section class="panel form-section" aria-labelledby="sec-runtime" data-wizard-step="where" hidden="@StepHidden(WizardStep.Where)" data-testid="runtime-step">
                 <div class="form-section-intro">
-                    <h2 id="sec-runtime">Runtime</h2>
-                    <p>@SingleNodeText serves models with more than one runtime. The runtime decides what a checkpoint is: @RuntimeCheckpointText.</p>
+                    <h2 id="sec-runtime">@StepLabel(WizardStep.Where)</h2>
+                    @if (RuntimePicker.Offers(_singleNode, _runtime))
+                    {
+                        <p>@SingleNodeText serves models with more than one runtime. The runtime decides what a checkpoint is: @RuntimeCheckpointText.</p>
+                    }
+                    else
+                    {
+                        <p>@SingleNodeText has discrete GPUs, so choose the ones this model runs on.</p>
+                    }
                 </div>
                 <div class="field-grid">
-                    <RuntimePicker Node="_singleNode" IsNew="true" Runtime="_runtime" RuntimeChanged="OnRuntimeChangedAsync" />
+                    @if (RuntimePicker.Offers(_singleNode, _runtime))
+                    {
+                        <RuntimePicker Node="_singleNode" IsNew="true" Runtime="_runtime" RuntimeChanged="OnRuntimeChangedAsync" />
+                    }
+                    @SingleNodeGpus
                 </div>
             </section>
         }
@@ -362,7 +373,7 @@ else
                                         <div class="callout callout--busy" data-testid="gguf-runtime-note">
                                             <Icon Name="warning" />
                                             <div class="callout-body">
-                                                MirbadLLM runs models with vLLM. vLLM's GGUF support is experimental, needs a single-file GGUF
+                                                vLLM's GGUF support is experimental, needs a single-file GGUF
                                                 (split files must be merged first), and does not cover every architecture — this model may not start.
                                             </div>
                                         </div>
@@ -491,8 +502,12 @@ else
                         {
                             <RuntimePicker Node="_singleNode" IsNew="IsNew" Runtime="_runtime" RuntimeChanged="OnRuntimeChangedAsync" />
                         }
+                        @if (!IsNew)
+                        {
+                            @SingleNodeGpus
+                        }
                     }
-                    <div class="field field--wide">
+                    <div class="field field--wide" hidden="@IsNim">
                         <FieldHelp Label="Model path" For="field-model-path" Help="@ModelFieldHelp.ModelPath" />
                         <InputText class="form-control num" id="field-model-path" @bind-Value="_model.ModelPath" data-testid="field-model-path" autocomplete="off" spellcheck="false"
                                    aria-describedby="field-model-path-error" />
@@ -566,7 +581,7 @@ else
                 </div>
             </section>
 
-            <section class="panel form-section" aria-labelledby="sec-download-source" data-wizard-step="@WizardAttr(WizardStep.Identity)" hidden="@StepHidden(WizardStep.Identity)">
+            <section class="panel form-section" aria-labelledby="sec-download-source" data-wizard-step="@WizardAttr(WizardStep.Identity)" hidden="@(IsNim || StepHidden(WizardStep.Identity))">
                 <div class="form-section-intro">
                     <h2 id="sec-download-source">Source</h2>
                     <p>Where the checkpoint comes from, so a restore from a backup can download it again.</p>
@@ -703,10 +718,22 @@ else
                         <p>Use an explicit image. MirbadLLM owns the model path, served name, host and port; extra arguments are appended last.</p>
                     </div>
                     <div class="field-grid">
-                        <div class="field"><FieldHelp Label="Memory budget (GiB)" For="field-memory-budget" Help="@ModelFieldHelp.MemoryBudgetGiB" /><InputNumber class="form-control num" id="field-memory-budget" @bind-Value="_model.MemoryBudgetGiB" /></div>
-                        <div class="field field--wide"><label class="field-label" for="field-image">Image</label><InputText class="form-control num" id="field-image" data-testid="field-image" @bind-Value="_model.Image" /></div>
+                        <div class="field"><FieldHelp Label="Memory budget (GiB)" For="field-memory-budget" Help="@ModelFieldHelp.MemoryBudgetGiB" /><InputNumber class="form-control num" id="field-memory-budget" aria-describedby="field-container-budget-hint" @bind-Value="_model.MemoryBudgetGiB" /><div class="field-hint" id="field-container-budget-hint" data-testid="field-container-budget-hint">Checked before the model starts, but the server sizes its own memory.@(_runtime == RuntimeKind.Sglang ? " To limit it, set --mem-fraction-static in Extra args." : "")</div></div>
+                        <div class="field field--wide"><label class="field-label" for="field-image">Image</label><InputText class="form-control num" id="field-image" data-testid="field-image" list="field-image-suggestions" @bind-Value="_model.Image" />
+                            <datalist id="field-image-suggestions" data-testid="field-image-suggestions">
+                                @foreach (string image in ContainerImageSuggestions)
+                                {
+                                    <option value="@image"></option>
+                                }
+                            </datalist>
+                        </div>
                         <div class="field field--wide"><label class="field-label" for="field-image-digest">Image digest</label><InputText class="form-control num" id="field-image-digest" data-testid="field-image-digest" @bind-Value="_model.ImageDigest" placeholder="@(_runtime == RuntimeKind.Nim ? "sha256:… (required)" : "sha256:…")" /></div>
                         <div class="field field--wide"><label class="field-label" for="field-extra-args">Extra args (one flag and its value per line)</label><InputTextArea class="form-control num" id="field-extra-args" data-testid="field-extra-args" rows="4" @bind-Value="_model.ExtraArgsText" /></div>
+                        <div class="field field--wide"><label class="field-label" for="field-container-env">Environment variables (one NAME=value per line)</label><InputTextArea class="form-control num" id="field-container-env" data-testid="field-container-env" rows="2" spellcheck="false" aria-describedby="field-container-env-hint" @bind-Value="_model.ContainerEnvText" /><div class="field-hint" id="field-container-env-hint">These values show in the portal and APIs, so never put a key here.</div></div>
+                        <div class="field field--wide"><label class="field-label" for="field-container-secret-env">Secret variables (one NAME=saved token name per line)</label><InputTextArea class="form-control num" id="field-container-secret-env" data-testid="field-container-secret-env" rows="2" spellcheck="false" aria-describedby="field-container-secret-env-hint" placeholder="@(IsNim ? "NGC_API_KEY=my NGC key" : "")" @bind-Value="_model.ContainerSecretEnvText" /><div class="field-hint" id="field-container-secret-env-hint">Save the value under <a href="access/tokens">Access &gt; Tokens</a> first. It's read when the model starts, and Docker keeps it in the container's settings on the node.</div></div>
+                        <div class="field"><label class="field-label" for="field-registry-token">Registry login: saved token name</label><InputText class="form-control num" id="field-registry-token" data-testid="field-registry-token" spellcheck="false" aria-describedby="field-registry-hint" @bind-Value="_model.RegistryTokenName" /></div>
+                        <div class="field"><label class="field-label" for="field-registry-username">Registry login: username</label><InputText class="form-control num" id="field-registry-username" data-testid="field-registry-username" spellcheck="false" placeholder="$oauthtoken" aria-describedby="field-registry-hint" @bind-Value="_model.RegistryUsername" /></div>
+                        <div class="field field--wide"><div class="field-hint" id="field-registry-hint">For a private image only. The token is sent only to this image's registry. nvcr.io uses the username $oauthtoken and your NGC key.</div></div>
                         @if (_runtime == RuntimeKind.Sglang)
                         {
                             <div class="field field--wide">
@@ -745,6 +772,12 @@ else
                                     <FieldHelp Label="Draft model path" For="field-speculative-draft-model" Help="@ModelFieldHelp.SglangSpeculativeDraftModel" />
                                     <InputText class="form-control num" id="field-speculative-draft-model" data-testid="field-speculative-draft-model"
                                                @bind-Value="_model.SpeculativeDraftModel" placeholder="/models/…" spellcheck="false" />
+                                    @if (DraftFolderWithoutSource is { } draftFolder)
+                                    {
+                                        <div class="field-hint" data-testid="field-speculative-draft-source-hint">
+                                            @draftFolder isn't listed under Extra checkpoints. It must already be on the node, and the model can't be moved until you add it there.
+                                        </div>
+                                    }
                                 </div>
                             }
                         }
@@ -1228,7 +1261,25 @@ else
     private readonly Dictionary<WizardStep, ElementReference> _stepButtons = [];
     private bool _focusStep;
 
-    private bool HasWhereStep => _multiNode || RuntimePicker.Offers(_singleNode, _runtime);
+    private bool HasWhereStep => _multiNode || SingleNodeHasWhereStep;
+
+    private bool SingleNodeHasWhereStep => RuntimePicker.Offers(_singleNode, _runtime) || _singleNode is { Discrete: true };
+
+    /// <summary>The GPU choice of a fleet of one with discrete GPUs, which has no Placement section to hold it.</summary>
+    private RenderFragment SingleNodeGpus => __builder =>
+    {
+        if (_singleNode is { Discrete: true } single)
+        {
+            <div class="field field--wide">
+                <FieldHelp Label="GPUs" For="single-node-gpus" ShowLabel="false" Help="@ModelFieldHelp.Gpus">
+                    <Leading><span class="field-label">GPUs on @single.Id</span></Leading>
+                </FieldHelp>
+                <GpuPicker Gpus="single.Gpus" Selected="_gpus" SelectedChanged="OnGpusChangedAsync" Stored="_original?.Placement?.GpuUuids"
+                           Node="@single.Id" TestId="single-node-gpus" AllowUnequal="IsLlamaCpp" Runtime="_runtime"
+                           Budgets="_llama.GpuBudgets" BudgetsChanged="OnGpuBudgetsChangedAsync" TotalBudgetGiB="_model.MemoryBudgetGiB" TensorSplit="@LlamaTensorSplit" />
+            </div>
+        }
+    };
 
     private List<WizardStep> WizardSteps
     {
@@ -1240,12 +1291,16 @@ else
                 steps.Add(WizardStep.Where);
             }
 
-            steps.Add(WizardStep.Checkpoint);
+            if (!IsNim)
+            {
+                steps.Add(WizardStep.Checkpoint); // A NIM image fetches its model.
+            }
+
             steps.Add(WizardStep.Identity);
             steps.Add(WizardStep.Memory);
-            if (!IsLlamaCpp && !IsMlx)
+            if (!IsLlamaCpp && !IsMlx && !IsSharedContainer)
             {
-                // llama.cpp and MLX keep their performance settings and auto-start in their own settings section.
+                // llama.cpp, MLX and the container runtimes keep these settings and auto-start in their own section.
                 steps.Add(WizardStep.Tuning);
             }
 
@@ -1289,20 +1344,20 @@ else
 
     private string StepLabel(WizardStep step) => step switch
     {
-        WizardStep.Where => _multiNode ? "Placement" : "Runtime",
+        WizardStep.Where => _multiNode ? "Placement" : RuntimePicker.Offers(_singleNode, _runtime) ? "Runtime" : "GPUs",
         WizardStep.Checkpoint => "Checkpoint",
         WizardStep.Identity => "Name and tags",
-        WizardStep.Memory => IsLlamaCpp ? "llama.cpp settings" : IsMlx ? "MLX settings" : "Memory",
+        WizardStep.Memory => IsLlamaCpp ? "llama.cpp settings" : IsMlx ? "MLX settings" : IsSharedContainer ? "Container settings" : "Memory",
         WizardStep.Tuning => "Tuning",
         _ => "Review",
     };
 
     private string StepHint(WizardStep step) => step switch
     {
-        WizardStep.Where => _multiNode ? "Node and GPUs" : RuntimeChoiceText,
+        WizardStep.Where => _multiNode ? "Node and GPUs" : RuntimePicker.Offers(_singleNode, _runtime) ? RuntimeChoiceText : "Which GPUs to use",
         WizardStep.Checkpoint => "A folder or a download",
         WizardStep.Identity => "Id, served name, source",
-        WizardStep.Memory => IsLlamaCpp ? "Context, offload, budget" : IsMlx ? "Context, cache, budget" : "Budget and context",
+        WizardStep.Memory => IsLlamaCpp ? "Context, offload, budget" : IsMlx ? "Context, cache, budget" : IsSharedContainer ? "Image, arguments, budget" : "Budget and context",
         WizardStep.Tuning => "Parsers, speed, image",
         _ => "Check and add",
     };
@@ -1311,6 +1366,7 @@ else
     private string? NextBlocker => CurrentStep switch
     {
         WizardStep.Where when NeedsNode => "Choose a node first.",
+        WizardStep.Where when SingleNodeNeedsGpus => "Choose at least one GPU.",
         WizardStep.Checkpoint when string.IsNullOrWhiteSpace(_model.ModelPath) =>
             _source == SourceMode.Download ? "Finish the download, or pick a folder instead." : "Choose a checkpoint folder.",
         WizardStep.Checkpoint when IsLlamaCpp && string.IsNullOrWhiteSpace(_llama.File) => "Choose the GGUF file.",
@@ -1318,6 +1374,8 @@ else
             "Fill in the id and the served name.",
         _ => null,
     };
+
+    private bool SingleNodeNeedsGpus => IsNew && !_multiNode && _singleNode is { Discrete: true } && _gpus.Count == 0;
 
     // ---- Step order ----
     // Steps open strictly in sequence: up to the furthest step reached through Next (each Next checks its step), and
@@ -1364,7 +1422,8 @@ else
     private string[] StepFields(WizardStep step) => step switch
     {
         WizardStep.Identity => IdentityFields,
-        WizardStep.Memory => IsLlamaCpp || IsMlx ? [nameof(EditModel.MemoryBudgetGiB)] : MemoryFields,
+        WizardStep.Memory => IsSharedContainer ? [nameof(EditModel.MemoryBudgetGiB), .. TuningFields]
+            : IsLlamaCpp || IsMlx ? [nameof(EditModel.MemoryBudgetGiB)] : MemoryFields,
         WizardStep.Tuning => TuningFields,
         _ => [],
     };
@@ -1392,6 +1451,7 @@ else
         string? required = step switch
         {
             WizardStep.Where when NeedsNode => "Choose a node first.",
+            WizardStep.Where when SingleNodeNeedsGpus => "Choose at least one GPU.",
             WizardStep.Checkpoint when string.IsNullOrWhiteSpace(_model.ModelPath) =>
                 _source == SourceMode.Download ? "Finish the download, or pick a folder instead." : "Choose a checkpoint folder.",
             WizardStep.Checkpoint when IsLlamaCpp && string.IsNullOrWhiteSpace(_llama.File) => "Choose the GGUF file.",
@@ -1412,6 +1472,7 @@ else
         return step switch
         {
             WizardStep.Memory when IsMlx && MlxSettingsProblem() is not null => "Fix the problems shown above first.",
+            WizardStep.Memory when IsSharedContainer && DigestProblem is { } digest => "Image digest: " + digest,
             WizardStep.Memory when !IsLlamaCpp && BudgetTooSmall => "The budget is too small for this context: raise it or lower Max model len.",
             WizardStep.Tuning when ExtraArgsPreview.Problems.Count > 0 || DigestProblem is not null => "Fix the problems shown above first.",
             _ => null,
@@ -1482,7 +1543,7 @@ else
         bool identity = Invalid(form, () => _model.Id) is not null || Invalid(form, () => _model.ServedName) is not null
             || Invalid(form, () => _model.ModelPath) is not null;
         bool memory = Invalid(form, () => _model.MemoryBudgetGiB) is not null || Invalid(form, () => _model.MaxModelLen) is not null;
-        WizardStep target = identity ? WizardStep.Identity : memory || IsLlamaCpp || IsMlx ? WizardStep.Memory : WizardStep.Tuning;
+        WizardStep target = identity ? WizardStep.Identity : memory || IsLlamaCpp || IsMlx || IsSharedContainer ? WizardStep.Memory : WizardStep.Tuning;
         return OpenStepAsync(target);
     }
 
@@ -1535,7 +1596,7 @@ else
                         </dd>
                     </div>
                 }
-                <div class="review-row">
+                <div class="review-row" hidden="@IsNim">
                     <dt>Checkpoint</dt>
                     <dd>
                         <span class="review-value">
@@ -1585,7 +1646,7 @@ else
                             {
                                 <span class="muted" data-testid="review-mlx-context"> · <span class="num">@_mlx.ContextSize.ToString("N0", CultureInfo.InvariantCulture)</span> tokens per request × <span class="num">@_mlx.Parallel</span></span>
                             }
-                            else if (!IsLlamaCpp)
+                            else if (!IsLlamaCpp && !IsSharedContainer)
                             {
                                 <span class="muted"> · <span class="num">@_model.MaxModelLen.ToString("N0", CultureInfo.InvariantCulture)</span> tokens of context</span>
                             }
@@ -1603,7 +1664,20 @@ else
                         <button type="button" class="btn btn-sm btn-ghost" data-testid="review-edit-memory" @onclick="() => GoToStepAsync(WizardStep.Memory)">Edit</button>
                     </dd>
                 </div>
-                @if (!IsLlamaCpp && !IsMlx)
+                @if (IsSharedContainer)
+                {
+                    <div class="review-row">
+                        <dt>Container</dt>
+                        <dd>
+                            <span class="review-value" data-testid="review-container">
+                                <code>@(string.IsNullOrWhiteSpace(_model.Image) ? "No image chosen" : _model.Image)</code>
+                                <span class="muted"> · auto-start @(_model.AutoStart ? "on" : "off")</span>
+                            </span>
+                            <button type="button" class="btn btn-sm btn-ghost" data-testid="review-edit-container" @onclick="() => GoToStepAsync(WizardStep.Memory)">Edit</button>
+                        </dd>
+                    </div>
+                }
+                else if (!IsLlamaCpp && !IsMlx)
                 {
                     <div class="review-row">
                         <dt>Tuning</dt>
@@ -1704,6 +1778,10 @@ else
                 _model.Image = existing.Container?.Image ?? "";
                 _model.ImageDigest = existing.Container?.ImageDigest ?? "";
                 _model.ExtraArgsText = LlamaCppEditing.FormatExtraArgs(existing.Container?.ExtraArgs);
+                _model.ContainerEnvText = ContainerEditing.Format(existing.Container?.Env);
+                _model.ContainerSecretEnvText = ContainerEditing.Format(existing.Container?.SecretEnv);
+                _model.RegistryUsername = existing.Container?.RegistryLogin?.Username ?? "";
+                _model.RegistryTokenName = existing.Container?.RegistryLogin?.TokenName ?? "";
                 _budgetTouched = true;
             }
 
@@ -1835,6 +1913,12 @@ else
                 ? null
                 : PlacementEditing.Offered(all, id => single?.GetNode(id), _original?.Placement?.NodeId)
                     .FirstOrDefault(n => string.Equals(n.Id, _singleNodeId, StringComparison.Ordinal));
+            if (_singleNode is { Discrete: true } discrete)
+            {
+                // A new model on a node with one GPU has nothing to choose.
+                _gpus = IsNew ? (discrete.Gpus.Count == 1 ? [discrete.Gpus[0].Uuid] : []) : [.. _original?.Placement?.GpuUuids ?? []];
+            }
+
             return;
         }
 
@@ -1899,6 +1983,10 @@ else
         {
             _runtime = RuntimeKind.Vllm; // the new node runs no MLX: the option is gone
             RecomputeMlx();
+        }
+        else if (IsSharedContainer && SelectedNode is { } target && !target.RuntimeKinds.Contains(_runtime))
+        {
+            await OnRuntimeChangedAsync(RuntimeKind.Vllm); // the new node doesn't run it: the option is gone
         }
 
         _catalog = await ModelSourcing.GetCatalogAsync(Services, SourceNodeId, _model.Image);
@@ -2052,7 +2140,7 @@ else
     }
 
     /// <summary>
-    /// The placement edits on top of <paramref name="definition"/> (several nodes only): a new model's node and GPUs; an
+    /// The placement edits on top of <paramref name="definition"/> (several nodes, or one with discrete GPUs): a new model's node and GPUs; an
     /// existing model's GPUs on its node when they changed (sent with the stored generation, D75), else the placement as
     /// re-read; and the keep-serving flag.
     /// </summary>
@@ -2060,7 +2148,19 @@ else
     {
         if (!_multiNode)
         {
-            return definition;
+            if (_singleNode is not { Discrete: true } single)
+            {
+                return definition;
+            }
+
+            if (IsNew)
+            {
+                return definition with { Placement = PlacementEditing.Build(single.Id, _gpus, single.Gpus, 0) };
+            }
+
+            return _original?.Placement is { } placed && PlacementEditing.GpusChanged(placed, _gpus)
+                ? definition with { Placement = PlacementEditing.Build(placed.NodeId, _gpus, single.Gpus, placed.Generation) }
+                : definition;
         }
 
         definition = definition with { KeepServingDuringJobs = _keepServing };
@@ -2277,7 +2377,7 @@ else
     /// to start, so no fit line may call it a fit, whatever the node has free.
     /// </summary>
     private bool BudgetTooSmall =>
-        !IsLlamaCpp && !IsMlx && MemoryInspection is { } mi && _model.MaxModelLen > 0 && _model.MemoryBudgetGiB < mi.MinimumBudgetGiB(_model.MaxModelLen);
+        !IsLlamaCpp && !IsMlx && !IsSharedContainer && MemoryInspection is { } mi && _model.MaxModelLen > 0 && _model.MemoryBudgetGiB < mi.MinimumBudgetGiB(_model.MaxModelLen);
 
     /// <summary>The fit line while <see cref="BudgetTooSmall"/>: the room is real, the start is not.</summary>
     private string RoomButTooSmallText(string? node) =>
@@ -2453,6 +2553,13 @@ else
             _model.Quantization = null;
             _suggestionFormula = null;
             RecomputeMlx();
+        }
+        else if (IsSharedContainer)
+        {
+            // These servers take parsers as extra arguments, so a suggestion here would tag abilities nothing turns on.
+            _model.ToolCallParser = null;
+            _model.ReasoningParser = null;
+            _model.Quantization = null;
         }
 
         await Task.CompletedTask;
@@ -2743,9 +2850,9 @@ else
             return;
         }
 
-        if (SelectedNode is { Discrete: true } discreteNode && _gpus.Count == 0)
+        if ((SelectedNode ?? _singleNode) is { Discrete: true } discreteNode && _gpus.Count == 0)
         {
-            _saveError = $"Tick at least one GPU on {discreteNode.Id} under Placement.";
+            _saveError = $"Tick at least one GPU on {discreteNode.Id} under {(_multiNode ? "Placement" : "GPUs")}.";
             return;
         }
 
@@ -2817,6 +2924,20 @@ else
             _saveError = "Not saved: the MLX settings were refused.";
             _saveErrorDetails = [.. mlxProblems.Select(p => p.Message)];
             return;
+        }
+
+        if (IsSharedContainer)
+        {
+            string? badLine = ContainerEditing.FirstBadLine(_model.ContainerEnvText) ?? ContainerEditing.FirstBadLine(_model.ContainerSecretEnvText);
+            string? envProblem = badLine is not null
+                ? $"'{badLine}' is not NAME=value."
+                : normalized.Definition.Container is { } container ? LaunchSpecBuilder.ContainerEnvProblem(container) : null;
+            envProblem ??= await MissingTokenProblemAsync(normalized.Definition.Container);
+            if (envProblem is not null)
+            {
+                _saveError = envProblem;
+                return;
+            }
         }
 
         if (_runtime == RuntimeKind.Sglang && SglangSpeculativeArgs.Problem(normalized.Definition) is { } sglangProblem)
@@ -3017,19 +3138,31 @@ else
 
     private bool IsSharedContainer => _runtime is RuntimeKind.Sglang or RuntimeKind.Nim;
 
+    private bool IsNim => _runtime == RuntimeKind.Nim;
+
     /// <summary>The model the form describes: the vLLM fields on <paramref name="baseline"/>, plus the llama.cpp settings for a llama.cpp model.</summary>
     private ModelDefinition Draft(string id, ModelDefinition? baseline)
     {
         var definition = _model.ToDefinition(id, baseline);
         if (IsSharedContainer)
         {
+            string image = (_model.Image ?? "").Trim();
             return definition with
             {
                 Runtime = _runtime,
+                ModelPath = IsNim && IsNew ? id : definition.ModelPath, // Only a label on NIM.
                 Container = new ContainerRuntimeSettings
                 {
-                    Image = (_model.Image ?? "").Trim(),
+                    Image = image,
                     ImageDigest = string.IsNullOrWhiteSpace(_model.ImageDigest) ? null : _model.ImageDigest.Trim(),
+                    Env = ContainerEditing.Parse(_model.ContainerEnvText),
+                    SecretEnv = ContainerEditing.Parse(_model.ContainerSecretEnvText),
+                    RegistryLogin = string.IsNullOrWhiteSpace(_model.RegistryTokenName)
+                        ? null
+                        : new ContainerRegistryLogin(
+                            ContainerImageRegistry.HostOf(image),
+                            string.IsNullOrWhiteSpace(_model.RegistryUsername) ? "$oauthtoken" : _model.RegistryUsername.Trim(),
+                            _model.RegistryTokenName.Trim()),
                     // A flag and its value on one line are two arguments, as in the llama.cpp and MLX sections.
                     ExtraArgs = LlamaCppEditing.ParseExtraArgs(_model.ExtraArgsText),
                 },
@@ -3127,9 +3260,34 @@ else
         }
     }
 
+    /// <summary>Why a token this model names can't be used, so the mistake shows on save and not at the next start.</summary>
+    private async Task<string?> MissingTokenProblemAsync(ContainerRuntimeSettings? settings)
+    {
+        if (settings is null || Services.GetService<ITokenStore>() is not { } store)
+        {
+            return null;
+        }
+
+        var names = (await store.ListAsync()).Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var wanted = (settings.SecretEnv?.Values ?? []).Concat(settings.RegistryLogin is { } login ? [login.TokenName] : []);
+        return wanted.FirstOrDefault(name => !names.Contains(name)) is { } missing
+            ? $"There's no saved token named '{missing}' under Access > Tokens."
+            : null;
+    }
+
     private async Task OnRuntimeChangedAsync(RuntimeKind kind)
     {
+        bool wasNim = IsNim;
         _runtime = kind;
+        if (IsNim)
+        {
+            _model.ModelPath = "nim"; // Passes the form's check; the saved value is the model's id.
+        }
+        else if (wasNim)
+        {
+            _model.ModelPath = "";
+        }
+
         // The vLLM parsers mean nothing to llama-server (its template decides): a new llama.cpp model stores none; back on
         // vLLM the editor's defaults return.
         var defaults = new ModelDefinition { Id = "x", ServedName = "x", ModelPath = "x" };
@@ -3366,13 +3524,75 @@ else
     /// <summary>The node offers llama.cpp (or the model already is one).</summary>
     private bool LlamaOffered => IsLlamaCpp || LlamaCppEditing.Runtime(SelectedNode ?? _singleNode) is not null;
 
-    /// <summary>"vLLM or llama.cpp" (as before MLX), "vLLM or MLX", "vLLM, llama.cpp or MLX".</summary>
-    private string RuntimeChoiceText =>
-        !MlxOffered ? "vLLM or llama.cpp" : LlamaOffered ? "vLLM, llama.cpp or MLX" : "vLLM or MLX";
+    /// <summary>The container runtimes the node offers, or the model already uses.</summary>
+    private IReadOnlyList<string> ContainerRuntimesOffered
+    {
+        get
+        {
+            var kinds = (SelectedNode ?? _singleNode)?.RuntimeKinds ?? [];
+            var names = new List<string>();
+            if (_runtime == RuntimeKind.Sglang || kinds.Contains(RuntimeKind.Sglang))
+            {
+                names.Add("SGLang");
+            }
+
+            if (_runtime == RuntimeKind.Nim || kinds.Contains(RuntimeKind.Nim))
+            {
+                names.Add("NIM");
+            }
+
+            return names;
+        }
+    }
+
+    /// <summary>Images the node reports whose name fits this runtime. Any other image can still be typed.</summary>
+    private IReadOnlyList<string> ContainerImageSuggestions
+    {
+        get
+        {
+            string name = _runtime == RuntimeKind.Nim ? "nim" : "sglang";
+            var images = (SelectedNode ?? _singleNode)?.Record.LastCapabilities?.Images ?? [];
+            return images.Select(i => i.Ref).Where(r => r.Contains(name, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.Ordinal).ToList();
+        }
+    }
+
+    /// <summary>The draft model's folder when no extra checkpoint downloads it, so a move couldn't bring it along.</summary>
+    private string? DraftFolderWithoutSource =>
+        RemoteModelFolders.TopFolder(_model.SpeculativeDraftModel) is { } folder && !_model.ExtraSources.Any(s => string.Equals(s.Folder, folder, StringComparison.Ordinal))
+            ? folder
+            : null;
+
+    /// <summary>"vLLM or llama.cpp" (as before MLX), "vLLM or MLX", "vLLM, llama.cpp or MLX", or a list that names the container runtimes.</summary>
+    private string RuntimeChoiceText
+    {
+        get
+        {
+            if (ContainerRuntimesOffered.Count == 0)
+            {
+                return !MlxOffered ? "vLLM or llama.cpp" : LlamaOffered ? "vLLM, llama.cpp or MLX" : "vLLM or MLX";
+            }
+
+            var names = new List<string> { "vLLM" };
+            if (LlamaOffered)
+            {
+                names.Add("llama.cpp");
+            }
+
+            if (MlxOffered)
+            {
+                names.Add("MLX");
+            }
+
+            names.AddRange(ContainerRuntimesOffered);
+            return UiFormat.JoinNames(names, "or");
+        }
+    }
 
     /// <summary>What a checkpoint is per runtime, for the runtime step.</summary>
     private string RuntimeCheckpointText =>
-        !MlxOffered ? "a folder for vLLM, one GGUF file for llama.cpp"
+        ContainerRuntimesOffered.Count > 0
+            ? "a folder for " + UiFormat.JoinNames([.. MlxOffered ? new[] { "vLLM", "MLX" } : ["vLLM"], .. ContainerRuntimesOffered], "and") + (LlamaOffered ? ", one GGUF file for llama.cpp" : "")
+        : !MlxOffered ? "a folder for vLLM, one GGUF file for llama.cpp"
         : LlamaOffered ? "a folder for vLLM and MLX, one GGUF file for llama.cpp"
         : "a folder for vLLM and MLX";
 
@@ -3479,6 +3699,14 @@ else
         /// <summary>The image override's digest (D85); only shown, and only saved, with an image override.</summary>
         public string ImageDigest { get; set; } = "";
         public string ExtraArgsText { get; set; } = "";
+
+        public string ContainerEnvText { get; set; } = "";
+
+        public string ContainerSecretEnvText { get; set; } = "";
+
+        public string RegistryUsername { get; set; } = "";
+
+        public string RegistryTokenName { get; set; } = "";
         public bool AutoStart { get; set; }
 
         /// <summary>The primary source: the repo the folder at <see cref="ModelPath"/> comes from.</summary>

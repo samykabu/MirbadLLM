@@ -180,4 +180,10 @@ public sealed record SearchContext(TuningGates Gates, ModelDefinition Baseline, 
     /// then builds the llama.cpp candidates (with their memory checks) and there are no follow-ups. Null for vLLM.
     /// </summary>
     public LlamaCppTuningContext? LlamaCpp { get; init; }
+
+    /// <summary>True on an MLX or SGLang plan (<see cref="SmallRuntimeTuning.Plan"/>): it builds the candidates, and there are no follow-ups.</summary>
+    public bool SmallRuntime { get; init; }
+
+    /// <summary>The checkpoint inspection behind an MLX plan's memory checks.</summary>
+    public ModelFolderInspection? Inspection { get; init; }
 }

@@ -117,7 +117,7 @@
                 </FieldHelp>
                 <GpuPicker Gpus="discrete.Gpus" Selected="GpuUuids" SelectedChanged="GpuUuidsChanged" Stored="StoredGpus"
                            Candidates="NodeFit(discrete.Id)" Node="@discrete.Id" Disabled="MoveActive" TestId="placement-gpus"
-                           AllowUnequal="IsLlamaCpp" Budgets="GpuBudgets" BudgetsChanged="GpuBudgetsChanged"
+                           AllowUnequal="IsLlamaCpp" Runtime="Runtime" Budgets="GpuBudgets" BudgetsChanged="GpuBudgetsChanged"
                            TotalBudgetGiB="MemoryBudgetGiB" TensorSplit="@TensorSplit" />
             </div>
         }

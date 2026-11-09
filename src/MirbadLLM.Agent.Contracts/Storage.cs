@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using MirbadLLM.Core;
 
@@ -14,6 +15,33 @@ public sealed record ImagePullRequest : AgentMutation
 
     /// <summary>Expected repository digest. Null only where the node allows tag pulls (P1 DGX).</summary>
     public string? Digest { get; init; }
+
+    /// <summary>The login for a private registry. Its password is never stored, so such a pull can't resume after an agent restart.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryCredentials? Registry { get; init; }
+}
+
+/// <summary>A registry login for one pull. The field is named <c>password</c> so stored operation payloads redact it.</summary>
+public sealed record RegistryCredentials
+{
+    public required string Username { get; init; }
+
+    public required string Password { get; init; }
+
+    /// <summary>The value of Docker's <c>X-Registry-Auth</c> header for a pull from <paramref name="host"/>.</summary>
+    public string ToDockerHeader(string host)
+    {
+        string server = host == "docker.io" ? "https://index.docker.io/v1/" : host;
+        byte[] json = JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string, string>
+        {
+            ["username"] = Username,
+            ["password"] = Password,
+            ["serveraddress"] = server,
+        });
+        return Convert.ToBase64String(json).Replace('+', '-').Replace('/', '_');
+    }
+
+    public override string ToString() => $"RegistryCredentials {{ Username = {Username}, Password = *** }}";
 }
 
 /// <summary>

@@ -586,6 +586,11 @@ public sealed partial class PlacementValidator : IModelDefinitionValidator
         {
             problems.Add(new PlacementProblem(PlacementProblemCodes.ContainerSettingsInvalid, argProblem));
         }
+
+        if (LaunchSpecBuilder.ContainerEnvProblem(settings) is { } envProblem)
+        {
+            problems.Add(new PlacementProblem(PlacementProblemCodes.ContainerSettingsInvalid, envProblem));
+        }
     }
 
     [GeneratedRegex("^sha256:[0-9a-f]{64}$", RegexOptions.CultureInvariant)]

@@ -153,7 +153,7 @@
             <EmptyState Title="No models yet" HeadingLevel="2" Inline="true" TestId="dashboard-empty">
                 <ChildContent>
                     <p>
-                        A model is one runtime container (vLLM or llama.cpp) serving one checkpoint under a served name, on one node.
+                        A model is one runtime (such as vLLM, llama.cpp or SGLang) serving one checkpoint under a served name, on one node.
                         Add one from a checkpoint folder that is already on a node, or download a checkpoint from Hugging Face first.
                     </p>
                 </ChildContent>
@@ -238,6 +238,14 @@
 
 
 @code {
+    /// <summary>Why a Ready model in the leaderboard has no figures.</summary>
+    private static string NoMetricsReason(ModelDefinition model) => model.Runtime switch
+    {
+        RuntimeKind.Mlx => "mlx_lm.server has no metrics endpoint.",
+        RuntimeKind.Sglang => "SGLang has reported no metrics yet. A model started before MirbadLLM turned them on needs a restart.",
+        var runtime => $"{LlamaCppEditing.RuntimeName(runtime)} has reported no metrics yet.",
+    };
+
     // ================================================================ constants
 
     private static readonly TimeSpan[] Windows = [TimeSpan.FromMinutes(5), TimeSpan.FromMinutes(15), TimeSpan.FromMinutes(60)];
@@ -781,7 +789,7 @@
             .ToList();
         _fleetGen = _scopeReady == 0 ? null
             : readyKpis.Count > 0 ? FiniteSum(readyKpis.Select(k => k.Load.GenerationTokensPerSecond))
-            // Only runtimes without engine metrics are Ready: their rate is unknown, not 0.
+            // Only models without engine metrics are Ready: their rate is unknown, not 0.
             : !scopeModelRows.Any(r => r.Status.State == ModelState.Ready && r.Definition.Runtime is RuntimeKind.Vllm or RuntimeKind.LlamaCpp) ? null
             // ?? 0 keeps the pre-MN-234 answer of the legacy branch: no model carries a load at all is 0, not "—".
             : FiniteSum(_legacyLoads.Select(l => l.GenerationTokensPerSecond)) ?? 0;
@@ -824,7 +832,7 @@
 
         // ---- leaderboard and Signal ----
         _stats = _statsStore?.Snapshot();
-        // A Ready model belongs on the leaderboard even without figures: MLX, SGLang and NIM have no engine metrics to show.
+        // A Ready model belongs on the leaderboard even without figures: MLX has no engine metrics, and SGLang needs a restart to start them.
         bool OnBoard(ModelDefinition d) => _latestKpis.ContainsKey(d.Id) || _statusById.GetValueOrDefault(d.Id)?.State == ModelState.Ready;
         _tableRows = definitions.Where(d => InScope(d.Id) && OnBoard(d)).Select(d => RowFor(d.Id, _latestKpis.GetValueOrDefault(d.Id))).ToList();
         _off = definitions.Where(d => InScope(d.Id) && !OnBoard(d))
@@ -1307,7 +1315,7 @@
                     <span class="panel-label" id="readout-cap">Readout</span>
                     @if (_selectedModelId is { } unmeasured && _tableRows.Any(r => r.Id == unmeasured))
                     {
-                        <span class="muted" data-testid="readout-no-metrics">@ServedNameFor(unmeasured) is Ready, but @(_definitions.FirstOrDefault(d => d.Id == unmeasured) is { } d ? LlamaCppEditing.RuntimeName(d.Runtime) : "this runtime") has no engine metrics here yet. Request counts and errors in the row come from the router.</span>
+                        <span class="muted" data-testid="readout-no-metrics">@ServedNameFor(unmeasured) is Ready, but @(_definitions.FirstOrDefault(d => d.Id == unmeasured) is { } d ? NoMetricsReason(d) : "this runtime has no engine metrics here yet.") Request counts and errors in the row come from the router.</span>
                     }
                     else
                     {

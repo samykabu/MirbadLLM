@@ -209,6 +209,8 @@ public sealed partial class MoveService : IHostedService, IDisposable
     private int _disposed;
 
     /// <summary>Creates the service.</summary>
+    private readonly ITokenStore? _savedTokens;
+
     public MoveService(
         IModelRegistry models,
         INodeRegistry nodes,
@@ -224,8 +226,10 @@ public sealed partial class MoveService : IHostedService, IDisposable
         IAuditLog? audit = null,
         IAdminReauthenticator? reauth = null,
         IOptions<RegistryMigrationOptions>? migration = null,
-        StartupTimeTracker? startupTimes = null)
+        StartupTimeTracker? startupTimes = null,
+        ITokenStore? tokens = null)
     {
+        _savedTokens = tokens;
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(nodes);
         ArgumentNullException.ThrowIfNull(cache);
@@ -634,6 +638,11 @@ public sealed partial class MoveService : IHostedService, IDisposable
     /// <summary>A move re-downloads from the model's sources (design §6.4): the checkpoint folder needs a Hugging Face source.</summary>
     private static void CheckMovable(ModelDefinition model)
     {
+        if (!model.NeedsCheckpoint)
+        {
+            return; // Its image fetches the model, so there is nothing to download first.
+        }
+
         if (model.Sources.Count == 0)
         {
             throw new MoveRefusedException(ErrorCodes.ModelNotMovable,
@@ -645,6 +654,14 @@ public sealed partial class MoveService : IHostedService, IDisposable
         {
             throw new MoveRefusedException(ErrorCodes.ModelNotMovable,
                 $"None of the sources of model '{model.Id}' downloads its checkpoint folder '{model.ModelPath}', so it cannot be moved by re-downloading it.");
+        }
+
+        // Otherwise the model would reach the other node without its drafter and fail to start there.
+        if (model.Speculative?.DraftModel is { } draft && draft.StartsWith(LogicalVolumes.ModelsTarget + "/", StringComparison.Ordinal) &&
+            RemoteModelFolders.TopFolder(draft) is { } draftFolder && !model.Sources.Any(s => string.Equals(s.Folder, draftFolder, StringComparison.Ordinal)))
+        {
+            throw new MoveRefusedException(ErrorCodes.ModelNotMovable,
+                $"No source of model '{model.Id}' downloads its draft model folder '{draftFolder}', so it would arrive without it. Add the folder under Extra checkpoints first.");
         }
 
         foreach (var source in model.Sources)
@@ -801,7 +818,7 @@ public sealed partial class MoveService : IHostedService, IDisposable
             }
 
             var folders = await _clients.GetClient(targetId).ListModelFoldersAsync(ct).ConfigureAwait(false);
-            if (!folders.Any(f => string.Equals(f.Folder, model.ModelPath, StringComparison.Ordinal) && !f.Partial && f.SizeBytes > 0))
+            if (model.NeedsCheckpoint && !folders.Any(f => string.Equals(f.Folder, model.ModelPath, StringComparison.Ordinal) && !f.Partial && f.SizeBytes > 0))
             {
                 await FailAsync(record, $"The checkpoint folder '{model.ModelPath}' is not complete on node '{targetId}' after its download.", ct).ConfigureAwait(false);
                 return;
@@ -958,6 +975,16 @@ public sealed partial class MoveService : IHostedService, IDisposable
                 return true; // our pull succeeded (the image list names it by another reference)
             }
 
+            RegistryCredentials? registry;
+            try
+            {
+                registry = (await ContainerCredentials.ResolveAsync(_savedTokens, model, ct).ConfigureAwait(false)).Registry;
+            }
+            catch (ModelStartConflictException ex)
+            {
+                throw new MoveFailedException(ex.Message);
+            }
+
             var envelope = _runner.CreateEnvelope();
             await RememberOperationAsync(record.Id, envelope.OperationId, ct).ConfigureAwait(false);
             var pull = new ImagePullRequest
@@ -967,6 +994,7 @@ public sealed partial class MoveService : IHostedService, IDisposable
                 ExpiresAt = envelope.ExpiresAt,
                 Image = image,
                 Digest = digest,
+                Registry = registry,
             };
             try
             {
@@ -1857,7 +1885,8 @@ public static class MoveServiceCollectionExtensions
             sp.GetService<IAuditLog>(),
             sp.GetService<IAdminReauthenticator>(),
             sp.GetService<IOptions<RegistryMigrationOptions>>(),
-            sp.GetService<StartupTimeTracker>()));
+            sp.GetService<StartupTimeTracker>(),
+            sp.GetService<ITokenStore>()));
         services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<MoveService>());
         return services;
     }

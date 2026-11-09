@@ -79,7 +79,7 @@ public sealed class MonitoringTests
         Assert.Empty(cut.FindAll("[data-testid=model-table-fold]"));
 
         cut.Find("[data-testid=model-row-open-sg]").Click();
-        Assert.Contains("SGLang has no engine metrics", cut.Find("[data-testid=readout-no-metrics]").TextContent, StringComparison.Ordinal);
+        Assert.Contains("SGLang has reported no metrics yet", cut.Find("[data-testid=readout-no-metrics]").TextContent, StringComparison.Ordinal);
     }
 
     [Fact]

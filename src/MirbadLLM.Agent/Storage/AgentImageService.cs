@@ -16,7 +16,11 @@ namespace MirbadLLM.Agent.Storage;
 /// <param name="TagOrDigest">What to pull: the approved digest, or the tag on a node that allows tag pulls.</param>
 /// <param name="Reference">The reference the result reports (<c>repo:tag</c> or <c>repo@digest</c>).</param>
 /// <param name="Digest">The approved digest; null for a tag pull.</param>
-public sealed record AuthorizedPull(string Repository, string TagOrDigest, string Reference, string? Digest);
+public sealed record AuthorizedPull(string Repository, string TagOrDigest, string Reference, string? Digest)
+{
+    /// <summary>The login for a private registry; null for a public image.</summary>
+    public RegistryCredentials? Registry { get; init; }
+}
 
 /// <summary>
 /// Images on the node (design §4.3 <c>GET /images</c>, <c>POST /images/pull</c>, §10.3 images pinned by digest): lists
@@ -104,7 +108,7 @@ public sealed class AgentImageService(
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(accepted);
-        var pull = Authorize(request.Image, request.Digest);
+        var pull = Authorize(request.Image, request.Digest) with { Registry = request.Registry };
         var status = await operations.StageAsync(accepted.Id, new OperationStageUpdate
         {
             Stage = OperationStages.Pulling,
@@ -137,6 +141,15 @@ public sealed class AgentImageService(
         {
             await operations.CompleteAsync(operation.Status.Id, OperationState.Failed,
                 StorageErrors.Error(ErrorCodes.InternalError, "The image pull could not be resumed: its stored request is unreadable."), ct: ct)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        if (request.Registry is not null)
+        {
+            // Its password is not stored, so the request read back can't log in.
+            await operations.CompleteAsync(operation.Status.Id, OperationState.Failed,
+                StorageErrors.Error(ErrorCodes.InternalError, "The image pull could not be resumed: its registry login is not stored. Start it again."), ct: ct)
                 .ConfigureAwait(false);
             return;
         }
@@ -231,7 +244,7 @@ public sealed class AgentImageService(
         DateTimeOffset lastRecorded = time.GetUtcNow();
         try
         {
-            await engine.PullAsync(pull.Repository, pull.TagOrDigest, progress =>
+            await engine.PullAsync(pull.Repository, pull.TagOrDigest, pull.Registry, progress =>
             {
                 var update = new OperationProgress
                 {

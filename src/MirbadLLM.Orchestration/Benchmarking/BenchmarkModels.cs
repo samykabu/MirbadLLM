@@ -147,6 +147,10 @@ public sealed record BenchmarkResult(
     int? Preemptions = null,
     double? KvCacheUsageMax = null)
 {
+    /// <summary>Speculative acceptance during the runs, from the server's own metrics; null without speculative decoding or metrics.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public double? SpecAcceptanceRate { get; init; }
+
     public const int CurrentSchemaVersion = 3;
 
     /// <summary>The level at <paramref name="concurrency"/> (the shortest output length when there are several).</summary>
@@ -551,6 +555,29 @@ public enum TuningDimension
 
     /// <summary>llama.cpp batch × micro-batch (<c>-b</c>/<c>-ub</c>); causal embedding models <c>ub = b</c>.</summary>
     BatchSizes,
+
+    // ---- MLX and SGLang small tune (SmallRuntimeTuning). Appended, so stored runs keep their meaning.
+
+    /// <summary>MLX decode and prompt concurrency.</summary>
+    MlxParallel,
+
+    /// <summary>MLX KV cache bits {off, 8, 4}.</summary>
+    MlxKvBits,
+
+    /// <summary>MLX <c>--num-draft-tokens</c>, on a model with a drafter.</summary>
+    MlxDraftTokens,
+
+    /// <summary>MLX prompt cache size.</summary>
+    MlxPromptCache,
+
+    /// <summary>SGLang <c>--max-running-requests</c>.</summary>
+    SglangMaxRunningRequests,
+
+    /// <summary>SGLang <c>--schedule-policy</c>.</summary>
+    SglangSchedulePolicy,
+
+    /// <summary>SGLang's draft depth, on a model with speculative decoding.</summary>
+    SglangDraftDepth,
 }
 
 /// <summary>

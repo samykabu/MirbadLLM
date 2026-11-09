@@ -37,7 +37,7 @@
         @_name needs <strong class="num">@UiFormat.GiB(_need)</strong>@(_where is null ? "" : $" on {_where}"), but only
         <strong class="num">@UiFormat.GiB(_freeAfterReserve)</strong> is free after the
         <span class="num">@UiFormat.GiB(_reserve)</span> reserve (<span class="num">@UiFormat.GiB(_free)</span> free in total,
-        counting the <span class="num">@UiFormat.GiB(_own)</span> its running container releases).
+        counting the <span class="num">@UiFormat.GiB(_own)</span> the running model releases).
     </p>
     <p class="muted">
         Restarting anyway can push ComfyUI, Ollama or other models on this box out of memory, or leave this model failing while it loads.
@@ -233,7 +233,7 @@
         }
         catch (TimeoutException)
         {
-            _error = $"Docker hasn't confirmed the restart of {_name} after {RestartWait.TotalSeconds:0} s. It may still be in progress: check the model's status before trying again. The settings are saved.";
+            _error = $"The node hasn't confirmed the restart of {_name} after {RestartWait.TotalSeconds:0} s. It may still be in progress: check the model's status before trying again. The settings are saved.";
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

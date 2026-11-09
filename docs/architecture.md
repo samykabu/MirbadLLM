@@ -4,7 +4,7 @@ This document describes how MirbadLLM is built and the behaviour each part promi
 
 MirbadLLM runs local LLMs on one or more machines and serves all of them behind one OpenAI-compatible `/v1`
 endpoint. A **master** holds the model registry, API keys, the Blazor UI, the admin API and the router. A **node
-agent** on every machine starts and stops the models with that machine's runtime (vLLM in containers, llama.cpp as a
+agent** on every machine starts and stops the models with that machine's runtime (vLLM, SGLang and NIM in containers, llama.cpp in a container or as a
 native process, MLX on Apple Silicon), checks memory before a start, and reports telemetry.
 
 ## Architecture
@@ -50,7 +50,7 @@ models. It runs as a container on the DGX Spark, a systemd service on a Linux PC
 
 **Runtimes.** Two drivers implement `IRuntimeDriver` in `MirbadLLM.NodeRuntime`:
 
-- The **container driver** (`ContainerRuntimeDriver`) runs vLLM models as Docker containers on Linux nodes; its
+- The **container driver** (`ContainerRuntimeDriver`) runs vLLM, SGLang, NIM and container llama.cpp models as Docker containers on Linux nodes; its
   contracts are under [Orchestration](#orchestration).
 - The **process driver** (`ProcessRuntimeDriver`, `Delivery = Process`) runs llama.cpp's `llama-server` and MLX as
   native processes on Windows and macOS. It owns the state machine, `processes.json`, port use, health, logs, crash
@@ -94,7 +94,7 @@ nodes and placement) and `docs/multinode/operations-p3p4.md` (Windows and Mac no
 | Project | Owns | Depends on |
 |---|---|---|
 | `src/MirbadLLM.Core` | Contracts only: `ModelDefinition`, `ModelStatus`, `ModelEndpoint`, `MemorySnapshot`, `ModelMetrics`, `RouterModelStats`, the interfaces in `Abstractions.cs`, `MirbadLLMOptions`. Shared by every project, so changes here are reviewed with extra care. | — |
-| `src/MirbadLLM.Orchestration` | Master side: vLLM and llama.cpp argument builders, JSON registry, health monitor, metrics history, jobs, backups, the node registry and monitor, agent client, `RemoteModelRuntime`, `RemoteTelemetryCollector`, remote probes/storage/host services, certificate rotation, fencing, `AddMirbadLLMOrchestration`. | Core, Agent.Contracts, Pki, NodeRuntime |
+| `src/MirbadLLM.Orchestration` | Master side: runtime argument builders, JSON registry, health monitor, metrics history, jobs, backups, the node registry and monitor, agent client, `RemoteModelRuntime`, `RemoteTelemetryCollector`, remote probes/storage/host services, certificate rotation, fencing, `AddMirbadLLMOrchestration`. | Core, Agent.Contracts, Pki, NodeRuntime |
 | `src/MirbadLLM.Router` | `/v1/*` proxy through the agents (`AgentEndpointResolver`), `/v1/models`, API-key check, `IRouterStats`, `AddMirbadLLMRouter` / `MapMirbadLLMRouter`. | Core, Agent.Contracts |
 | `src/MirbadLLM.Web` | `Program.cs` composition (the master), `/api/*` admin endpoints, Blazor pages, the enroll listener. | all |
 | `src/MirbadLLM.Agent` | The node agent `mirbadllm-agent`. | Core, Agent.Contracts, NodeRuntime, Pki |
@@ -397,7 +397,7 @@ The container, memory, metrics and endpoint contracts in this section run on the
   last run with this preset (else the last benchmark with it, else defaults), re-projected live from the run's own pace.
   A baseline that breaks an absolute guard (short TTFT p95 > 1 s / 3 s, error rate) makes that guard relative for the
   run ("no worse than the baseline"), noted on the run.
-- **Tuning** (`TuningPlanner`, `TuningScorer`): coordinate descent in a fixed order on top of the best so far —
+- **Tuning** (`TuningPlanner`, `TuningScorer`; `LlamaCppTuning` and `SmallRuntimeTuning` for llama.cpp, MLX and SGLang, and refused on NIM by `TuningSupport`): coordinate descent in a fixed order on top of the best so far —
   speculative off / MTP × 1-3 (only with `mtp_num_hidden_layers` > 0; the graph mode is left alone), max num seqs
   8/16/32, `--max-num-batched-tokens` 2048/8192/16384 (`ModelDefinition.MaxNumBatchedTokens`), KV fp8/auto
   (only when the budget admits one full-length request at auto). Never MaxModelLen or the budget; duplicates

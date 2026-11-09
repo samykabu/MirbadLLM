@@ -340,7 +340,10 @@ public sealed class DockerEngineClient(HttpClient httpClient)
     /// Pulls <paramref name="image"/>: <c>repository[:tag]</c> (no tag = <c>latest</c>) or <c>repository@sha256:…</c>,
     /// which Docker pulls by digest (the digest goes in the <c>tag</c> parameter; MN-107).
     /// </summary>
-    public async Task PullImageAsync(string image, CancellationToken ct = default)
+    public Task PullImageAsync(string image, CancellationToken ct = default) => PullImageAsync(image, null, ct);
+
+    /// <summary>As <see cref="PullImageAsync(string, CancellationToken)"/>, logging in to the image's registry when given a login.</summary>
+    public async Task PullImageAsync(string image, MirbadLLM.Agent.Contracts.RegistryCredentials? registry, CancellationToken ct = default)
     {
         string fromImage;
         string tag;
@@ -362,7 +365,13 @@ public sealed class DockerEngineClient(HttpClient httpClient)
         }
 
         string url = $"images/create?fromImage={Uri.EscapeDataString(fromImage)}&tag={Uri.EscapeDataString(tag)}";
-        using var response = await httpClient.PostAsync(url, content: null, ct).ConfigureAwait(false);
+        using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        if (registry is not null)
+        {
+            request.Headers.TryAddWithoutValidation("X-Registry-Auth", registry.ToDockerHeader(MirbadLLM.Core.ContainerImageRegistry.HostOf(fromImage)));
+        }
+
+        using var response = await httpClient.SendAsync(request, ct).ConfigureAwait(false);
         await EnsureSuccessAsync(response, ct).ConfigureAwait(false);
 
         // Drain the newline-delimited progress stream fully before returning; surface a reported error.

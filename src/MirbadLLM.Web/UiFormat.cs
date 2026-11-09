@@ -25,6 +25,10 @@ public static class UiFormat
     /// <summary>Whole number with thousands separators ("1,204"), or <see cref="Missing"/>.</summary>
     public static string Whole(double? value) => HasValue(value) ? value!.Value.ToString("#,0", Culture) : Missing;
 
+    /// <summary>"A", "A or B", "A, B or C", with <paramref name="word"/> before the last name.</summary>
+    public static string JoinNames(IReadOnlyList<string> names, string word) =>
+        names.Count < 2 ? string.Concat(names) : $"{string.Join(", ", names.Take(names.Count - 1))} {word} {names[^1]}";
+
     public static string GiB(double? value) => HasValue(value) ? $"{Decimal1(value)} GiB" : Missing;
 
     public static string Percent(double? value) => HasValue(value) ? $"{Number(value)}%" : Missing;

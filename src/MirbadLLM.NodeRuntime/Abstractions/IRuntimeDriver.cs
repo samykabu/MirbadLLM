@@ -20,6 +20,9 @@ public sealed record RuntimeLaunch
 
     /// <summary>Host port from the reservation (<see cref="IPortAllocator"/>); the driver may also ask the allocator itself.</summary>
     public required int HostPort { get; init; }
+
+    /// <summary>The login for pulling a private image; null for a public one.</summary>
+    public RegistryCredentials? Registry { get; init; }
 }
 
 /// <summary>What a launch ended with.</summary>

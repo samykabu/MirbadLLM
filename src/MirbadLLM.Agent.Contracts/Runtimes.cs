@@ -116,6 +116,10 @@ public sealed record LaunchRequest : AgentMutation
 
     /// <summary>Execution fingerprint the master expects (also in <see cref="LaunchSpec.Labels"/>).</summary>
     public string? ExpectedExecutionFingerprint { get; init; }
+
+    /// <summary>The login for pulling a private image. Never stored, so such a launch can't resume after an agent restart.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryCredentials? Registry { get; init; }
 }
 
 /// <summary>

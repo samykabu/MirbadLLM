@@ -694,8 +694,26 @@ public static class LaunchSpecBuilder
             throw new ArgumentException(speculativeProblem, nameof(model));
         }
 
+        if (ContainerEnvProblem(settings) is { } envProblem)
+        {
+            throw new ArgumentException(envProblem, nameof(model));
+        }
+
         environment ??= LaunchEnvironment.None;
-        if (!environment.IsEmpty && !NodeReports(node, AgentFeatures.LaunchEnv, nodeFeatures))
+        var variables = new Dictionary<string, string>(settings.Env ?? new Dictionary<string, string>(), StringComparer.Ordinal);
+        if (model.Runtime == RuntimeKind.Nim)
+        {
+            variables[NimServedNameVariable] = model.ServedName; // Otherwise the server answers to its own name and every routed request fails.
+        }
+
+        foreach (var (name, value) in environment.Variables)
+        {
+            variables[name] = value;
+        }
+
+        // The names come from the settings, so a build without the values (the restart-pending check) has the same fingerprint.
+        string[] secretNames = [.. (settings.SecretEnv?.Keys ?? []).Concat(environment.SecretNames).Distinct(StringComparer.Ordinal)];
+        if ((variables.Count > 0 || secretNames.Length > 0) && !NodeReports(node, AgentFeatures.LaunchEnv, nodeFeatures))
         {
             throw new NotSupportedException(
                 $"Model '{model.Id}' sets environment variables, but node '{node.Id}' does not support them (feature '{AgentFeatures.LaunchEnv}').");
@@ -710,6 +728,10 @@ public static class LaunchSpecBuilder
         IReadOnlyList<string> argv = model.Runtime == RuntimeKind.Sglang
             ? ["python3", "-m", "sglang.launch_server", "--model-path", $"{LogicalVolumes.ModelsTarget}/{model.ModelPath}",
                 "--served-model-name", model.ServedName, "--host", "0.0.0.0", "--port", VllmContainerPort.ToString(CultureInfo.InvariantCulture),
+                // Selecting GPUs only makes them visible: without this flag SGLang would use one of them.
+                .. gpuUuids.Count > 1 && !SetsSglangTpSize(settings.ExtraArgs) ? ["--tp-size", gpuUuids.Count.ToString(CultureInfo.InvariantCulture)] : Array.Empty<string>(),
+                // Without it SGLang has no /metrics, and the portal has no live numbers for the model.
+                .. settings.ExtraArgs.Contains(SglangEnableMetrics, StringComparer.Ordinal) ? Array.Empty<string>() : [SglangEnableMetrics],
                 .. model.Speculative is { } speculative ? SglangSpeculativeArgs.Build(speculative) : [],
                 .. settings.ExtraArgs]
             : [.. settings.ExtraArgs];
@@ -720,8 +742,8 @@ public static class LaunchSpecBuilder
             Image = settings.Image,
             ImageDigest = settings.ImageDigest,
             Argv = argv,
-            Env = new Dictionary<string, string>(environment.Variables, StringComparer.Ordinal),
-            SecretEnvNames = [.. environment.SecretNames],
+            Env = variables,
+            SecretEnvNames = secretNames,
             ContainerPort = VllmContainerPort,
             Mounts = model.Runtime == RuntimeKind.Sglang
                 ? [new MountSpec(LogicalVolumes.Models, null, LogicalVolumes.ModelsTarget, ReadOnly: true),
@@ -747,6 +769,78 @@ public static class LaunchSpecBuilder
 
         return new BuiltLaunchSpec(spec with { Labels = labels }, settings.Image, string.Empty, fingerprint);
     }
+
+    internal const string SglangEnableMetrics = "--enable-metrics";
+
+    internal const string NimServedNameVariable = "NIM_SERVED_MODEL_NAME";
+
+    private static readonly string[] SecretNameWords = ["KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL"];
+
+    /// <summary>Why the variables or registry login of a container model can't be used; null when they can. Checked on save and at launch.</summary>
+    public static string? ContainerEnvProblem(ContainerRuntimeSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        static bool ValidName(string name) =>
+            name.Length > 0 && !char.IsAsciiDigit(name[0]) && name.All(c => char.IsAsciiLetterOrDigit(c) || c == '_');
+
+        foreach (string name in settings.Env?.Keys ?? [])
+        {
+            if (!ValidName(name))
+            {
+                return $"'{name}' is not a valid environment variable name.";
+            }
+
+            if (name == NimServedNameVariable)
+            {
+                return $"{name} is set from the served name; remove it.";
+            }
+
+            if (settings.SecretEnv?.ContainsKey(name) == true)
+            {
+                return $"{name} is set both as a plain and as a secret variable; keep one.";
+            }
+
+            // A plain value shows in the portal, APIs and audit, so this name must use a saved token.
+            if (SecretNameWords.Any(word => name.Contains(word, StringComparison.OrdinalIgnoreCase)))
+            {
+                return $"{name} looks like a secret. Save the value under Access > Tokens and set it as a secret variable.";
+            }
+        }
+
+        foreach (var (name, tokenName) in settings.SecretEnv ?? new Dictionary<string, string>())
+        {
+            if (!ValidName(name) || name == NimServedNameVariable)
+            {
+                return $"'{name}' can't be used as a secret variable name.";
+            }
+
+            if (string.IsNullOrWhiteSpace(tokenName))
+            {
+                return $"Secret variable {name} needs the name of a saved token.";
+            }
+        }
+
+        if (settings.RegistryLogin is { } login)
+        {
+            if (string.IsNullOrWhiteSpace(login.Username) || string.IsNullOrWhiteSpace(login.TokenName))
+            {
+                return "A registry login needs a username and the name of a saved token.";
+            }
+
+            // The token goes to this registry, so a changed image must not carry it somewhere else.
+            string host = ContainerImageRegistry.HostOf(settings.Image);
+            if (!string.Equals(login.Host, host, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"The registry login is for {login.Host}, but the image is on {host}. Set the login again for this image.";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>True when the extra arguments choose SGLang's tensor parallelism, which then wins over the GPU count.</summary>
+    internal static bool SetsSglangTpSize(IReadOnlyList<string> args) =>
+        args.Any(a => a is "--tp-size" or "--tp" || a.StartsWith("--tp-size=", StringComparison.Ordinal) || a.StartsWith("--tp=", StringComparison.Ordinal));
 
     private static void ValidateContainerExtraArgs(RuntimeKind runtime, IReadOnlyList<string> args)
     {

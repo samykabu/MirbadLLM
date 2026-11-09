@@ -6,6 +6,65 @@ namespace MirbadLLM.UnitTests.Orchestration;
 
 public sealed class ModelKpiCalculatorTests
 {
+    private static string Sglang(double running, double throughput, double generated, double prompts, double cached, double requests, double accept) => string.Create(
+        System.Globalization.CultureInfo.InvariantCulture, $$"""
+        sglang:num_running_reqs{model_name="m1",engine_type="unified"} {{running}}
+        sglang:num_queue_reqs{model_name="m1",engine_type="unified"} 1
+        sglang:token_usage{model_name="m1",engine_type="unified"} 0.25
+        sglang:gen_throughput{model_name="m1",engine_type="unified"} {{throughput}}
+        sglang:generation_tokens_total{model_name="m1",is_streaming="true"} {{generated}}
+        sglang:prompt_tokens_total{model_name="m1",is_streaming="true"} {{prompts}}
+        sglang:cached_tokens_total{model_name="m1",cache_source="device"} {{cached}}
+        sglang:num_requests_total{model_name="m1",is_streaming="true"} {{requests}}
+        sglang:spec_accept_rate{model_name="m1",engine_type="unified"} {{accept}}
+        sglang:time_to_first_token_seconds_bucket{model_name="m1",le="0.5"} {{requests}}
+        sglang:time_to_first_token_seconds_bucket{model_name="m1",le="+Inf"} {{requests}}
+        sglang:time_to_first_token_seconds_sum{model_name="m1"} 1
+        sglang:time_to_first_token_seconds_count{model_name="m1"} {{requests}}
+        """);
+
+    [Fact]
+    public void Sglang_UsesTheLiveThroughput_WhileItMoves_AndReadsItsOtherFamilies()
+    {
+        var before = PrometheusText.Parse(Sglang(2, 100, 1000, 500, 100, 10, 0.5));
+        var after = PrometheusText.Parse(Sglang(2, 140, 1000, 700, 200, 12, 0.75));
+
+        var kpis = ModelKpiCalculator.Compute(after, before, 10);
+
+        Assert.Equal(140, kpis.Load.GenerationTokensPerSecond);
+        Assert.Equal(20, kpis.Load.PromptTokensPerSecond);
+        Assert.Equal((2d, 1d, 0.25), (kpis.Load.RunningRequests, kpis.Load.WaitingRequests, kpis.Load.KvCacheUsage));
+        Assert.Equal(12, kpis.RequestsPerMinute);
+        Assert.Equal(0.5, kpis.PrefixCacheHitRate);
+        Assert.Equal(0.75, kpis.SpecDecodeAcceptanceRate);
+        Assert.NotNull(kpis.TimeToFirstToken);
+        Assert.True(double.IsNaN(kpis.PreemptionsPerMinute));
+    }
+
+    [Fact]
+    public void Sglang_AFrozenThroughput_ReadsAsTheCounterRate_SoAStalledModelIsNotHidden()
+    {
+        var before = PrometheusText.Parse(Sglang(2, 100, 1000, 500, 0, 10, 0));
+        var after = PrometheusText.Parse(Sglang(2, 100, 1000, 500, 0, 10, 0));
+
+        var kpis = ModelKpiCalculator.Compute(after, before, 10);
+
+        Assert.Equal(0, kpis.Load.GenerationTokensPerSecond);
+        Assert.Null(kpis.SpecDecodeAcceptanceRate);
+    }
+
+    [Fact]
+    public void Nim_ReadsVllmsFamiliesWithoutThePrefix()
+    {
+        var before = PrometheusText.Parse("num_requests_running 1\nnum_requests_waiting 0\ngpu_cache_usage_perc 0.1\ngeneration_tokens_total 100\nprompt_tokens_total 10\n");
+        var after = PrometheusText.Parse("num_requests_running 3\nnum_requests_waiting 2\ngpu_cache_usage_perc 0.4\ngeneration_tokens_total 300\nprompt_tokens_total 30\n");
+
+        var kpis = ModelKpiCalculator.Compute(after, before, 10);
+
+        Assert.Equal((3d, 2d, 0.4), (kpis.Load.RunningRequests, kpis.Load.WaitingRequests, kpis.Load.KvCacheUsage));
+        Assert.Equal(20, kpis.Load.GenerationTokensPerSecond);
+    }
+
     private const string Previous = """
         vllm:num_requests_running{model_name="m1"} 2.0
         vllm:num_requests_waiting{model_name="m1"} 1.0

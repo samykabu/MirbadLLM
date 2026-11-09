@@ -59,6 +59,10 @@ public static class SettingChanges
         Add("Container image", before.Container?.Image ?? "none", after.Container?.Image ?? "none");
         Add("Container image digest", before.Container?.ImageDigest ?? "none", after.Container?.ImageDigest ?? "none");
         Add("Container extra args", ExtraArgs(before.Container?.ExtraArgs ?? []), ExtraArgs(after.Container?.ExtraArgs ?? []));
+        Add("Environment variables", Variables(before.Container?.Env), Variables(after.Container?.Env));
+        // Token names only: the values never reach this page.
+        Add("Secret variables", Variables(before.Container?.SecretEnv), Variables(after.Container?.SecretEnv));
+        Add("Registry login", Login(before.Container?.RegistryLogin), Login(after.Container?.RegistryLogin));
 
         // Placement GPUs (design §5.1, §6.3; MN-118): another card or another count is a launch change (device selection,
         // --tensor-parallel-size, the per-GPU utilization). Compared by UUID, the GPU's identity, so a renumbering that
@@ -157,6 +161,12 @@ public static class SettingChanges
     };
 
     private static string Json(JsonFields? fields) => fields is null || fields.IsEmpty ? "none" : fields.ToJson();
+
+    private static string Variables(IReadOnlyDictionary<string, string>? variables) =>
+        variables is not { Count: > 0 } ? "none" : ContainerEditing.Format(variables).Replace('\n', ' ');
+
+    private static string Login(ContainerRegistryLogin? login) =>
+        login is null ? "none" : $"{login.Username} at {login.Host}, token {login.TokenName}";
 
     private static string ExtraArgs(IReadOnlyList<string> args) => args.Count == 0 ? "none" : string.Join(' ', args);
 }

@@ -33,7 +33,7 @@ else if (_rows.Count == 0)
     <EmptyState Title="No models yet" TestId="models-empty">
         <ChildContent>
             <p>
-                A model is one runtime container (vLLM or llama.cpp) serving one checkpoint under a served name, on one node.
+                A model is one runtime (such as vLLM, llama.cpp or SGLang) serving one checkpoint under a served name, on one node.
                 Add one from a checkpoint folder that is already on a node, or download a checkpoint from Hugging Face first.
                 You set its node, memory budget and context length in the editor, then start it here.
             </p>
@@ -276,7 +276,11 @@ else
                 <dt>Runtime</dt><dd>@FleetNodes.RuntimeLabel(definition.Runtime)</dd>
                 <dt>OS</dt><dd>@(definition.Placement?.NodeId is { } placedId ? NodeOf(placedId)?.Capabilities?.Os.Description ?? UiFormat.Missing : UiFormat.Missing)</dd>
                 <dt>Budget</dt><dd class="num">@UiFormat.GiB(definition.MemoryBudgetGiB)</dd>
-                <dt>Context</dt><dd class="num">@definition.MaxModelLen.ToString("#,0", CultureInfo.InvariantCulture)</dd>
+                <dt>Context</dt><dd class="num">@ModelCapabilities.MaxModelLen(definition).ToString("#,0", CultureInfo.InvariantCulture)</dd>
+                @if (definition.Container is { } container && definition.Runtime is RuntimeKind.Sglang or RuntimeKind.Nim)
+                {
+                    <dt>Image</dt><dd class="num" data-testid="models-detail-image">@container.Image</dd>
+                }
             </dl>
             <h3 class="panel-label">Router, since controller start</h3>
             <dl class="kv"><dt>Requests</dt><dd class="num">@(router is null ? UiFormat.Missing : UiFormat.Whole(router.TotalRequests))</dd><dt>Failed</dt><dd class="num">@(router is null ? UiFormat.Missing : UiFormat.Whole(router.FailedRequests))</dd><dt>Error rate</dt><dd class="num">@UiFormat.Percent(ErrorPercent(router))</dd><dt>In flight</dt><dd class="num">@(router is null ? UiFormat.Missing : UiFormat.Whole(router.InFlight))</dd></dl>

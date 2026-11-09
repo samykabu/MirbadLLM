@@ -240,7 +240,7 @@ public static class MlxEditing
 public static class MlxFieldHelp
 {
     public static readonly FieldHelpText Runtime = new(
-        What: "The inference engine that serves the model: vLLM, llama.cpp (llama-server) or MLX (mlx_lm.server) on a node that reports it.",
+        What: "The engine that serves the model, from the runtimes this node reports.",
         Why: "The settings below belong to the runtime. MLX serves an MLX checkpoint folder as a native process on an Apple " +
              "Silicon node; the option is shown only for a node whose capabilities list an MLX runtime. The runtime is chosen " +
              "when the model is added.",

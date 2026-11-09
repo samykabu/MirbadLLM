@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Core;
 using MirbadLLM.NodeRuntime;
 
@@ -34,6 +35,10 @@ public interface IContainerImageEngine
     /// aggregated progress. Throws <see cref="ImagePullFailedException"/> when Docker reports an error.
     /// </summary>
     Task PullAsync(string repository, string tagOrDigest, Action<ImagePullProgress> progress, CancellationToken ct = default);
+
+    /// <summary>As the other overload, logging in to the registry when given a login. An engine that has no registry ignores it.</summary>
+    Task PullAsync(string repository, string tagOrDigest, RegistryCredentials? registry, Action<ImagePullProgress> progress, CancellationToken ct = default) =>
+        PullAsync(repository, tagOrDigest, progress, ct);
 }
 
 /// <summary>
@@ -92,7 +97,11 @@ public sealed class DockerImageClient(HttpClient docker) : IContainerImageEngine
     }
 
     /// <inheritdoc />
-    public async Task PullAsync(string repository, string tagOrDigest, Action<ImagePullProgress> progress, CancellationToken ct = default)
+    public Task PullAsync(string repository, string tagOrDigest, Action<ImagePullProgress> progress, CancellationToken ct = default) =>
+        PullAsync(repository, tagOrDigest, null, progress, ct);
+
+    /// <inheritdoc />
+    public async Task PullAsync(string repository, string tagOrDigest, RegistryCredentials? registry, Action<ImagePullProgress> progress, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(repository);
         ArgumentException.ThrowIfNullOrEmpty(tagOrDigest);
@@ -100,6 +109,11 @@ public sealed class DockerImageClient(HttpClient docker) : IContainerImageEngine
 
         string url = $"images/create?fromImage={Uri.EscapeDataString(repository)}&tag={Uri.EscapeDataString(tagOrDigest)}";
         using var request = new HttpRequestMessage(HttpMethod.Post, url);
+        if (registry is not null)
+        {
+            request.Headers.TryAddWithoutValidation("X-Registry-Auth", registry.ToDockerHeader(ContainerImageRegistry.HostOf(repository)));
+        }
+
         using var response = await docker.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         await EnsureSuccessAsync(response, ct).ConfigureAwait(false);
 

@@ -6,6 +6,17 @@ private development history.
 
 ## Unreleased
 
+- Tuning works on MLX (parallel requests, KV bits, draft tokens, prompt cache) and SGLang (max running requests, schedule policy, draft depth); NIM stays benchmark-only because it has nothing to tune
+- Benchmarks size their load and prompts for each runtime, report speculative acceptance where the server does, count tokens on servers that report no usage, and no longer claim "as requested" on runtimes whose logs they can't read
+- NIM: secrets such as `NGC_API_KEY` come from saved tokens, private images can be pulled with a registry login, the served name is enforced, and no checkpoint folder is needed in the wizard, moves, restores or MCP
+- SGLang and NIM models can set environment variables; MCP can't change the image or arguments of a model that has secrets
+- SGLang and NIM report live numbers: tokens per second, running and waiting requests, KV usage, latencies, and stall and slow warnings. A SGLang model needs one restart to start reporting them, and shows Restart pending until then
+- The model page says why an MLX model has no live numbers
+- A fleet of one node with discrete GPUs can now choose GPUs in the model editor; before, every save was refused for having none
+- SGLang and NIM: the Add model wizard no longer shows an empty Tuning step or a budget rule for a field they don't have, and changing the node drops a runtime the new node can't run
+- SGLang: several selected GPUs now set `--tp-size`; `--context-length` and `--tool-call-parser` in Extra args reach the context figures, tags and `/v1/models`; the image field suggests images the node has
+- A model whose draft model folder has no source can't be moved, because it would arrive without the drafter
+- Overview and the Models panel show the container image, and each runtime's own context length
 - MCP: `mirbad_update_model` changes a model's settings without restarting it, and `mirbad_get_model_logs` reads its server's latest log lines with an MCP Operator key
 - MCP: `mirbad_deploy_model` accepts `extraArgs`, stored as the container, llama.cpp, MLX or vLLM extra arguments
 - Moving a model pulls the image its runtime actually uses, and a native-process model no longer waits on a node without Docker

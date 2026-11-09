@@ -797,7 +797,7 @@ public sealed partial class RestoreJobService(
         var nodeFolders = nodeResources?.FoldersFor(nodeId) ?? folders;
         var nodeDownloader = nodeResources?.DownloaderFor(nodeId) ?? downloader;
         bool primaryHasSource = model.Sources.Any(s => string.Equals(s.Folder, model.ModelPath, StringComparison.Ordinal));
-        if (!primaryHasSource && !nodeFolders.IsPresent(model.ModelPath))
+        if (model.NeedsCheckpoint && !primaryHasSource && !nodeFolders.IsPresent(model.ModelPath))
         {
             SetModel(job, model.Id, RestoreModelState.Manual,
                 $"No download source: copy the checkpoint into /models/{model.ModelPath} on node '{nodeId}', then start it from the Dashboard.");

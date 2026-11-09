@@ -492,7 +492,7 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
             await stages.StageReachedAsync(OperationStages.Pulling, new OperationProgress { Message = $"pulling {image}" }, ct)
                 .ConfigureAwait(false);
             ContainerRuntimeLog.Pulling(_logger, image, id);
-            await _docker.PullImageAsync(image, ct).ConfigureAwait(false);
+            await _docker.PullImageAsync(image, launch.Registry, ct).ConfigureAwait(false);
             await stages.StageReachedAsync(OperationStages.Pulled, new OperationProgress { Percent = 100 }, ct).ConfigureAwait(false);
         }
 

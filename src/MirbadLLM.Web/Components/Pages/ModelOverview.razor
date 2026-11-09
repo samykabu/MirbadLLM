@@ -72,6 +72,14 @@ else if (_model is not null)
             {
                 <p class="overview-foot muted">Live numbers appear while the model is Ready.</p>
             }
+            else if (_model.Runtime == RuntimeKind.Mlx)
+            {
+                <p class="overview-foot muted" data-testid="overview-no-metrics">mlx_lm.server has no metrics endpoint, so live numbers stay empty. Request counts come from the router.</p>
+            }
+            else if (_model.Runtime == RuntimeKind.Sglang && Load is null)
+            {
+                <p class="overview-foot muted" data-testid="overview-no-metrics">No live numbers yet. A model started before MirbadLLM turned on SGLang's metrics needs a restart to report them.</p>
+            }
         </section>
 
         <section class="panel overview-panel" aria-labelledby="ov-config" data-testid="overview-config">
@@ -103,9 +111,19 @@ else if (_model is not null)
                 <dt>Budget</dt>
                 <dd class="num" data-testid="overview-budget">@UiFormat.GiB(_model.MemoryBudgetGiB)</dd>
                 <dt>Context</dt>
-                <dd class="num" data-testid="overview-context">@UiFormat.ContextLength(_model.Mlx is { } mlxContext && _model.Runtime == RuntimeKind.Mlx ? mlxContext.ContextSize : _model.MaxModelLen) tokens</dd>
-                <dt>Max sequences</dt>
-                <dd class="num">@(_model.Mlx is { } mlxParallel && _model.Runtime == RuntimeKind.Mlx ? mlxParallel.Parallel : _model.MaxNumSeqs)</dd>
+                <dd class="num" data-testid="overview-context">@UiFormat.ContextLength(ModelCapabilities.MaxModelLen(_model)) tokens</dd>
+                @if (_model.Container is { } container && _model.Runtime is RuntimeKind.Sglang or RuntimeKind.Nim)
+                {
+                    <dt>Image</dt>
+                    <dd class="num" data-testid="overview-image">@container.Image</dd>
+                    <dt>Extra args</dt>
+                    <dd class="num" data-testid="overview-extra-args">@(container.ExtraArgs.Count == 0 ? "None" : string.Join(' ', container.ExtraArgs))</dd>
+                }
+                else
+                {
+                    <dt>Max sequences</dt>
+                    <dd class="num">@(_model.Mlx is { } mlxParallel && _model.Runtime == RuntimeKind.Mlx ? mlxParallel.Parallel : _model.MaxNumSeqs)</dd>
+                }
                 <dt>Speculative</dt>
                 <dd class="num">@UiFormat.SpeculativeLabel(_model.Speculative)</dd>
             </dl>

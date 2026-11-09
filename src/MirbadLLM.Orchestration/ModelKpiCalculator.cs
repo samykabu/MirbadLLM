@@ -5,7 +5,8 @@ namespace MirbadLLM.Orchestration;
 
 /// <summary>
 /// Computes <see cref="ModelKpis"/> from two consecutive Prometheus scrapes of one model's <c>/metrics</c>: vLLM's families
-/// as before, or llama.cpp's (<c>--metrics</c>, <see cref="LlamaCppMetrics"/>) mapped as design-p3p4 §A.1.9 says.
+/// as before, llama.cpp's (<c>--metrics</c>, <see cref="LlamaCppMetrics"/>) mapped as design-p3p4 §A.1.9 says, SGLang's
+/// (<c>--enable-metrics</c>), or NIM's, which are vLLM's without the prefix.
 /// <para>A scrape is read as llama.cpp when it has a <c>llamacpp:</c> sample and no <c>vllm:</c> one, so every vLLM scrape
 /// takes exactly the P1/P2 path. llama.cpp has no source for KV-cache usage, the latency histograms, finished requests,
 /// preemptions or tool calls: the nullable KPIs are null and the non-nullable ones (<see cref="ModelMetrics.KvCacheUsage"/>,
@@ -43,6 +44,24 @@ internal static class ModelKpiCalculator
     private const string LlamaSpecDecodeAcceptedMetric = LlamaCppMetrics.SpecDecodeAcceptedTotal;
     private const string LlamaSpecDecodeDraftMetric = LlamaCppMetrics.SpecDecodeDraftTotal;
 
+    // SGLang (--enable-metrics), from its observability/metrics_collector.py.
+    private const string SglangRunningMetric = "sglang:num_running_reqs";
+    private const string SglangWaitingMetric = "sglang:num_queue_reqs";
+    private const string SglangTokenUsageMetric = "sglang:token_usage";
+    private const string SglangThroughputMetric = "sglang:gen_throughput";
+    private const string SglangGenerationTokensMetric = "sglang:generation_tokens_total";
+    private const string SglangPromptTokensMetric = "sglang:prompt_tokens_total";
+    private const string SglangCachedTokensMetric = "sglang:cached_tokens_total";
+    private const string SglangRequestsMetric = "sglang:num_requests_total";
+    private const string SglangAcceptRateMetric = "sglang:spec_accept_rate";
+    private const string SglangTimeToFirstTokenHistogram = "sglang:time_to_first_token_seconds";
+    private const string SglangInterTokenLatencyHistogram = "sglang:inter_token_latency_seconds";
+    private const string SglangE2eLatencyHistogram = "sglang:e2e_request_latency_seconds";
+    private const string SglangQueueTimeHistogram = "sglang:queue_time_seconds";
+
+    // NIM publishes vLLM's families without the prefix, so its scrape takes the vLLM path.
+    private const string NimRunningMetric = "num_requests_running";
+
     /// <summary>
     /// <paramref name="previous"/> is null on the first scrape of a model (no baseline yet): every rate,
     /// latency and ratio is then zero/null rather than computed.
@@ -52,6 +71,17 @@ internal static class ModelKpiCalculator
         if (IsLlamaCpp(current))
         {
             return ComputeLlamaCpp(current, previous, elapsedSeconds);
+        }
+
+        if (current.Any(s => s.Name.StartsWith("sglang:", StringComparison.Ordinal)))
+        {
+            return ComputeSglang(current, previous, elapsedSeconds);
+        }
+
+        if (PrometheusText.HasMetric(current, NimRunningMetric))
+        {
+            current = WithVllmPrefix(current);
+            previous = previous is null ? null : WithVllmPrefix(previous);
         }
 
         double running = PrometheusText.Sum(current, RunningMetric);
@@ -93,6 +123,42 @@ internal static class ModelKpiCalculator
             preemptionsPerMinute,
             finishedByReasonPerMinute,
             toolCallsPerMinute);
+    }
+
+    private static List<PrometheusSample> WithVllmPrefix(IReadOnlyList<PrometheusSample> samples) =>
+        [.. samples.Select(s => s with { Name = "vllm:" + s.Name })];
+
+    /// <summary>
+    /// SGLang adds to its token counters only when a request finishes, so during a long request they stand still. The
+    /// scheduler's throughput gauge moves meanwhile, but keeps its last value once decoding stops, so it counts only while
+    /// requests run and it has changed since the last scrape; otherwise the counter's rate is used, which lets a stalled
+    /// model read as 0 tok/s. KV usage is its token pool, and SGLang has no preemption, tool-call or finish-reason counter.
+    /// </summary>
+    private static ModelKpis ComputeSglang(IReadOnlyList<PrometheusSample> current, IReadOnlyList<PrometheusSample>? previous, double elapsedSeconds)
+    {
+        double running = PrometheusText.Sum(current, SglangRunningMetric);
+        double waiting = PrometheusText.Sum(current, SglangWaitingMetric);
+        double throughput = PrometheusText.Sum(current, SglangThroughputMetric);
+        double generationRate = running > 0 && SumOrNull(previous, SglangThroughputMetric) is { } before && throughput > 0 && before != throughput
+            ? throughput
+            : CounterMath.PerSecond(SumOrNull(previous, SglangGenerationTokensMetric), PrometheusText.Sum(current, SglangGenerationTokensMetric), elapsedSeconds);
+        double promptRate = CounterMath.PerSecond(SumOrNull(previous, SglangPromptTokensMetric), PrometheusText.Sum(current, SglangPromptTokensMetric), elapsedSeconds);
+        double kv = PrometheusText.HasMetric(current, SglangTokenUsageMetric) ? Math.Min(1, PrometheusText.Sum(current, SglangTokenUsageMetric)) : double.NaN;
+        double acceptRate = PrometheusText.Sum(current, SglangAcceptRateMetric);
+
+        return new ModelKpis(
+            new ModelMetrics(running, waiting, kv, generationRate, promptRate),
+            RequestsPerMinute: CounterMath.PerMinute(SumOrNull(previous, SglangRequestsMetric), PrometheusText.Sum(current, SglangRequestsMetric), elapsedSeconds),
+            TimeToFirstToken: Latency(current, previous, SglangTimeToFirstTokenHistogram),
+            InterTokenLatency: Latency(current, previous, SglangInterTokenLatencyHistogram),
+            EndToEndLatency: Latency(current, previous, SglangE2eLatencyHistogram),
+            QueueTime: Latency(current, previous, SglangQueueTimeHistogram),
+            PrefixCacheHitRate: RatioOfPresent(previous, current, SglangCachedTokensMetric, SglangPromptTokensMetric),
+            // 0 until a speculative batch has been verified, and always on a model without speculative decoding.
+            SpecDecodeAcceptanceRate: acceptRate > 0 ? Math.Min(1, acceptRate) : null,
+            PreemptionsPerMinute: double.NaN,
+            FinishedByReasonPerMinute: new Dictionary<string, double>(StringComparer.Ordinal),
+            ToolCallsPerMinute: double.NaN);
     }
 
     /// <summary>True for a llama.cpp scrape: a <c>llamacpp:</c> sample and no <c>vllm:</c> sample.</summary>
