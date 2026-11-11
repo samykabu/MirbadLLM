@@ -37,6 +37,7 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
     private readonly ILogger<ContainerRuntimeDriver> _logger;
     private readonly TimeProvider _time;
     private readonly IGpuInventory? _gpus;
+    private readonly Func<string, IReadOnlyList<string>?>? _gpuDeviceNodes;
 
     /// <summary>Ids currently being stopped; consulted before the Docker state so a stop in progress reports Stopping.</summary>
     private readonly ConcurrentDictionary<string, byte> _stopping = new(StringComparer.Ordinal);
@@ -55,6 +56,10 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
     /// The node's GPUs (MN-104): checks that selected UUIDs are on the node and maps them to current indices. Null = GPU
     /// selection by UUID is refused (<c>spec_rejected</c>), as on a P1 agent.
     /// </param>
+    /// <param name="gpuDeviceNodes">
+    /// On a <see cref="ContainerGpuAccess.DeviceNodes"/> node: the device nodes a container needs for the GPU with that
+    /// UUID (its DRM render node), null when the GPU has none. Unused otherwise.
+    /// </param>
     public ContainerRuntimeDriver(
         DockerEngineClient docker,
         HttpClient upstreamHttp,
@@ -62,7 +67,8 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
         IOptions<ContainerRuntimeOptions> options,
         ILogger<ContainerRuntimeDriver> logger,
         TimeProvider? timeProvider = null,
-        IGpuInventory? gpuInventory = null)
+        IGpuInventory? gpuInventory = null,
+        Func<string, IReadOnlyList<string>?>? gpuDeviceNodes = null)
     {
         ArgumentNullException.ThrowIfNull(docker);
         ArgumentNullException.ThrowIfNull(upstreamHttp);
@@ -76,6 +82,7 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
         _logger = logger;
         _time = timeProvider ?? TimeProvider.System;
         _gpus = gpuInventory;
+        _gpuDeviceNodes = gpuDeviceNodes;
     }
 
     /// <inheritdoc />
@@ -121,7 +128,58 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
         {
             CheckGpusPresent(uuids);
         }
+
+        _ = DevicePaths(plan);
     }
+
+    /// <summary>
+    /// The device nodes of <paramref name="plan"/>'s container (<see cref="CreateContainerRequest.DevicePaths"/>): null on
+    /// an NVIDIA node (the device request, as before), empty on a CPU-only node, and on a Vulkan node the render node of
+    /// the one selected GPU. A Vulkan launch that names no GPU, more than
+    /// <see cref="ContainerRuntimeOptions.MaxDeviceNodeGpus"/>, or a GPU without a render node is 422 <c>spec_rejected</c>
+    /// with the reason: the agent passes a device it can name, never "whatever the container finds".
+    /// </summary>
+    private List<string>? DevicePaths(ContainerLaunchPlan plan)
+    {
+        switch (_options.GpuAccess)
+        {
+            case ContainerGpuAccess.None:
+                return [];
+            case ContainerGpuAccess.DeviceNodes:
+                if (plan.GpuUuids is not { Count: > 0 } uuids)
+                {
+                    throw DeviceRejected("this node passes GPUs to containers as device nodes, so the launch must select its GPU by UUID");
+                }
+
+                if (uuids.Count > ContainerRuntimeOptions.MaxDeviceNodeGpus)
+                {
+                    throw DeviceRejected(
+                        $"a container on this Vulkan node gets one GPU, and {uuids.Count} were selected; place the model on one GPU");
+                }
+
+                var paths = new List<string>();
+                foreach (string uuid in uuids)
+                {
+                    if (_gpuDeviceNodes?.Invoke(uuid) is not { Count: > 0 } nodes)
+                    {
+                        throw DeviceRejected($"GPU {uuid} has no DRM render node on this node");
+                    }
+
+                    paths.AddRange(nodes);
+                }
+
+                return paths;
+            default:
+                return null;
+        }
+    }
+
+    private static AgentException DeviceRejected(string reason) => new(422, new AgentError
+    {
+        Code = ErrorCodes.SpecRejected,
+        Message = $"Launch spec rejected: {reason}.",
+        Details = AgentJson.ToElement(new SpecRejectedDetails(reason)),
+    });
 
     /// <summary>
     /// Refuses with 422 <c>gpu_missing</c> when any of <paramref name="uuids"/> is not in the inventory's last read, or
@@ -518,7 +576,8 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
             NetworkAlias: $"ss-{id}",
             IpcMode: plan.IpcMode,
             Env: plan.Environment.IsEmpty ? null : plan.Environment.ToDockerEnv(),
-            GpuDeviceIds: plan.GpuUuids);
+            GpuDeviceIds: plan.GpuUuids,
+            DevicePaths: DevicePaths(plan));
 
         await stages.BeforeStepAsync(OperationStages.Created, ct).ConfigureAwait(false);
         string containerId;

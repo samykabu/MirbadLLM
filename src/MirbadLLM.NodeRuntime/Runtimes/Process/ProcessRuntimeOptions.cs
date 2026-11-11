@@ -22,6 +22,13 @@ public sealed class ProcessRuntimeOptions
     /// <summary>Host the driver probes and the proxy reaches (llama-server binds <c>--host 127.0.0.1</c>).</summary>
     public string UpstreamHost { get; set; } = "127.0.0.1";
 
+    /// <summary>
+    /// The node's <c>Agent:Accelerator</c> in its stored form (<c>MirbadLLM.Core.NodeAccelerators</c>): null (NVIDIA or
+    /// macOS, the environment as before), <c>cpu</c> or <c>vulkan</c>. On a Vulkan node the driver selects GPUs with
+    /// <c>GGML_VK_VISIBLE_DEVICES</c> instead of <c>CUDA_VISIBLE_DEVICES</c>.
+    /// </summary>
+    public string? Accelerator { get; set; }
+
     /// <summary>How long a process may stay Starting before it is Failed (<c>Agent:Process:StartTimeout</c>, default 10 min).</summary>
     public TimeSpan StartTimeout { get; set; } = TimeSpan.FromMinutes(10);
 

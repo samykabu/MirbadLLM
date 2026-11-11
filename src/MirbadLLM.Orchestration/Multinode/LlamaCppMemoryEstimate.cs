@@ -64,11 +64,16 @@ public static class LlamaCppMemoryEstimate
     /// <param name="gguf">The GGUF header summary (from the agent's <c>gguf.inspect</c> route).</param>
     /// <param name="settings">The model's llama.cpp settings.</param>
     /// <param name="gpuCount">Placed GPUs (at least 1).</param>
+    /// <param name="cpuOnly">
+    /// True on a CPU-only node (<see cref="NodeAccelerators.Cpu"/>): no layer is offloaded whatever <c>-ngl</c> says and
+    /// there is no CUDA context, so every weight counts in the budget, which such a node admits against host memory, and
+    /// <see cref="GgufMemoryEstimate.HostGiB"/> is 0.
+    /// </param>
     /// <exception cref="ArgumentException">
     /// The summary lacks the sizes the KV or compute term needs (embedding length, head count, vocabulary), a cache type
     /// is unknown, or a setting is out of range (context, parallel, micro-batch below 1).
     /// </exception>
-    public static GgufMemoryEstimate Estimate(GgufSummary gguf, LlamaCppSettings settings, int gpuCount = 1)
+    public static GgufMemoryEstimate Estimate(GgufSummary gguf, LlamaCppSettings settings, int gpuCount = 1, bool cpuOnly = false)
     {
         ArgumentNullException.ThrowIfNull(gguf);
         ArgumentNullException.ThrowIfNull(settings);
@@ -96,7 +101,7 @@ public static class LlamaCppMemoryEstimate
         int keyLength = gguf.KeyLength ?? embedding / heads;
         int valueLength = gguf.ValueLength ?? embedding / heads;
 
-        double offloaded = Math.Clamp(settings.GpuLayers, 0, blocks) / (double)blocks;
+        double offloaded = cpuOnly ? 1 : Math.Clamp(settings.GpuLayers, 0, blocks) / (double)blocks;
         double weightsBytes = gguf.TensorBytes * offloaded;
         double hostBytes = gguf.TensorBytes - weightsBytes;
 
@@ -123,7 +128,7 @@ public static class LlamaCppMemoryEstimate
         }
 
         double computeBytes = Math.Max(MinComputeBytes, ub * ((double)embedding + vocab) * 4 * ComputeFactor);
-        double cuda = CudaContextGiBPerGpu * gpuCount;
+        double cuda = cpuOnly ? 0 : CudaContextGiBPerGpu * gpuCount;
         double budget = (Overhead * (weightsBytes + kvBytes + ssmBytes + computeBytes) / GiB) + cuda;
         double roundedBudget = Math.Ceiling(Math.Round(budget * 100, 6)) / 100;
 

@@ -14,7 +14,7 @@ namespace MirbadLLM.Agent.Telemetry;
 /// transient failure does not make every placed UUID look missing (<see cref="IGpuInventory.Missing"/>). It becomes null
 /// only when <c>nvidia-smi</c> is not installed.</para>
 /// </summary>
-public sealed class NvidiaSmiGpuInventory(INvidiaSmiRunner runner) : IGpuInventory
+public sealed class NvidiaSmiGpuInventory(INvidiaSmiRunner runner) : IGpuStartupInventory
 {
     /// <summary>Full query (index, uuid, name, memory.total, compute_cap, driver_version).</summary>
     public const string Arguments = "--query-gpu=index,uuid,name,memory.total,compute_cap,driver_version --format=csv,noheader,nounits";

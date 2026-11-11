@@ -59,6 +59,19 @@ Describe 'install-agent.ps1' {
         $CudartFiles = [ordered]@{ 'cudart64_13.dll' = 'cuda runtime' }
         $MainAsset = 'llama-b1-bin-win-cuda-13.4-x64.zip'
         $CudartAsset = 'cudart-llama-bin-win-cuda-13.4-x64.zip'
+        # The same release's builds for a PC without a usable NVIDIA card: one zip each, no CUDA runtime.
+        $CpuAsset = 'llama-b1-bin-win-cpu-x64.zip'
+        $VulkanAsset = 'llama-b1-bin-win-vulkan-x64.zip'
+        $CpuFiles = [ordered]@{
+            'llama-server.exe' = 'launcher'
+            'llama-server-impl.dll' = 'server code'
+            'ggml-cpu-x64.dll' = 'cpu kernels'
+        }
+        $VulkanFiles = [ordered]@{
+            'llama-server.exe' = 'launcher'
+            'llama-server-impl.dll' = 'server code'
+            'ggml-vulkan.dll' = 'vulkan kernels'
+        }
 
         function New-Release([hashtable] $Main, [hashtable] $Cudart, [hashtable] $LockedFiles) {
             # Writes both zips and a lock file pinning their hashes and $LockedFiles (name -> content) as the file set.
@@ -71,6 +84,21 @@ Describe 'install-agent.ps1' {
                 $sha = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
                 $files += [pscustomobject][ordered]@{ path = $name; sha256 = $sha; bytes = $bytes.Length }
             }
+            $variants = @(
+                foreach ($v in @(@('cpu', $CpuAsset, $CpuFiles), @('vulkan', $VulkanAsset, $VulkanFiles))) {
+                    New-Zip (Join-Path $dir $v[1]) (Copy-Table $v[2])
+                    $variantFiles = @()
+                    foreach ($name in ($v[2].Keys | Sort-Object)) {
+                        $bytes = [Text.Encoding]::UTF8.GetBytes($v[2][$name])
+                        $sha = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+                        $variantFiles += [pscustomobject][ordered]@{ path = $name; sha256 = $sha; bytes = $bytes.Length }
+                    }
+                    [pscustomobject][ordered]@{
+                        accelerator = $v[0]
+                        assets = @([pscustomobject][ordered]@{ name = $v[1]; url = "https://github.com/ggml-org/llama.cpp/releases/download/b1/$($v[1])"; sha256 = (Get-Sha (Join-Path $dir $v[1])); bytes = (Get-Item (Join-Path $dir $v[1])).Length })
+                        files = $variantFiles
+                    }
+                })
             $lock = [pscustomobject][ordered]@{
                 schemaVersion = 1; version = 'b1'; cuda = '13.4'; minDriver = '615.00'; commit = 'abc1234'
                 assets = @(
@@ -78,6 +106,7 @@ Describe 'install-agent.ps1' {
                         [pscustomobject][ordered]@{ name = $a; url = "https://github.com/ggml-org/llama.cpp/releases/download/b1/$a"; sha256 = (Get-Sha (Join-Path $dir $a)); bytes = (Get-Item (Join-Path $dir $a)).Length }
                     })
                 files = $files
+                variants = $variants
             }
             [IO.File]::WriteAllText((Join-Path $dir 'lock.json'), (ConvertTo-Json -InputObject $lock -Depth 10))
             return $dir
@@ -140,12 +169,15 @@ Describe 'install-agent.ps1' {
             function Get-NvidiaDriverVersion { @($FakeDriver | Where-Object { $_ }) }
             function Get-ProcessesUnder([string] $Folder) { @($FakeProcesses | Where-Object { $_ }) }
             function Get-AccountReference { $CurrentUserRef }
+            # The group change of a Vulkan install is counted, never made.
+            function Grant-PerformanceCounterAccess { $script:CounterGrants++ }
         }
         BeforeEach {
             . $InitLayout
             $FakeDriver = '617.14'
             $FakeProcesses = @()
             $Target = Join-Path $RuntimesDir 'b1'
+            $script:CounterGrants = 0
         }
         AfterEach { . $CleanLayout }
 
@@ -252,12 +284,92 @@ Describe 'install-agent.ps1' {
             } finally { Remove-Item -LiteralPath $release -Recurse -Force }
         }
 
-        It 'refuses a driver below minDriver, and a PC without an NVIDIA driver' {
+        It 'refuses a driver below minDriver, and the CUDA build on a PC without an NVIDIA driver' {
             $FakeDriver = '614.99'
             Assert-Throws { Install-LlamaCpp '' $GoodRelease } 'NVIDIA driver 614.99 is older than 615.00'
+            Assert-Throws { Install-LlamaCpp '' $GoodRelease } 'pass -Accelerator cpu'
             $FakeDriver = $null
-            Assert-Throws { Install-LlamaCpp '' $GoodRelease } 'No NVIDIA driver found'
+            Assert-Throws { Install-LlamaCpp '' $GoodRelease 'cuda' } 'No NVIDIA driver found'
             Assert-True (-not (Test-Path -LiteralPath $Target)) 'nothing installed'
+        }
+
+        It 'installs the CPU build on a PC without an NVIDIA driver and writes Agent:Accelerator cpu' {
+            $FakeDriver = $null
+            Assert-Equal 'cpu' (Resolve-Accelerator 'auto') 'auto without a driver'
+
+            Install-LlamaCpp '' $GoodRelease
+
+            [string[]] $files = @(Get-ChildItem -LiteralPath $Target -File | ForEach-Object { $_.Name })
+            [Array]::Sort($files, [StringComparer]::Ordinal)
+            Assert-Equal 'ggml-cpu-x64.dll,llama-server-impl.dll,llama-server.exe,manifest.json' ($files -join ',') 'the CPU build, and no CUDA file'
+            $manifest = Get-Content -Raw -LiteralPath (Join-Path $Target 'manifest.json') | ConvertFrom-Json
+            Assert-True ($null -eq $manifest.cuda) 'the manifest names no CUDA variant'
+            Assert-Equal $CpuAsset (@($manifest.sources) -join ',') 'manifest sources'
+            $config = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json
+            Assert-Equal 'cpu' $config.Agent.Accelerator 'Agent:Accelerator'
+            Assert-True ($null -eq @(@($config.Agent.Executables)[0].Versions)[0].Cuda) 'the version entry names no CUDA variant'
+            Assert-Equal 0 $script:CounterGrants 'no group change for a CPU node'
+        }
+
+        It 'keeps the CUDA build the default when an NVIDIA driver answers, and writes no Agent:Accelerator' {
+            Assert-Equal 'cuda' (Resolve-Accelerator 'auto') 'auto with a driver'
+            Install-LlamaCpp '' $GoodRelease
+            $config = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json
+            Assert-True ($null -eq $config.Agent.PSObject.Properties['Accelerator']) 'no Accelerator entry on an NVIDIA node'
+        }
+
+        It 'replaces the build of a version when the accelerator changes, and Agent:Accelerator follows' {
+            Install-LlamaCpp '' $GoodRelease 'cpu'
+            Assert-Equal 'cpu' (Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json).Agent.Accelerator 'cpu asked for on an NVIDIA PC'
+            Assert-True (Test-Path -LiteralPath (Join-Path $Target 'ggml-cpu-x64.dll')) 'the CPU build'
+
+            & icacls.exe $Target /grant "${CurrentUserRef}:(OI)(CI)F" /T /Q | Out-Null
+            Install-LlamaCpp '' $GoodRelease 'cuda'
+            Assert-True (Test-Path -LiteralPath (Join-Path $Target 'ggml-cuda.dll')) 'the CUDA build replaced it'
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $Target 'ggml-cpu-x64.dll'))) 'no CPU file left'
+            $config = Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json
+            Assert-True ($null -eq $config.Agent.PSObject.Properties['Accelerator']) 'the Accelerator entry is removed with the CUDA build'
+            Assert-Equal 1 @(@($config.Agent.Executables)[0].Versions).Count 'still one version entry'
+        }
+
+        It 'installs the Vulkan build only when asked, needs the Vulkan runtime, and grants the counter access' {
+            $FakeDriver = $null
+            Assert-Throws { Install-LlamaCpp '' $GoodRelease 'vulkan' } 'vulkan-1.dll is missing'
+            Assert-True (-not (Test-Path -LiteralPath $Target)) 'nothing installed without the runtime'
+
+            Set-Content -LiteralPath (Join-Path $SystemDir 'vulkan-1.dll') -Value 'x'
+            Install-LlamaCpp '' $GoodRelease 'vulkan'
+
+            Assert-True (Test-Path -LiteralPath (Join-Path $Target 'ggml-vulkan.dll')) 'the Vulkan build'
+            Assert-Equal 'vulkan' (Get-Content -Raw -LiteralPath $ConfigPath | ConvertFrom-Json).Agent.Accelerator 'Agent:Accelerator'
+            Assert-Equal 1 $script:CounterGrants 'the service account is granted the GPU memory counters'
+
+            # A second run keeps the verified folder and still makes sure of the grant.
+            Install-LlamaCpp '' $GoodRelease 'vulkan'
+            Assert-Equal 2 $script:CounterGrants 'the grant is checked again on a re-run'
+        }
+
+        It 'refuses an accelerator the lock file pins no build for, and a malformed variant' {
+            $lock = Get-Content -Raw $LockPath | ConvertFrom-Json
+            $lock.variants = @($lock.variants | Where-Object { $_.accelerator -ne 'vulkan' })
+            $bad = Join-Path $TestRoot 'no-vulkan.json'
+            [IO.File]::WriteAllText($bad, (ConvertTo-Json -InputObject $lock -Depth 10))
+            Assert-Throws { Select-LlamaCppBuild (Read-LlamaCppLock $bad) 'vulkan' } 'pins no vulkan build'
+
+            $lock = Get-Content -Raw $LockPath | ConvertFrom-Json
+            $lock.variants[0].assets[0].url = "https://github.com/ggml-org/llama.cpp/releases/latest/download/$CpuAsset"
+            [IO.File]::WriteAllText($bad, (ConvertTo-Json -InputObject $lock -Depth 10))
+            Assert-Throws { Read-LlamaCppLock $bad } 'must be downloaded by tag'
+
+            $lock = Get-Content -Raw $LockPath | ConvertFrom-Json
+            $lock.variants[0].files = @()
+            [IO.File]::WriteAllText($bad, (ConvertTo-Json -InputObject $lock -Depth 10))
+            Assert-Throws { Read-LlamaCppLock $bad } 'the cpu variant lists no files'
+
+            $lock = Get-Content -Raw $LockPath | ConvertFrom-Json
+            $lock.variants[0].accelerator = 'rocm'
+            [IO.File]::WriteAllText($bad, (ConvertTo-Json -InputObject $lock -Depth 10))
+            Assert-Throws { Read-LlamaCppLock $bad } "variant accelerator 'rocm' is not cpu or vulkan"
         }
 
         It 'stops with a message naming the Visual C++ redistributable when one of its DLLs is missing' {

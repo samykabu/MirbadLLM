@@ -492,12 +492,12 @@ else
         {
             <RingGauge Percent="@(memory.HostTotalGiB > 0 ? 100 * (1 - memory.HostAvailableGiB / memory.HostTotalGiB) : null)" Size="56" ShowValue="true" Label="Memory used" TestId="@($"nodes-ring-{row.Id}")" />
             <div><span class="num">@UiFormat.GiB(memory.HostAvailableGiB)</span> <span class="muted">free of</span> <span class="num">@UiFormat.GiB(memory.HostTotalGiB)</span></div>
-            <div class="muted">@(model == MemoryModel.Discrete ? "Host RAM, no GPU reading" : "Unified memory")</div>
+            <div class="muted">@(model == MemoryModel.Discrete ? "Host RAM, no GPU reading" : NodeAccelerators.IsCpu(row.Capabilities) ? "Host RAM, CPU only" : "Unified memory")</div>
         }
         else
         {
             <div><span class="num">@UiFormat.Missing</span></div>
-            <div class="muted">@(model switch { MemoryModel.Unified => "Unified memory, no reading yet", MemoryModel.Discrete => "No GPU reading yet", _ => "No memory reading yet" })</div>
+            <div class="muted">@(model switch { MemoryModel.Unified when NodeAccelerators.IsCpu(row.Capabilities) => "Host RAM, no reading yet", MemoryModel.Unified => "Unified memory, no reading yet", MemoryModel.Discrete => "No GPU reading yet", _ => "No memory reading yet" })</div>
         }
     };
 
@@ -582,20 +582,25 @@ else
     public static string OsText(NodeCapabilities? capabilities) =>
         capabilities is null ? UiFormat.Missing : $"{capabilities.Os.Description} · {capabilities.Arch}";
 
-    /// <summary>"Unified · 119.7 GiB", "Discrete · 64.0 GiB RAM", or "—".</summary>
+    /// <summary>"Unified · 119.7 GiB", "Discrete · 64.0 GiB RAM", "CPU only · 32.0 GiB RAM" (a node without a usable GPU), or "—".</summary>
     public static string MemoryModelText(NodeRow row)
     {
         var model = row.Memory?.Model ?? row.Capabilities?.Memory.Model;
         double? total = row.Memory?.HostTotalGiB ?? row.Capabilities?.Memory.TotalGiB;
         return model switch
         {
+            MemoryModel.Unified when NodeAccelerators.IsCpu(row.Capabilities) => $"CPU only · {UiFormat.GiB(total)} RAM",
             MemoryModel.Unified => $"Unified · {UiFormat.GiB(total)}",
             MemoryModel.Discrete => $"Discrete · {UiFormat.GiB(total)} RAM",
             _ => UiFormat.Missing,
         };
     }
 
-    /// <summary>GPUs grouped by product: "1 × NVIDIA GB10", "2 × RTX 4060 Ti 16.0 GiB"; "None" on a CPU-only node; "—" unknown.</summary>
+    /// <summary>
+    /// GPUs grouped by product: "1 × NVIDIA GB10", "2 × RTX 4060 Ti 16.0 GiB"; "None" when the node lists none, "None (CPU
+    /// only)" when its agent says it runs models on the CPU; "(Vulkan, experimental)" after the GPUs of a Vulkan node; "—"
+    /// unknown.
+    /// </summary>
     public static string GpuText(NodeCapabilities? capabilities)
     {
         if (capabilities is null)
@@ -605,14 +610,15 @@ else
 
         if (capabilities.Gpus.Count == 0)
         {
-            return "None";
+            return NodeAccelerators.IsCpu(capabilities) ? "None (CPU only)" : "None";
         }
 
-        return string.Join(", ", capabilities.Gpus
+        string gpus = string.Join(", ", capabilities.Gpus
             .GroupBy(g => (g.Name, g.MemoryTotalGiB))
             .Select(g => g.Key.MemoryTotalGiB is { } vram && UiFormat.HasValue(vram)
                 ? $"{g.Count()} × {g.Key.Name} {UiFormat.GiB(vram)}"
                 : $"{g.Count()} × {g.Key.Name}"));
+        return NodeAccelerators.IsVulkan(capabilities) ? gpus + " (Vulkan, experimental)" : gpus;
     }
 
     /// <summary>"protocol 1 (agent 1–2)", "agent protocol 1–2, none in common", or "—".</summary>

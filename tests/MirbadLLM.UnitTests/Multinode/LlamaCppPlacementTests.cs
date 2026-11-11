@@ -348,6 +348,142 @@ public sealed class LlamaCppPlacementTests : IDisposable
         Assert.Equal(7, fit.FreeGiB);
     }
 
+    // ------------------------------------------------------------------ CPU-only nodes (Agent:Accelerator = cpu)
+
+    /// <summary>A 32 GiB PC without a usable GPU, as its agent reports it: unified memory, no GPU, accelerator <c>cpu</c>.</summary>
+    private static NodeRecord CpuNode() => LlamaCppFixtures.Node() with
+    {
+        Id = "cpu-1",
+        MemoryReserveGiB = 4,
+        GpuReserveGiB = new Dictionary<string, double>(),
+        LastCapabilities = LlamaCppFixtures.Capabilities() with
+        {
+            Accelerator = NodeAccelerators.Cpu,
+            Memory = new NodeMemoryInfo(MemoryModel.Unified, 32),
+            Gpus = [],
+            Features =
+            [
+                .. LlamaCppFixtures.Capabilities().Features.Where(f => f is not (AgentFeatures.AdmissionDiscrete
+                    or AgentFeatures.AdmissionGpuBudgets or AgentFeatures.GpuSelectionUuids or AgentFeatures.LaunchEnv)),
+            ],
+        },
+    };
+
+    [Fact]
+    public async Task ACpuOnlyNode_TakesAModelWithoutGpus_AndRefusesASelectedGpu()
+    {
+        var registry = await RegistryAsync(CpuNode());
+        var embedder = LlamaCppFixtures.Embedder() with { HostMemoryBudgetGiB = null };
+
+        await registry.UpsertAsync(embedder with { Placement = new ModelPlacement("cpu-1") }, Ct);
+        var saved = (await registry.GetAsync(embedder.Id, Ct))!;
+        Assert.Equal("cpu-1", saved.Placement!.NodeId);
+        Assert.Empty(saved.Placement.GpuUuids ?? []);
+
+        var withGpu = embedder with { Id = "with-gpu", ServedName = "with-gpu", Placement = new ModelPlacement("cpu-1", [LlamaCppFixtures.Rtx5070]) };
+        var refused = await Assert.ThrowsAsync<PlacementValidationException>(() => registry.UpsertAsync(withGpu, Ct));
+        Assert.Contains(refused.Problems, p => p.Code == PlacementProblemCodes.GpusOnUnifiedNode);
+    }
+
+    [Fact]
+    public async Task OnACpuOnlyNode_TheFitIsHostRam_AndTheEstimateCountsEveryWeightAndNoCudaContext()
+    {
+        var node = CpuNode();
+        // GPU layers 0 is what an operator would type on a machine without a GPU; the weights still count.
+        var embedder = LlamaCppFixtures.Embedder();
+        var model = embedder with
+        {
+            MemoryBudgetGiB = 8.5,
+            HostMemoryBudgetGiB = null,
+            Placement = new ModelPlacement("cpu-1"),
+            LlamaCpp = embedder.LlamaCpp! with { GpuLayers = 0, GpuBudgetsGiB = null },
+        };
+        var memory = new NodeMemorySnapshot { Model = MemoryModel.Unified, HostTotalGiB = 32, HostAvailableGiB = 12 };
+
+        NodeFitResult fit = await FitAsync(node, model, memory, new GgufAgents(GgufReaderTests.Qwen3Embedding));
+
+        Assert.Equal(MemoryModel.Unified, fit.Model);
+        Assert.Equal(8, fit.FreeGiB); // 12 GiB available minus the 4 GiB reserve: host memory, no GPU figure
+        Assert.False(fit.Fits);
+        Assert.Empty(fit.Gpus);
+        var estimate = fit.Estimate!;
+        Assert.Equal(0, estimate.CudaContextGiB);
+        Assert.Equal(0, estimate.HostGiB);
+        Assert.Equal(3.98, estimate.WeightsGiB);
+        Assert.Equal(8.41, estimate.BudgetGiB); // the NVIDIA estimate of the same file (8.86) without its 0.45 GiB CUDA context
+
+        // The launch admits the same single budget against the node's memory reserve: no host or per-GPU split.
+        var admission = LaunchSpecBuilder.Admission(model, node, force: false, estimate: estimate);
+        Assert.Equal((8.5, 4d), (admission.BudgetGiB, admission.ReserveGiB));
+        Assert.Null(admission.HostBudgetGiB);
+        Assert.Null(admission.GpuBudgetsGiB);
+
+        // And the argv names no device, so the CPU build is not asked for a CUDA card.
+        var spec = LaunchSpecBuilder.BuildLlamaCpp(model, node, tuning: false).Spec;
+        Assert.DoesNotContain("--device", spec.Argv);
+        Assert.Equal(GpuSelectionMode.All, spec.Gpus.Mode);
+    }
+
+    // ------------------------------------------------------------------ Vulkan nodes (Agent:Accelerator = vulkan, experimental)
+
+    /// <summary>The PC of the fixtures as a Vulkan node reports itself: the same two cards, accelerator <c>vulkan</c>.</summary>
+    private static NodeRecord VulkanNode(string id = LlamaCppFixtures.NodeId, RuntimeCapability? runtime = null)
+    {
+        var caps = LlamaCppFixtures.Capabilities();
+        return LlamaCppFixtures.Node() with
+        {
+            Id = id,
+            LastCapabilities = caps with { Accelerator = NodeAccelerators.Vulkan, Runtimes = runtime is null ? caps.Runtimes : [runtime] },
+        };
+    }
+
+    [Fact]
+    public void OnAVulkanNode_TheArgvNamesVulkanDevices_InPlacementOrder_AndAnNvidiaNodeKeepsCuda()
+    {
+        var split = LlamaCppFixtures.Split(); // placed on the RTX 5070, then the RTX 5060 Ti
+
+        var vulkan = LaunchSpecBuilder.BuildLlamaCpp(split, VulkanNode(), tuning: false);
+        var nvidia = LaunchSpecBuilder.BuildLlamaCpp(split, LlamaCppFixtures.Node(), tuning: false);
+
+        static string DeviceOf(LaunchSpec spec) => spec.Argv[spec.Argv.ToList().IndexOf("--device") + 1];
+        Assert.Equal("Vulkan0,Vulkan1", DeviceOf(vulkan.Spec));
+        Assert.Equal("CUDA0,CUDA1", DeviceOf(nvidia.Spec));
+        // The GPUs are still selected by UUID in placement order; the agent turns them into Vulkan indices.
+        Assert.Equal([LlamaCppFixtures.Rtx5070, LlamaCppFixtures.Rtx5060Ti], vulkan.Spec.Gpus.Uuids);
+        Assert.Equal(nvidia.Spec.Argv.Where(a => !a.StartsWith("CUDA", StringComparison.Ordinal)), vulkan.Spec.Argv.Where(a => !a.StartsWith("Vulkan", StringComparison.Ordinal)));
+        Assert.NotEqual(nvidia.ExecutionFingerprint, vulkan.ExecutionFingerprint);
+
+        Assert.Equal("Vulkan0", LlamaCppArgsBuilder.Devices(1, vulkan: true));
+        Assert.Equal("CUDA0,CUDA1,CUDA2", LlamaCppArgsBuilder.Devices(3));
+    }
+
+    [Fact]
+    public async Task AVulkanNode_GivesAContainerOneGpu_WhileANativeProcessMayTakeSeveral()
+    {
+        var container = new RuntimeCapability { Kind = RuntimeKind.LlamaCpp, Delivery = LaunchDelivery.Container, Available = true };
+        var registry = await RegistryAsync(VulkanNode(), VulkanNode("amd-linux", container));
+
+        // Windows: a native process selects its devices by index, in order.
+        await registry.UpsertAsync(LlamaCppFixtures.Split(), Ct);
+
+        // Linux: a container gets one render node.
+        var split = SplitWithoutBudgets("split-linux");
+        var inContainer = split with
+        {
+            Placement = new ModelPlacement("amd-linux", [LlamaCppFixtures.Rtx5070, LlamaCppFixtures.Rtx5060Ti]),
+            LlamaCpp = split.LlamaCpp! with { Delivery = LaunchDelivery.Container, Image = "ghcr.io/ggml-org/llama.cpp:server-vulkan", ExecutableVersion = null },
+        };
+        var refused = await Assert.ThrowsAsync<PlacementValidationException>(() => registry.UpsertAsync(inContainer, Ct));
+        var problem = Assert.Single(refused.Problems);
+        Assert.Equal(PlacementProblemCodes.RuntimeUnavailable, problem.Code);
+        Assert.Equal(
+            "Node 'amd-linux' runs llama.cpp containers through Vulkan (experimental), one GPU per model; 2 are selected. Select a single GPU.",
+            problem.Message);
+
+        await registry.UpsertAsync(inContainer with { Placement = new ModelPlacement("amd-linux", [LlamaCppFixtures.Rtx5070]) }, Ct);
+        Assert.Equal([LlamaCppFixtures.Rtx5070], (await registry.GetAsync("split-linux", Ct))!.Placement!.GpuUuids);
+    }
+
     // ------------------------------------------------------------------ the GGUF estimate and host RAM
 
     [Fact]

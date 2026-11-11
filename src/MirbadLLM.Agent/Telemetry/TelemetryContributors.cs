@@ -10,7 +10,7 @@ namespace MirbadLLM.Agent.Telemetry;
 /// Never removes what other contributors added and never throws for a failing <c>nvidia-smi</c> (the GPUs are then left
 /// as they were; <see cref="GpuHealthContributor"/> says why).
 /// </summary>
-public sealed class TelemetryCapabilityContributor(NvidiaSmiGpuInventory inventory) : ICapabilityContributor
+public sealed class TelemetryCapabilityContributor(IGpuStartupInventory inventory) : ICapabilityContributor
 {
     /// <inheritdoc />
     public async Task<NodeCapabilities> ContributeAsync(NodeCapabilities current, CancellationToken ct = default)

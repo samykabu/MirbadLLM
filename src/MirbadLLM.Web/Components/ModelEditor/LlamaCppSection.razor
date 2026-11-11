@@ -34,7 +34,11 @@
                    aria-describedby="field-llama-gpu-layers-hint"
                    value="@Form.GpuLayers.ToString(CultureInfo.InvariantCulture)" @onchange="e => SetIntAsync(e, v => Form.GpuLayers = v)" />
             <div class="field-hint" id="field-llama-gpu-layers-hint">
-                @if (Summary is { } layers && Form.GpuLayers < layers.BlockCount)
+                @if (CpuOnly)
+                {
+                    <span data-testid="field-llama-gpu-layers-cpu">This node has no GPU: llama.cpp ignores this setting and keeps every layer in host RAM.</span>
+                }
+                else if (Summary is { } layers && Form.GpuLayers < layers.BlockCount)
                 {
                     <span><span class="num">@Form.GpuLayers</span> of <span class="num">@layers.BlockCount</span> layers on the GPU, the rest in host RAM.</span>
                 }
@@ -221,7 +225,10 @@
                         <dt>Recurrent state</dt><dd>@UiFormat.GiB(e.SsmStateGiB)</dd>
                     }
                     <dt>Compute (micro-batch <span class="num">@EffectiveMicroBatch.ToString(CultureInfo.InvariantCulture)</span>)</dt><dd data-testid="llama-estimate-compute">@UiFormat.GiB(e.ComputeGiB)</dd>
-                    <dt>CUDA context</dt><dd>@UiFormat.GiB(e.CudaContextGiB)</dd>
+                    @if (!CpuOnly)
+                    {
+                        <dt>@(Vulkan ? "Backend context (the CUDA figure)" : "CUDA context")</dt><dd>@UiFormat.GiB(e.CudaContextGiB)</dd>
+                    }
                     <dt><strong>Budget</strong> (1.10 × the buffers + context)</dt><dd data-testid="llama-estimate-budget"><strong>@UiFormat.GiB(e.BudgetGiB)</strong></dd>
                     @if (e.HostGiB > 0)
                     {
@@ -232,7 +239,18 @@
                         <dt>Per GPU</dt><dd data-testid="llama-estimate-per-gpu">@string.Join(" + ", e.PerGpuGiB.Select(g => UiFormat.GiB(g)))</dd>
                     }
                 </dl>
-                <div class="field-hint">An estimate: spike S1 measured 17–18 % below it on the RTX 5060 Ti. The memory used is measured at start and shown next to the budget.</div>
+                @if (CpuOnly)
+                {
+                    <div class="field-hint" data-testid="llama-estimate-cpu">An estimate, counted against host RAM: this node runs the model on the CPU. It has not been compared with a measurement on a CPU-only node.</div>
+                }
+                else if (Vulkan)
+                {
+                    <div class="field-hint" data-testid="llama-estimate-vulkan">An estimate calibrated on NVIDIA CUDA. This node runs llama.cpp through Vulkan (experimental), where it has not been compared with a measurement. The memory used is measured at start and shown next to the budget.</div>
+                }
+                else
+                {
+                    <div class="field-hint">An estimate: spike S1 measured 17–18 % below it on the RTX 5060 Ti. The memory used is measured at start and shown next to the budget.</div>
+                }
             }
             else
             {
@@ -316,6 +334,14 @@
     /// <summary>Raised after any field changed, so the page recomputes the estimate and the fit.</summary>
     [Parameter]
     public EventCallback OnChanged { get; set; }
+
+    /// <summary>True when the model's node runs llama.cpp on the CPU (no GPU): GPU layers and the CUDA context do not apply.</summary>
+    [Parameter]
+    public bool CpuOnly { get; set; }
+
+    /// <summary>True when the model's node runs llama.cpp's Vulkan build (experimental): the estimate was calibrated on CUDA.</summary>
+    [Parameter]
+    public bool Vulkan { get; set; }
 
     /// <summary>The GGUF header, when read.</summary>
     [Parameter]

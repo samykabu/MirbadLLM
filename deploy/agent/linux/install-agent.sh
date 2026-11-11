@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Installs, upgrades and removes mirbadllm-agent as a systemd service on a Linux PC with NVIDIA GPUs (P2 node; design
-# D7, §6.6). Not for the DGX: the DGX agent is a container (deploy/compose.multinode.yaml). README.md next to this file
-# has the walk-through.
+# Installs, upgrades and removes mirbadllm-agent as a systemd service on a Linux PC: with NVIDIA GPUs, without a usable
+# GPU (a CPU-only node), or with an AMD GPU through Vulkan (experimental). P2 node; design D7, §6.6. Not for the DGX:
+# the DGX agent is a container (deploy/compose.multinode.yaml). README.md next to this file has the walk-through.
 #
 #   sudo ./install-agent.sh install --node-id pc-1 [--models-root DIR] [--cache-root DIR] [--firewall-from IP[/N]]...
+#        [--accelerator auto|cuda|cpu|vulkan]   # auto: NVIDIA when nvidia-smi answers, else a CPU-only node
 #   export MIRBADLLM_JOIN_TOKEN='<token>'   # or leave it unset and paste it at the prompt
 #   sudo --preserve-env=MIRBADLLM_JOIN_TOKEN ./install-agent.sh install --node-id pc-1 \
 #        --enroll-url https://<master>:8443 --ca-hash sha256:<hash> [--address 192.0.2.42]...
@@ -13,7 +14,7 @@
 #   sudo ./install-agent.sh rollback           # back to the binary and unit before the last install/upgrade
 #   sudo ./install-agent.sh uninstall [--purge]
 #   ./install-agent.sh package [--published-dir DIR] [--rid linux-x64|linux-arm64] [--output FILE]
-#   ./install-agent.sh render-config --node-id pc-1 [--models-root DIR] [--cache-root DIR]   # print agent.json
+#   ./install-agent.sh render-config --node-id pc-1 [--models-root DIR] [--cache-root DIR] [--accelerator cpu|vulkan]
 #   ./install-agent.sh render-dropin [--models-root DIR] [--cache-root DIR]                  # print the unit drop-in
 #
 # The binary comes from --published-dir, from the bundle this script was unpacked with ("package"), or is published
@@ -26,7 +27,12 @@
 # - installs the binary to /usr/local/lib/mirbadllm-agent/mirbadllm-agent (root:root 0755); the previous one is kept
 #   as mirbadllm-agent.previous for "rollback"
 # - installs /etc/mirbadllm-agent/agent.json (root:mirbadllm-agent 0640) from deploy/agent/agent.linux.example.json
-#   with the node id and the model/cache roots filled in, only if it does not exist yet
+#   with the node id and the model/cache roots filled in, only if it does not exist yet. --accelerator decides its
+#   "Accelerator" entry: none for NVIDIA (cuda), "cpu" for a machine without a usable GPU (llama.cpp runs on the CPU from
+#   the CPU "server" image, containers get no GPU request, the budget counts against host RAM), "vulkan" for an AMD GPU
+#   (llama.cpp's "server-vulkan" image with the GPU's DRM render node; experimental, not yet verified on AMD hardware,
+#   never picked by auto). auto picks cuda when nvidia-smi lists a GPU and cpu otherwise. An existing agent.json keeps
+#   its entry: edit it and restart the service after adding or removing a GPU.
 # - installs mirbadllm-agent.service and the drop-in 10-install.conf (ReadWritePaths = the roots of agent.json)
 # - with the join parameters (the command "Add node" shows; the token only from MIRBADLLM_JOIN_TOKEN or the prompt,
 #   never argv): enrolls as mirbadllm-agent into /var/lib/mirbadllm-agent
@@ -108,7 +114,7 @@ die() {
     echo "install-agent.sh: $1" >&2
     exit "${2:-1}"
 }
-usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # ---- arguments ----
 
@@ -127,6 +133,7 @@ cache_root=""
 published_dir=""
 rid=""
 output=""
+accelerator=auto
 addresses=()
 firewall_from=()
 force_join=0
@@ -146,6 +153,7 @@ while [[ $# -gt 0 ]]; do
         --published-dir) published_dir="${2:?--published-dir needs a value}"; shift 2 ;;
         --rid) rid="${2:?--rid needs a value}"; shift 2 ;;
         --output) output="${2:?--output needs a value}"; shift 2 ;;
+        --accelerator) accelerator="${2:?--accelerator needs a value}"; shift 2 ;;
         --firewall-from) firewall_from+=("${2:?--firewall-from needs a value}"); shift 2 ;;
         --force-join) force_join=1; shift ;;
         --no-start) no_start=1; shift ;;
@@ -163,6 +171,11 @@ fi
 if [[ -n "${node_uid}" && "${verb}" != rekey ]]; then
     die "--node-uid applies only to rekey." 2
 fi
+
+case "${accelerator}" in
+    auto | cuda | cpu | vulkan) ;;
+    *) die "--accelerator must be auto, cuda, cpu or vulkan." 2 ;;
+esac
 
 valid_node_id() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]]; }
 # AgentEnrollment.IsWellFormedUid: letters, digits and '-', at most 64.
@@ -208,9 +221,11 @@ render_unit() {
     fi
 }
 
-# agent.json for a node: the example with the node id and the roots substituted, each substitution checked.
+# agent.json for a node: the example with the node id and the roots substituted, each substitution checked. A fourth
+# argument cpu or vulkan adds the "Accelerator" entry after the node id; cuda, auto or nothing adds none, so an NVIDIA
+# node's file is the example's.
 render_config() {
-    local node="$1" models="$2" cache="$3" example text
+    local node="$1" models="$2" cache="$3" chosen="${4:-}" example text
     example="$(example_config)"
     text="$(sed -e "s|\"NodeId\": \"${EXAMPLE_NODE_ID}\"|\"NodeId\": \"${node}\"|" \
         -e "s|\"${DEFAULT_MODELS_ROOT}\"|\"${models}\"|g" \
@@ -218,7 +233,39 @@ render_config() {
     grep -q "\"NodeId\": \"${node}\"" <<<"${text}" || die "${example} has no \"NodeId\": \"${EXAMPLE_NODE_ID}\" to fill in."
     grep -q "\"ModelsRoot\": \"${models}\"" <<<"${text}" || die "${example} has no ModelsRoot ${DEFAULT_MODELS_ROOT} to fill in."
     grep -q "\"CacheRoot\": \"${cache}\"" <<<"${text}" || die "${example} has no CacheRoot ${DEFAULT_CACHE_ROOT} to fill in."
+    if [[ "${chosen}" == cpu || "${chosen}" == vulkan ]]; then
+        text="$(sed -e "s|^\([[:space:]]*\)\"NodeId\": \"${node}\",|&\n\1\"Accelerator\": \"${chosen}\",|" <<<"${text}")"
+        grep -q "\"Accelerator\": \"${chosen}\"" <<<"${text}" || die "${example} has no \"NodeId\" line to add \"Accelerator\" after."
+    fi
     printf '%s\n' "${text}"
+}
+
+# What runs the models here when --accelerator is auto: cuda when nvidia-smi lists a GPU, else cpu. Vulkan is
+# experimental and never picked.
+detect_accelerator() {
+    if command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then
+        echo cuda
+    else
+        echo cpu
+    fi
+}
+
+resolve_accelerator() {
+    if [[ "${accelerator}" == auto ]]; then
+        detect_accelerator
+    else
+        echo "${accelerator}"
+    fi
+}
+
+# AMD cards whose driver exposes VRAM counters (amdgpu's mem_info_vram_total), one "cardN" per line.
+amd_vram_cards() {
+    local f
+    for f in /sys/class/drm/card[0-9]*/device/mem_info_vram_total; do
+        [[ -r "${f}" ]] || continue
+        f="${f%/device/mem_info_vram_total}"
+        echo "${f##*/}"
+    done
 }
 
 render_dropin() {
@@ -344,16 +391,42 @@ check_host() {
     if command -v ldconfig >/dev/null && ! ldconfig -p | grep 'libssl\.so\.[0-9]' >/dev/null; then
         die "OpenSSL (libssl) is missing; the agent's mTLS needs it (e.g. apt install libssl3)."
     fi
+    local chosen="${1:-cuda}" docker_up=1
     if ! command -v docker >/dev/null || ! docker info >/dev/null 2>&1; then
+        docker_up=0
         warn "the Docker engine does not answer: the agent waits up to 2 min for it at start and reports Degraded."
-    elif ! command -v nvidia-ctk >/dev/null && ! command -v nvidia-container-runtime-hook >/dev/null; then
-        warn "the NVIDIA Container Toolkit is not installed: model containers cannot get GPUs (nvidia-container-toolkit)."
     fi
-    if ! command -v nvidia-smi >/dev/null; then
-        warn "nvidia-smi not found: install the NVIDIA driver; until then the node reports no GPUs."
-    elif ! nvidia-smi -L >/dev/null 2>&1; then
-        warn "nvidia-smi fails: the NVIDIA driver is not loaded; the node reports no GPUs."
-    fi
+    case "${chosen}" in
+        cpu)
+            if [[ "${accelerator}" == auto ]]; then
+                step "No NVIDIA GPU found (nvidia-smi is missing or lists none): this machine joins as a CPU-only node"
+            else
+                step "CPU-only node (--accelerator cpu)"
+            fi
+            echo "    llama.cpp runs on the CPU from the image ghcr.io/ggml-org/llama.cpp:server, model containers get no GPU request,"
+            echo "    and a model's budget counts against host RAM. vLLM and SGLang need an NVIDIA GPU and are not offered here."
+            echo "    With an NVIDIA card: install its driver and the NVIDIA Container Toolkit, remove \"Accelerator\" from ${CONFIG}"
+            echo "    and restart ${UNIT}."
+            ;;
+        vulkan)
+            warn "Vulkan nodes (AMD GPUs) are experimental: not yet verified on AMD hardware."
+            if [[ -z "$(amd_vram_cards)" ]]; then
+                warn "no GPU with VRAM counters found (/sys/class/drm/card*/device/mem_info_vram_total, the amdgpu driver): the node will report no GPU and refuse GPU placements. Intel GPUs are not supported on Linux yet."
+            fi
+            compgen -G '/dev/dri/renderD*' >/dev/null ||
+                warn "no DRM render node (/dev/dri/renderD*): a model container cannot be given a GPU."
+            ;;
+        *)
+            if ((docker_up)) && ! command -v nvidia-ctk >/dev/null && ! command -v nvidia-container-runtime-hook >/dev/null; then
+                warn "the NVIDIA Container Toolkit is not installed: model containers cannot get GPUs (nvidia-container-toolkit)."
+            fi
+            if ! command -v nvidia-smi >/dev/null; then
+                warn "nvidia-smi not found: install the NVIDIA driver; until then the node reports no GPUs."
+            elif ! nvidia-smi -L >/dev/null 2>&1; then
+                warn "nvidia-smi fails: the NVIDIA driver is not loaded; the node reports no GPUs."
+            fi
+            ;;
+    esac
 }
 
 enrolled() { [[ -f "${STATE_DIR}/agent.crt" && -s "${STATE_DIR}/node-uid" ]]; }
@@ -589,9 +662,10 @@ read_token() {
 }
 
 do_install() {
-    local upgrade="$1" models cache join=0 token
+    local upgrade="$1" models cache join=0 token chosen
     require_root
     check_roots
+    chosen="$(resolve_accelerator)"
     if [[ "${upgrade}" == 1 ]]; then
         [[ -f "${CONFIG}" && -f "${BINARY}" ]] || die "mirbadllm-agent is not installed here (run 'install' first)."
         [[ -z "${node_id}" ]] || die "'upgrade' takes the node id from ${CONFIG}; --node-id is for 'install'." 2
@@ -635,7 +709,17 @@ do_install() {
     fi
     unset MIRBADLLM_JOIN_TOKEN
 
-    check_host
+    if [[ -f "${CONFIG}" ]]; then
+        # An existing agent.json decides; the host checks follow it, and a difference is said, not applied.
+        local configured_accelerator
+        configured_accelerator="$(config_string Accelerator "${CONFIG}")"
+        configured_accelerator="${configured_accelerator:-cuda}"
+        if [[ "${configured_accelerator}" != "${chosen}" ]]; then
+            warn "${CONFIG} says Accelerator ${configured_accelerator}, this run would choose ${chosen}: the file is kept. To change it, edit \"Accelerator\" in the Agent section (cpu, vulkan, or no entry for NVIDIA) and restart ${UNIT}."
+            chosen="${configured_accelerator}"
+        fi
+    fi
+    check_host "${chosen}"
     obtain_binary "$(host_rid)"
 
     if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
@@ -655,7 +739,7 @@ do_install() {
     else
         step "Installing ${CONFIG} for node ${node_id} (models ${models}, cache ${cache})"
         work_dir
-        render_config "${node_id}" "${models}" "${cache}" >"${WORK}/agent.json"
+        render_config "${node_id}" "${models}" "${cache}" "${chosen}" >"${WORK}/agent.json"
         install -m 0640 -o root -g "${SERVICE_USER}" "${WORK}/agent.json" "${CONFIG}"
     fi
 
@@ -889,7 +973,8 @@ case "${verb}" in
     render-config)
         check_roots
         valid_node_id "${node_id}" || die "--node-id is required: lower-case letters, digits and '-', at most 40." 2
-        render_config "${node_id}" "${models_root:-${DEFAULT_MODELS_ROOT}}" "${cache_root:-${DEFAULT_CACHE_ROOT}}"
+        # No hardware is probed here: auto prints the example's file (NVIDIA), as cuda does.
+        render_config "${node_id}" "${models_root:-${DEFAULT_MODELS_ROOT}}" "${cache_root:-${DEFAULT_CACHE_ROOT}}" "${accelerator}"
         ;;
     render-dropin)
         check_roots

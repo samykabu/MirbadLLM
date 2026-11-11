@@ -38,6 +38,12 @@ public sealed record PlacementNode(NodeRecord Record, NodeLiveStatus? Live)
     /// <summary>True on a discrete-GPU node: the placement picks GPUs.</summary>
     public bool Discrete => Memory == MemoryModel.Discrete;
 
+    /// <summary>True when the node's last report says it has no usable GPU and runs llama.cpp on the CPU.</summary>
+    public bool CpuOnly => NodeAccelerators.IsCpu(Record.LastCapabilities ?? Live?.Capabilities);
+
+    /// <summary>True when the node's last report says its GPUs run through llama.cpp's Vulkan build (experimental).</summary>
+    public bool Vulkan => NodeAccelerators.IsVulkan(Record.LastCapabilities ?? Live?.Capabilities);
+
     /// <summary>The node's GPUs in index order (last capability report).</summary>
     public IReadOnlyList<GpuCapability> Gpus =>
         [.. ((Record.LastCapabilities ?? Live?.Capabilities)?.Gpus ?? []).OrderBy(g => g.Index)];
