@@ -29,30 +29,30 @@
 
 ## What MirbadLLM is
 
-Most homes and small offices own more compute than they use. There is the gaming PC that was replaced two upgrades
-ago, the laptop with an RTX card that now spends its days closed, the Apple Silicon Mac that sits idle every
-evening, and sometimes one serious GPU box. Each of them can run a useful language model. The trouble is that each
-one becomes its own small project: its own runtime, its own flags, its own port, and no single place that shows what
-is running where.
+You probably own more compute than you use. There's the gaming PC you replaced two upgrades ago, the laptop with an
+RTX card that spends its days closed, the Apple Silicon Mac that sits idle every evening, and maybe one serious GPU
+box. Any of them can run a useful language model. The catch is that each one turns into its own small project, with
+its own runtime, its own flags and its own port, and you end up with no single place that shows what is running
+where.
 
 MirbadLLM turns those machines into one service. You install a small agent on each machine, approve it from the
-browser, and decide which model runs where. Every model then sits behind one OpenAI-compatible `/v1` endpoint, so
-your coding agents, chat clients and scripts keep one base URL and pick a model by name. They never need to know
+browser, and decide which model runs where. From then on every model sits behind one OpenAI-compatible `/v1` endpoint,
+so your coding agents, chat clients and scripts keep one base URL and pick a model by name. They never need to know
 which machine answered. The same browser UI downloads models, checks that a model fits in memory before it starts,
 watches throughput and memory, benchmarks and tunes models, hands out API keys and backs everything up.
 
-It has two parts. The **master** holds the model registry, API keys, the UI, the admin API and the router. A **node
-agent** runs on every machine that serves models. It starts each model with that machine's runtime, checks memory
-before a start, and reports GPU, memory and throughput telemetry. The master reaches every agent over mutual TLS and
-never touches a GPU or a model file itself.
+Under the hood there are two parts. The **master** holds the model registry, API keys, the UI, the admin API and the
+router. A **node agent** runs on every machine that serves models. It starts each model with that machine's runtime,
+checks memory before a start, and reports GPU, memory and throughput telemetry. The master reaches every agent over
+mutual TLS and never touches a GPU or a model file itself.
 
 The name comes from the Arabic word مِرْبَد (mirbad), the enclosure where camels are gathered and kept. MirbadLLM does
 the same for models scattered across your machines.
 
 ### What your old machines can run
 
-The memory on the GPU, or the unified memory on a Mac, decides how large a model a machine can serve. As a rough
-guide for 4-bit GGUF models with a moderate context window:
+How big a model can a machine serve? The memory on the GPU, or the unified memory on a Mac, decides that. Here's a
+rough guide for 4-bit GGUF models with a moderate context window:
 
 | Machine you may already have | Memory for the model | Comfortable model size |
 |---|---|---|
@@ -65,16 +65,17 @@ guide for 4-bit GGUF models with a moderate context window:
 | Apple Silicon Mac with 32 GB or more | shared with macOS | 14B to 32B |
 | A DGX Spark or a large GPU workstation | 128 GB unified, or several cards | large models on vLLM |
 
-These are rules of thumb, not guarantees. Context length, quantization and how many requests run at once all move
-them. You do not have to do the arithmetic yourself, though: the agent reads each GGUF header, estimates the memory a
-model needs, and refuses a start that would not fit, with the reason. To look up your own machine, use
+Treat these as rules of thumb. Context length, quantization and how many requests run at once all move them. You
+don't have to do the arithmetic yourself, though: the agent reads each GGUF header, estimates the memory a model
+needs, and refuses a start that would not fit, with the reason. To look up your own machine, try
 [Will it run?](https://mirbadllm.vektragrid.com/will-it-run/) on the website.
 
-What a node needs today. A Mac node needs Apple Silicon. A PC node runs Windows 11 or Linux, in one of three ways:
+Here's what a node needs today. A Mac needs Apple Silicon. A PC runs Windows 11 or Linux and joins in one of three
+ways:
 
 - **With an NVIDIA GPU.** llama.cpp on Windows; vLLM, llama.cpp or SGLang in Docker on Linux, and NIM where it's
   enabled. This is the path the project is measured on.
-- **Without a supported GPU (CPU only).** llama.cpp only. The installer chooses this when it finds no NVIDIA driver.
+- **Without a supported GPU (CPU only).** llama.cpp only. The installer picks this when it finds no NVIDIA driver.
   On Windows it installs the CPU build of llama.cpp; on Linux you point the node at the CPU `server` image. A model's
   whole budget is counted against host RAM, and the node reports no GPU figures because there are none to read.
 - **With an AMD or Intel GPU, through Vulkan (experimental).** llama.cpp only, and only when you ask for it
@@ -88,16 +89,16 @@ not supported.
 ### Why it exists
 
 The project started on a single NVIDIA DGX Spark, where a single-slot model server made every parallel coding agent
-queue behind the others. vLLM fixed the throughput, but it brought a new job: one container per model, flags to get
-right, memory to budget, and nothing to show what was running.
+queue behind the others. vLLM fixed the throughput, but it brought a new job with it: one container per model, flags
+to get right, memory to budget, and nothing to show what was running.
 
-Once that job was done for one box, the next question was obvious. Why stop at one? The older gaming PC and the Mac
-in the next room could serve the smaller models, and the coding agents did not care which machine answered. That is
-the shape MirbadLLM has today: one place to manage every machine you are willing to lend to AI, whether it cost a lot
-or was about to be thrown out.
+Once that was sorted for one box, the next question came naturally. Why stop at one? The older gaming PC and the Mac
+in the next room could serve the smaller models, and the coding agents didn't care which machine answered. That's the
+shape MirbadLLM has today: one place to manage every machine you're willing to lend to AI, whether it cost a lot or
+was about to be thrown out.
 
-It is a control plane for a handful of machines you own. It is not a general cluster scheduler, and it is not a
-hosted service.
+A word on scope. MirbadLLM is a control plane for a handful of machines you own. If you need a general cluster
+scheduler or a hosted service, this is the wrong tool.
 
 ### Who it is for
 
@@ -111,6 +112,62 @@ hosted service.
   way on every machine, with signed updates and an audit log.
 - **Researchers and model tinkerers** who compare models and settings: the benchmark presets and the tuner measure a
   model on its own hardware and keep the history.
+
+## What's new in 1.0
+
+Version 1.0 is the first release you can install without building anything: the images are published, and a demo
+runs with one command (see [Quick start](#quick-start)). It also brings three additions. The screenshots below come
+from the development fleet, so the models in them are fake.
+
+### Swap models on demand
+
+An 8 GB card holds one model at a time. Say you chat with one model in the morning and switch to a coding model
+after lunch. Before, that meant opening the UI, stopping one and starting the other. Now a request can do it for
+you. Every model has three optional settings under **On demand** in its editor, all off until you turn them on:
+
+![The On demand section of the model editor](docs/images/screenshots/on-demand.png)
+
+- **Start when a request names it.** A request for a stopped model starts it, and the request waits until the model
+  is ready.
+- **Stop after idle (minutes).** A model nobody has called for that long is stopped, which frees its memory.
+- **May be stopped to make room.** When a new model needs the memory, idle models with this setting are stopped,
+  least recently used first.
+
+The Models page shows what each model is set to do:
+
+![The Models page with on-demand settings under each model's state](docs/images/screenshots/models-on-demand.png)
+
+Two things to know before you rely on it. Memory admission still judges every start, and a model that is answering a
+request is never stopped. And the request waits while the model loads, so this fits llama.cpp and MLX, which load in
+seconds. vLLM, SGLang and NIM take minutes to start, and a waiting client may give up first. When two requests ask
+for two models that cannot both fit, one is answered and the other gets a 503 with `Retry-After`.
+
+### Use the clients that only speak Ollama
+
+Plenty of home-automation, note-taking and chat tools only know Ollama's API. They can now use your fleet as it is:
+MirbadLLM answers `/api/chat`, `/api/generate`, `/api/embed`, `/api/tags` and a few more on the same port, and
+translates them to `/v1`. The API key, the model names and the routing stay the same. **Access > Connect** has an
+**Ollama** tab with the settings to paste:
+
+![The Ollama tab on Access > Connect](docs/images/screenshots/connect-ollama.png)
+
+The limits: you manage models in MirbadLLM, so pulling, creating and deleting models through Ollama routes is not
+offered. A client that cannot send an API key, such as the `ollama` command line, works only while `/v1` is open.
+It was built against Ollama's published API and has not been tried with real clients yet, so tell us in an issue if
+yours trips over something.
+
+### Machines without an NVIDIA card
+
+Until now a PC needed an NVIDIA GPU to join. Two more kinds of machine can join in 1.0, both with llama.cpp:
+
+- **CPU-only machines.** A PC or mini PC with plenty of RAM serves a model on its CPU. The installer picks this by
+  itself when it finds no NVIDIA driver. No speed has been measured yet, so expect it to suit small and embedding
+  models better than large chat models.
+- **AMD and Intel GPUs, through Vulkan.** This one is experimental. It has been checked against NVIDIA cards and has
+  not run on AMD or Intel hardware yet, so you opt in with `-Accelerator vulkan` (Windows) or `--accelerator vulkan`
+  (Linux, AMD cards only). If you try it on such a card, a report in the issues, good or bad, helps a lot.
+
+The details are in [What your old machines can run](#what-your-old-machines-can-run) above.
 
 ## Features
 
@@ -162,6 +219,8 @@ hosted service.
 | ![Tuning a model](docs/images/screenshots/model-tune.png) | ![Backup and restore page](docs/images/screenshots/backup.png) |
 | **Access: saved tokens** | **Nodes** |
 | ![Saved access tokens](docs/images/screenshots/access-tokens.png) | ![Nodes page](docs/images/screenshots/nodes.png) |
+| **On demand settings on Models** | **Connect: Ollama clients** |
+| ![On-demand settings on the Models page](docs/images/screenshots/models-on-demand.png) | ![The Ollama tab on Access > Connect](docs/images/screenshots/connect-ollama.png) |
 
 The screenshots come from the development fleet described below: fake runtimes and generated traffic, no real
 hardware.
