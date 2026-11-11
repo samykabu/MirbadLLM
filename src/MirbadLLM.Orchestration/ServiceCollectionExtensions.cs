@@ -326,6 +326,24 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<INodeStatusCache>(),
             sp.GetRequiredService<IOwnershipStore>(),
             sp.GetRequiredService<OperatorStops>()));
+
+        // Swap on demand: the router asks the room maker when admission refuses a start on request, and the idle-stop
+        // service stops models past their idle limit. Both read use from the router's stats and stop nothing without them.
+        services.AddSingleton<IRoomMaker>(sp => new RoomMaker(
+            sp.GetRequiredService<IModelRegistry>(),
+            sp.GetRequiredService<IModelRuntime>(),
+            sp.GetService<IRouterStats>(),
+            sp.GetRequiredService<ILogger<RoomMaker>>(),
+            sp.GetService<IMaintenanceMode>(),
+            sp.GetRequiredService<IOwnershipStore>()));
+        services.AddSingleton<IHostedService>(sp => new IdleStopService(
+            sp.GetRequiredService<IModelRegistry>(),
+            sp.GetRequiredService<IModelRuntime>(),
+            sp.GetService<IRouterStats>(),
+            sp.GetRequiredService<ILogger<IdleStopService>>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetService<IMaintenanceMode>(),
+            sp.GetRequiredService<IOwnershipStore>()));
         services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<CertificateRotationService>());
         services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<CaRotationService>());
     }

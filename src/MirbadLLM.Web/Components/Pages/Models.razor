@@ -178,6 +178,10 @@ else
                                         <a @onclick:stopPropagation="true" @onkeydown:stopPropagation="true" href="@($"models/{d.Id}/logs")" aria-label="@($"Logs for {d.ServedName}")">Logs</a>
                                     </p>
                                 }
+                                @if (OnDemand(d) is { } onDemand)
+                                {
+                                    <p class="models-cause" data-testid="@($"on-demand-{d.Id}")">@onDemand</p>
+                                }
                             </td>
                             <td data-label="Memory" class="num col-num" data-testid="@($"models-memory-{d.Id}")">@UiFormat.GiB(d.MemoryBudgetGiB)</td>
                             <td data-label="Context" class="num col-num" data-testid="@($"models-context-{d.Id}")">@UiFormat.ContextLength(ModelCapabilities.MaxModelLen(d))</td>
@@ -287,6 +291,7 @@ else
                 <dt>Context</dt><dd class="num">@ModelCapabilities.MaxModelLen(definition).ToString("#,0", CultureInfo.InvariantCulture) tokens</dd>
                 <dt>KV cache</dt><dd class="num" data-testid="models-detail-kv">@UiFormat.KvCacheLabel(definition)</dd>
                 <dt>Speculative</dt><dd class="num" data-testid="models-detail-spec">@UiFormat.SpeculativeLabel(definition.Speculative)</dd>
+                <dt>On demand</dt><dd data-testid="models-detail-on-demand">@(OnDemand(definition) ?? "Off")</dd>
                 @if (definition.Container is { } container && definition.Runtime is RuntimeKind.Sglang or RuntimeKind.Nim)
                 {
                     <dt>Image</dt><dd class="num kv-full models-detail-image" data-testid="models-detail-image">@container.Image</dd>
@@ -353,6 +358,10 @@ else
     private int _page = 1;
     private int? _size;
     private double _reserveGiB = 8;
+    private bool _startOnRequestForAll;
+
+    /// <summary>What happens to the model without anyone pressing Start or Stop; the global AutoStartOnRequest switch counts.</summary>
+    private string? OnDemand(ModelDefinition d) => UiFormat.OnDemandLabel(d.StartOnRequest || _startOnRequestForAll, d.IdleStopMinutes, d.StopToMakeRoom);
     private DateTimeOffset _now = DateTimeOffset.UtcNow;
     private DateTimeOffset? _loadedAt;
     private string? _liveError;
@@ -452,6 +461,7 @@ else
         _nodeCache = Services.GetService<INodeStatusCache>();
         _nodeRegistry = Services.GetService<INodeRegistry>();
         _reserveGiB = Services.GetService<IOptions<MirbadLLMOptions>>()?.Value.MemoryReserveGiB ?? new MirbadLLMOptions().MemoryReserveGiB;
+        _startOnRequestForAll = Services.GetService<IOptions<MirbadLLMOptions>>()?.Value.AutoStartOnRequest == true;
 
         _cts = new CancellationTokenSource();
         _live = LiveDataService.Resolve(Services, out _ownsLive);

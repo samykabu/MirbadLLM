@@ -1153,6 +1153,44 @@ else
             </section>
             }
 
+            <section class="panel form-section" aria-labelledby="sec-on-demand" data-wizard-step="@WizardAttr(OnDemandStep)" hidden="@StepHidden(OnDemandStep)" data-testid="on-demand-settings">
+                <div class="form-section-intro">
+                    <h2 id="sec-on-demand">On demand</h2>
+                    <p>Start the model when a request names it, and stop it when it is idle or another model needs its memory. All three are off unless you set them, and none needs a restart.</p>
+                </div>
+                <div class="field-grid">
+                    <div class="field field--wide">
+                        <FieldHelp Label="Start on request" For="startOnRequest" ShowLabel="false" Help="@ModelFieldHelp.StartOnRequest">
+                            <Leading>
+                                <div class="form-check form-switch switch-row">
+                                    <InputCheckbox class="form-check-input" role="switch" @bind-Value="_model.StartOnRequest" id="startOnRequest" data-testid="field-start-on-request" aria-describedby="on-demand-runtime-hint" />
+                                    <label class="form-check-label" for="startOnRequest">Start when a request names it</label>
+                                </div>
+                            </Leading>
+                        </FieldHelp>
+                        <div class="field-hint" id="on-demand-runtime-hint" data-testid="on-demand-runtime-hint">
+                            Swapping suits llama.cpp and MLX. vLLM, SGLang and NIM take 2–5 minutes to start, so a client that waits for one of them may time out before it answers.
+                        </div>
+                    </div>
+                    <div class="field">
+                        <FieldHelp Label="Stop after idle (minutes)" For="field-idle-stop-minutes" Help="@ModelFieldHelp.IdleStopMinutes" />
+                        <InputNumber class="form-control num" id="field-idle-stop-minutes" data-testid="field-idle-stop-minutes" @bind-Value="_model.IdleStopMinutes"
+                                     placeholder="Never" aria-describedby="field-idle-stop-minutes-error" />
+                        <div id="field-idle-stop-minutes-error"><ValidationMessage For="() => _model.IdleStopMinutes" /></div>
+                    </div>
+                    <div class="field field--wide">
+                        <FieldHelp Label="May be stopped to make room" For="stopToMakeRoom" ShowLabel="false" Help="@ModelFieldHelp.StopToMakeRoom">
+                            <Leading>
+                                <div class="form-check form-switch switch-row">
+                                    <InputCheckbox class="form-check-input" role="switch" @bind-Value="_model.StopToMakeRoom" id="stopToMakeRoom" data-testid="field-stop-to-make-room" />
+                                    <label class="form-check-label" for="stopToMakeRoom">May be stopped to make room</label>
+                                </div>
+                            </Leading>
+                        </FieldHelp>
+                    </div>
+                </div>
+            </section>
+
             @if (IsNew)
             {
                 @WizardReview()
@@ -1327,6 +1365,9 @@ else
 
     private bool StepHidden(WizardStep step) => IsNew && CurrentStep != step;
 
+    /// <summary>The step that holds the On demand section: next to auto-start, which is Tuning on vLLM and Memory elsewhere.</summary>
+    private WizardStep OnDemandStep => WizardSteps.Contains(WizardStep.Tuning) ? WizardStep.Tuning : WizardStep.Memory;
+
     // Steps the operator has opened: a step only shows its check once it has been seen and holds what it needs.
     private readonly HashSet<WizardStep> _visited = [WizardStep.Where];
 
@@ -1418,13 +1459,13 @@ else
     private static readonly string[] IdentityFields = [nameof(EditModel.Id), nameof(EditModel.ServedName), nameof(EditModel.ModelPath)];
     private static readonly string[] MemoryFields =
         [nameof(EditModel.MemoryBudgetGiB), nameof(EditModel.MaxModelLen), nameof(EditModel.MaxNumSeqs), nameof(EditModel.KvCacheDtype)];
-    private static readonly string[] TuningFields = [nameof(EditModel.SpeculativeNumTokens)];
+    private static readonly string[] TuningFields = [nameof(EditModel.SpeculativeNumTokens), nameof(EditModel.IdleStopMinutes)];
 
     private string[] StepFields(WizardStep step) => step switch
     {
         WizardStep.Identity => IdentityFields,
         WizardStep.Memory => IsSharedContainer ? [nameof(EditModel.MemoryBudgetGiB), .. TuningFields]
-            : IsLlamaCpp || IsMlx ? [nameof(EditModel.MemoryBudgetGiB)] : MemoryFields,
+            : IsLlamaCpp || IsMlx ? [nameof(EditModel.MemoryBudgetGiB), nameof(EditModel.IdleStopMinutes)] : MemoryFields,
         WizardStep.Tuning => TuningFields,
         _ => [],
     };
@@ -1688,6 +1729,16 @@ else
                                 <span class="muted"> · auto-start @(_model.AutoStart ? "on" : "off")</span>
                             </span>
                             <button type="button" class="btn btn-sm btn-ghost" data-testid="review-edit-tuning" @onclick="() => GoToStepAsync(WizardStep.Tuning)">Edit</button>
+                        </dd>
+                    </div>
+                }
+                @if (UiFormat.OnDemandLabel(_model.StartOnRequest, _model.IdleStopMinutes, _model.StopToMakeRoom) is { } onDemand)
+                {
+                    <div class="review-row">
+                        <dt>On demand</dt>
+                        <dd>
+                            <span class="review-value" data-testid="review-on-demand">@onDemand</span>
+                            <button type="button" class="btn btn-sm btn-ghost" data-testid="review-edit-on-demand" @onclick="() => GoToStepAsync(OnDemandStep)">Edit</button>
                         </dd>
                     </div>
                 }
@@ -3710,6 +3761,14 @@ else
         public string RegistryTokenName { get; set; } = "";
         public bool AutoStart { get; set; }
 
+        public bool StartOnRequest { get; set; }
+
+        /// <summary>Blank = never stopped for being idle.</summary>
+        [Range(1, 525_600, ErrorMessage = "Enter 1 or more minutes, or leave it blank to never stop the model for being idle.")]
+        public int? IdleStopMinutes { get; set; }
+
+        public bool StopToMakeRoom { get; set; }
+
         /// <summary>The primary source: the repo the folder at <see cref="ModelPath"/> comes from.</summary>
         public string SourceRepoId { get; set; } = "";
         public string SourceRevision { get; set; } = "";
@@ -3743,6 +3802,9 @@ else
             ImageDigest = definition.ImageDigest ?? "";
             ExtraArgsText = string.Join('\n', definition.ExtraArgs);
             AutoStart = definition.AutoStart;
+            StartOnRequest = definition.StartOnRequest;
+            IdleStopMinutes = definition.IdleStopMinutes;
+            StopToMakeRoom = definition.StopToMakeRoom;
 
             var sources = definition.Sources ?? [];
             var primary = sources.FirstOrDefault(src => string.Equals(src.Folder, definition.ModelPath, StringComparison.Ordinal));
@@ -3782,6 +3844,9 @@ else
             ExtraArgs = ExtraArgsText
                 .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             AutoStart = AutoStart,
+            StartOnRequest = StartOnRequest,
+            IdleStopMinutes = IdleStopMinutes,
+            StopToMakeRoom = StopToMakeRoom,
             Sources = BuildSources(),
         };
 

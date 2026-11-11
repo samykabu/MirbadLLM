@@ -19,9 +19,7 @@
             <button type="button" class="btn btn-danger" data-testid="header-force-start-dialog-confirm" blazor:onclick="">Start anyway</button></div></div></dialog>
         <p class="editor-lede" data-testid="editor-lede">
             Every setting is a vLLM launch argument: a running model picks changes up when it restarts. Saving asks whether to restart now.
-        </p><div class="form-sections"><form data-testid="model-form" class="form-sections" blazor:onsubmit="">
-
-            <section class="panel form-section" aria-labelledby="sec-identity"><div class="form-section-intro"><h2 id="sec-identity">Identity</h2>
+        </p><div class="form-sections"><form data-testid="model-form" class="form-sections" blazor:onsubmit=""><section class="panel form-section" aria-labelledby="sec-identity"><div class="form-section-intro"><h2 id="sec-identity">Identity</h2>
                     <p>How the controller and API clients refer to this model.</p></div>
                 <div class="field-grid"><div class="field"><div class="field-head"><label class="field-label" for="field-id">Id</label><button type="button" class="info-btn" aria-label="About: Id" popovertarget="field-id-help" style="anchor-name: --field-id-help" data-testid="info-toggle-field-id"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
 <div class="help-popover" id="field-id-help" popover role="note" aria-label="About Id" style="position-anchor: --field-id-help" data-testid="info-panel-field-id"><p class="help-popover-title">Id</p>
@@ -265,10 +263,42 @@
     <dl class="help-panel"><dt>What it is</dt>
         <dd>Start this model automatically when the controller process boots.</dd>
         <dt>Why it matters</dt>
-        <dd>Without it, a model stays Stopped after a controller restart until someone starts it (or a request arrives, if AutoStartOnRequest is on) — useful to avoid keeping every model resident by default.</dd>
+        <dd>Without it, a model stays Stopped after a controller restart until someone starts it (or a request arrives, if the model starts on request) — useful to avoid keeping every model resident by default.</dd>
         <dt>Example</dt>
-        <dd>Enabled for the seeded ornith-9b-fp8 model, so it's ready right after the controller comes up.</dd></dl></div></div></div></section><div class="form-footer"><button type="submit" class="btn btn-primary" data-testid="save-button">Save changes</button>
-                <a class="btn btn-outline-secondary" href="models">Cancel</a></div></form><section class="danger-zone" aria-labelledby="sec-danger" data-testid="danger-zone"><div class="danger-zone-text"><h2 class="panel-label" id="sec-danger">Delete this model</h2>
+        <dd>Enabled for the seeded ornith-9b-fp8 model, so it's ready right after the controller comes up.</dd></dl></div></div></div></section><section class="panel form-section" aria-labelledby="sec-on-demand" data-testid="on-demand-settings"><div class="form-section-intro"><h2 id="sec-on-demand">On demand</h2>
+                    <p>Start the model when a request names it, and stop it when it is idle or another model needs its memory. All three are off unless you set them, and none needs a restart.</p></div>
+                <div class="field-grid"><div class="field field--wide"><div class="field-head"><div class="form-check form-switch switch-row"><input role="switch" id="startOnRequest" data-testid="field-start-on-request" aria-describedby="on-demand-runtime-hint" type="checkbox" name="_model.StartOnRequest" class="form-check-input valid" value="True" blazor:onchange=""></input>
+                                    <label class="form-check-label" for="startOnRequest">Start when a request names it</label></div><button type="button" class="info-btn" aria-label="About: Start on request" popovertarget="startOnRequest-help" style="anchor-name: --startOnRequest-help" data-testid="info-toggle-startOnRequest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="startOnRequest-help" popover role="note" aria-label="About Start on request" style="position-anchor: --startOnRequest-help" data-testid="info-panel-startOnRequest"><p class="help-popover-title">Start on request</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Start this model when a request names it while it is stopped. The request waits until the model is Ready, then gets its answer.</dd>
+        <dt>Why it matters</dt>
+        <dd>A node that holds one model at a time can then serve several: the client names the model and the router starts it. The wait is the model's start time, up to the startup timeout (10 minutes unless configured). llama.cpp and MLX suit this. vLLM, SGLang and NIM take 2–5 minutes to start, so a client that waits for one of them may time out before it answers. The AutoStartOnRequest setting turns this on for every model; this switch turns it on for one.</dd>
+        <dt>Example</dt>
+        <dd>A coding client asks for a stopped llama.cpp model on a 16 GB card: the router starts it and answers once it is Ready. With the switch off the client gets 503 model_not_ready.</dd></dl></div>
+                        <div class="field-hint" id="on-demand-runtime-hint" data-testid="on-demand-runtime-hint">
+                            Swapping suits llama.cpp and MLX. vLLM, SGLang and NIM take 2–5 minutes to start, so a client that waits for one of them may time out before it answers.
+                        </div></div>
+                    <div class="field"><div class="field-head"><label class="field-label" for="field-idle-stop-minutes">Stop after idle (minutes)</label><button type="button" class="info-btn" aria-label="About: Stop after idle (minutes)" popovertarget="field-idle-stop-minutes-help" style="anchor-name: --field-idle-stop-minutes-help" data-testid="info-toggle-field-idle-stop-minutes"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="field-idle-stop-minutes-help" popover role="note" aria-label="About Stop after idle (minutes)" style="position-anchor: --field-idle-stop-minutes-help" data-testid="info-panel-field-idle-stop-minutes"><p class="help-popover-title">Stop after idle (minutes)</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Stop this model after this many minutes without a request. Blank means it is never stopped for being idle.</dd>
+        <dt>Why it matters</dt>
+        <dd>A stopped model gives its memory back to the node. The count starts at the model's last request, or at the moment it became Ready if it has had none. A model is not stopped while a request is in flight, or while a benchmark or tuning job runs on its node. An idle stop counts as a stop: the model does not come back after a node or controller restart. It starts again when a request names it, if it starts on request, and at controller boot if it is set to start then.</dd>
+        <dt>Example</dt>
+        <dd>15, on a model that starts on request: it leaves memory after a quiet quarter of an hour and the next request starts it again, waiting for the load.</dd></dl></div>
+                        <input step="any" type="number" id="field-idle-stop-minutes" data-testid="field-idle-stop-minutes" placeholder="Never" aria-describedby="field-idle-stop-minutes-error" name="_model.IdleStopMinutes" class="form-control num valid" blazor:onchange=""></input>
+                        <div id="field-idle-stop-minutes-error"></div></div>
+                    <div class="field field--wide"><div class="field-head"><div class="form-check form-switch switch-row"><input role="switch" id="stopToMakeRoom" data-testid="field-stop-to-make-room" type="checkbox" name="_model.StopToMakeRoom" class="form-check-input valid" value="True" blazor:onchange=""></input>
+                                    <label class="form-check-label" for="stopToMakeRoom">May be stopped to make room</label></div><button type="button" class="info-btn" aria-label="About: May be stopped to make room" popovertarget="stopToMakeRoom-help" style="anchor-name: --stopToMakeRoom-help" data-testid="info-toggle-stopToMakeRoom"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
+<div class="help-popover" id="stopToMakeRoom-help" popover role="note" aria-label="About May be stopped to make room" style="position-anchor: --stopToMakeRoom-help" data-testid="info-panel-stopToMakeRoom"><p class="help-popover-title">May be stopped to make room</p>
+    <dl class="help-panel"><dt>What it is</dt>
+        <dd>Allow MirbadLLM to stop this model when another model on the same node needs its memory to start on request.</dd>
+        <dt>Why it matters</dt>
+        <dd>When the memory check refuses a start on request, the router stops idle models that carry this switch, least recently used first and only as many as the missing memory needs, then tries the start once more. A model with a request in flight is never stopped, and on a node with discrete GPUs only models on the GPU that is short are considered. If the start still does not fit, the request gets the usual 503 and nothing else is stopped.</dd>
+        <dt>Example</dt>
+        <dd>Two llama.cpp models are placed on one 16 GB card that holds one of them. Both start on request and have this switch on. A request for the stopped one stops the idle one and starts the other.</dd></dl></div></div></div></section><div class="form-footer"><button type="submit" class="btn btn-primary" data-testid="save-button">Save changes</button>
+                    <a class="btn btn-outline-secondary" href="models">Cancel</a></div></form><section class="danger-zone" aria-labelledby="sec-danger" data-testid="danger-zone"><div class="danger-zone-text"><h2 class="panel-label" id="sec-danger">Delete this model</h2>
                     <p class="muted">
                         Removes the definition from MirbadLLM. The checkpoint files stay on disk, so you can add it again later.
 </p></div>

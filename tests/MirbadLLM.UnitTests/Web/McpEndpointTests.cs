@@ -441,6 +441,29 @@ public sealed class McpEndpointTests : IDisposable
         Assert.Null(model.Speculative);
     }
 
+    [Fact]
+    public async Task DeployAndUpdate_TakeTheOnDemandSettings_WhichNeedNoRestart()
+    {
+        using var client = Client();
+        string key = await NodeReporting(Capabilities(Vllm));
+        await CallTool(client, key, "mirbad_deploy_model", new
+        {
+            modelId = "swap", servedName = "swap", repoId = "org/swap", folder = "swap", nodeId = "dgx", startOnRequest = true, idleStopMinutes = 15,
+        });
+        var model = await Models().GetAsync("swap");
+        Assert.Equal((true, 15, false), (model!.StartOnRequest, model.IdleStopMinutes, model.StopToMakeRoom));
+
+        string updated = await CallTool(client, key, "mirbad_update_model", new { modelId = "swap", idleStopMinutes = 0, stopToMakeRoom = true });
+
+        Assert.DoesNotContain("\"isError\":true", updated, StringComparison.Ordinal);
+        Assert.Contains("no restart is needed", updated, StringComparison.Ordinal);
+        model = await Models().GetAsync("swap");
+        Assert.Equal((true, (int?)null, true), (model!.StartOnRequest, model.IdleStopMinutes, model.StopToMakeRoom)); // unnamed ones keep their value
+
+        string refused = await CallTool(client, key, "mirbad_update_model", new { modelId = "swap", idleStopMinutes = -5 });
+        Assert.Contains("IdleStopMinutes", refused, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("--port", null, "--port")]
     [InlineData(null, "fp8", "does not use kvCacheDtype")]

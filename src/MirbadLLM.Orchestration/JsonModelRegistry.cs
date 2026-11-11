@@ -400,6 +400,11 @@ public sealed partial class JsonModelRegistry : IModelRegistry, IDisposable
             throw new ArgumentException("MaxNumSeqs must be positive.", nameof(model));
         }
 
+        if (model.IdleStopMinutes is <= 0)
+        {
+            throw new ArgumentException("IdleStopMinutes must be at least 1; leave it out to never stop the model for being idle.", nameof(model));
+        }
+
         if (model.Speculative is { NumSpeculativeTokens: <= 0 })
         {
             throw new ArgumentException("Speculative.NumSpeculativeTokens must be positive.", nameof(model));

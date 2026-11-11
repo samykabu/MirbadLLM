@@ -101,10 +101,12 @@ internal static partial class ProxyHandler
             return;
         }
 
+        // A request waiting for its model counts as use until it ends, so the model is not stopped to make room meanwhile.
+        using var waiting = endpoint.State != ModelState.Ready ? stats.BeginWaiting(endpoint.ServedName) : null;
         if (endpoint.State != ModelState.Ready)
         {
-            if (options.Value.AutoStartOnRequest &&
-                await StartAndWaitAsync(endpoint.ModelId, endpoint.State, runtime, options.Value, ct))
+            if (await StartsOnRequestAsync(context, endpoint.ModelId, options.Value, ct) &&
+                await StartAndWaitAsync(context, endpoint.ModelId, endpoint.State, runtime, options.Value, ct))
             {
                 endpoint = await resolver.ResolveAsync(endpoint.ServedName, ct);
             }
@@ -160,8 +162,10 @@ internal static partial class ProxyHandler
             return;
         }
 
-        if (route.Outcome == AgentRouteOutcome.NotReady && options.AutoStartOnRequest &&
-            await StartAndWaitAsync(route.ModelId!, route.ModelState, runtime, options, ct))
+        // A request waiting for its model counts as use until it ends, so the model is not stopped to make room meanwhile.
+        using var waiting = route.Outcome == AgentRouteOutcome.NotReady ? stats.BeginWaiting(route.ServedName) : null;
+        if (route.Outcome == AgentRouteOutcome.NotReady && await StartsOnRequestAsync(context, route.ModelId!, options, ct) &&
+            await StartAndWaitAsync(context, route.ModelId!, route.ModelState, runtime, options, ct))
         {
             route = await resolver.ResolveRouteAsync(modelName, ct);
         }
@@ -516,15 +520,23 @@ internal static partial class ProxyHandler
 
     private static string NotReadyMessage(string modelName, string state) => $"Model '{modelName}' is not ready (state: {state}).";
 
+    /// <summary>Start on request applies when the global switch or the model's own setting is on.</summary>
+    private static async Task<bool> StartsOnRequestAsync(HttpContext context, string modelId, MirbadLLMOptions options, CancellationToken ct) =>
+        options.AutoStartOnRequest ||
+        (context.RequestServices.GetService<IModelRegistry>() is { } registry && (await registry.GetAsync(modelId, ct))?.StartOnRequest == true);
+
     /// <summary>
     /// Starts a Stopped/Failed model and waits until it settles. False when no start was made (memory refused, or another
-    /// start held the node until the deadline): the caller keeps what it resolved; true: re-resolve.
+    /// start held the node until the deadline): the caller keeps what it resolved; true: re-resolve. A memory refusal goes
+    /// to <see cref="IRoomMaker"/> once: when it stopped idle models for this one the start is tried again, and a second
+    /// refusal is final.
     /// </summary>
     private static async Task<bool> StartAndWaitAsync(
-        string modelId, ModelState state, IModelRuntime runtime, MirbadLLMOptions options, CancellationToken ct)
+        HttpContext context, string modelId, ModelState state, IModelRuntime runtime, MirbadLLMOptions options, CancellationToken ct)
     {
         var deadline = DateTimeOffset.UtcNow + options.StartupTimeout;
         bool needsStart = state is ModelState.Stopped or ModelState.Failed;
+        bool madeRoom = false;
         while (needsStart)
         {
             try
@@ -532,9 +544,15 @@ internal static partial class ProxyHandler
                 await runtime.StartAsync(modelId, force: false, ct);
                 needsStart = false;
             }
-            catch (ModelMemoryAdmissionException)
+            catch (ModelMemoryAdmissionException refusal)
             {
-                return false;
+                if (madeRoom || context.RequestServices.GetService<IRoomMaker>() is not { } rooms ||
+                    !await rooms.TryMakeRoomAsync(modelId, refusal, ct))
+                {
+                    return false;
+                }
+
+                madeRoom = true;
             }
             catch (ModelStartConflictException) when (DateTimeOffset.UtcNow < deadline)
             {
