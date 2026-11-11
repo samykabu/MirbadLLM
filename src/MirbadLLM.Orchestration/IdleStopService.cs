@@ -102,7 +102,7 @@ public sealed partial class IdleStopService(
         }
     }
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Stopped model {ModelId}: no request for {Minutes} minutes (its idle limit).")]
+    [LoggerMessage(Level = LogLevel.Information, Message = "Stopped model {ModelId} at its idle limit: {Minutes} min without a request.")]
     private static partial void IdleStopped(ILogger logger, string modelId, int minutes);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Could not stop idle model {ModelId}; it is tried again on the next pass.")]

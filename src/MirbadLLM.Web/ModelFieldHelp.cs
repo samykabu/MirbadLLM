@@ -241,7 +241,7 @@ public static class ModelFieldHelp
     public static readonly FieldHelpText AutoStart = new(
         What: "Start this model automatically when the controller process boots.",
         Why: "Without it, a model stays Stopped after a controller restart until someone starts it (or a request " +
-             "arrives, if Start on request or AutoStartOnRequest is on) — useful to avoid keeping every model resident by default.",
+             "arrives, if the model starts on request) — useful to avoid keeping every model resident by default.",
         Example: "Enabled for the seeded ornith-9b-fp8 model, so it's ready right after the controller comes up.");
 
     // --- On demand ---
@@ -260,8 +260,8 @@ public static class ModelFieldHelp
         Why: "A stopped model gives its memory back to the node. The count starts at the model's last request, or at the moment it " +
              "became Ready if it has had none. A model is not stopped while a request is in flight, or while a benchmark or tuning job " +
              "runs on its node. An idle stop counts as a stop: the model does not come back after a node or controller restart. It " +
-             "starts again on request when Start on request is on, and at controller boot when Auto-start on boot is on.",
-        Example: "15, with Start on request on: the model leaves memory after a quiet quarter of an hour and the next request starts it again, waiting for the load.");
+             "starts again when a request names it, if it starts on request, and at controller boot if it is set to start then.",
+        Example: "15, on a model that starts on request: it leaves memory after a quiet quarter of an hour and the next request starts it again, waiting for the load.");
 
     public static readonly FieldHelpText StopToMakeRoom = new(
         What: "Allow MirbadLLM to stop this model when another model on the same node needs its memory to start on request.",
@@ -269,7 +269,7 @@ public static class ModelFieldHelp
              "first and only as many as the missing memory needs, then tries the start once more. A model with a request in flight is " +
              "never stopped, and on a node with discrete GPUs only models on the GPU that is short are considered. If the start still " +
              "does not fit, the request gets the usual 503 and nothing else is stopped.",
-        Example: "Two llama.cpp models are placed on one 16 GB card that holds one of them, both with Start on request and this switch on. " +
+        Example: "Two llama.cpp models are placed on one 16 GB card that holds one of them. Both start on request and have this switch on. " +
                  "A request for the stopped one stops the idle one and starts the other.");
 
     // --- Tags ---
