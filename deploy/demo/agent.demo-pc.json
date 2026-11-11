@@ -1,0 +1,26 @@
+{
+  "//": "The demo image's node demo-pc (deploy/demo/demo.sh): the development fake runtime on loopback, no Docker and no GPU. Not a template for a real node; those are the agent.*.json files in deploy/agent.",
+  "Agent": {
+    "NodeId": "demo-pc",
+    "StateDirectory": "/tmp/mirbadllm-demo/demo-pc/state",
+    "ListenAddress": "127.0.0.1",
+    "Port": 9444,
+    "ModelsRoot": "/tmp/mirbadllm-demo/demo-pc/models",
+    "ModelsHostPath": "/tmp/mirbadllm-demo/demo-pc/models",
+    "CacheRoot": "/tmp/mirbadllm-demo/demo-pc/cache",
+    "CacheHostPath": "/tmp/mirbadllm-demo/demo-pc/cache",
+    "UseContainerNetwork": false,
+    "DockerStartupTimeout": "00:00:05",
+    "HostdSocket": "/tmp/mirbadllm-demo/demo-pc/no-hostd.sock",
+    "HostdExpected": false,
+    "ManageSystemdUnits": false,
+    "ManageContainers": false,
+    "ManageBackupMount": false,
+    "AllowTagPulls": true,
+    "PortRangeStart": 18150,
+    "PortRangeEnd": 18199,
+    "ShutdownTimeout": "00:00:10"
+  },
+  "DevFakeRuntime": { "Enabled": true, "Memory": "discrete:2x24", "HostMemoryGiB": 64, "GpuName": "Fake GPU (demo)", "StartDelay": "00:00:02", "TokenDelay": "00:00:00.02" },
+  "Logging": { "LogLevel": { "Default": "Information", "Microsoft.AspNetCore": "Warning", "System.Net.Http.HttpClient": "Warning" } }
+}

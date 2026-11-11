@@ -4,6 +4,8 @@
 # also works without QEMU (design §11.1: the same image for the DGX and, in P5, a Kubernetes cluster).
 # Base images are the official mcr.microsoft.com/dotnet/{sdk,aspnet} images. To pull them through a registry mirror,
 # edit the FROM lines (or tag the mirror's copies with these names on the build machine).
+# The last stage is the master image. "--target demo" builds the demo image instead (deploy/demo; docs/setup.md, "Demo").
+# deploy/release.sh builds both for a release.
 ARG DOTNET_TAG=10.0
 
 FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:${DOTNET_TAG} AS build
@@ -31,6 +33,11 @@ COPY src/ src/
 # The commit (ci-deploy-multinode.sh passes it): the controller's informational version becomes 1.0.0+<commit>, which the
 # portal shows and compares with each agent's. Declared here, after the restore, so a new commit keeps that layer cached.
 ARG SOURCE_REVISION=unknown
+# The release version (deploy/release.sh passes the tag without its "v"): 1.0.0+<commit> becomes <version>+<commit>. No
+# publish line names it: a build argument is in the environment of every RUN after it, and MSBuild reads an environment
+# variable as the property of that name, here Version. Empty (every other build) keeps the SDK's default, 1.0.0. Builds
+# are still compared by the commit alone, so an agent and a master of one commit match whatever version each carries.
+ARG Version=
 RUN set -eu; \
     case "${SOURCE_REVISION}" in *[!A-Za-z0-9._-]* | "") echo "SOURCE_REVISION must be letters, digits, '.', '_' or '-'" >&2; exit 1 ;; esac; \
     dotnet publish src/MirbadLLM.Web/MirbadLLM.Web.csproj -c Release -a "$(cat /tmp/arch)" --self-contained false \
@@ -65,6 +72,9 @@ COPY deploy/agent/agent.linux.example.json deploy/agent/
 COPY deploy/agent/linux/install-agent.sh deploy/agent/linux/mirbadllm-agent.service deploy/agent/linux/README.md deploy/agent/linux/
 # The root helper behind pushed agent updates (docs/multinode/agent-updates.md), carried by the Linux and macOS bundles.
 COPY deploy/agent/agent-update-helper.sh deploy/agent/
+# The release version of every bundle, read by MSBuild from the environment as in the build stage. After the restore, so
+# a new version keeps that layer cached.
+ARG Version=
 # The publish line is install-agent.sh's own (publish_from_repo): self-contained, single file, no symbols.
 RUN set -eu; \
     case "${SOURCE_REVISION}" in *[!A-Za-z0-9._-]* | "") echo "SOURCE_REVISION must be letters, digits, '.', '_' or '-'" >&2; exit 1 ;; esac; \
@@ -126,6 +136,22 @@ RUN set -eu; \
     bash deploy/agent/macos/install-agent.sh package --published-dir /publish/osx-arm64 --rid osx-arm64 --output /bundles/osx-arm64.tar.gz; \
     rm -rf /publish/osx-arm64 /publish/osx-arm64-hostd; \
     ls -l /bundles
+
+# Demo image (--target demo; docs/setup.md, "Demo"): the master's files and deploy/demo. demo.sh starts this master and
+# two agents on the development fake runtime in the one container, with the agent binary taken from the Linux bundle
+# above, adds fake models and keeps sending them requests. Fake data, no login: for a look at the UI, never a deployment.
+# No RUN, so the other architecture needs no QEMU; the state lives in /tmp and goes with the container.
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_TAG} AS demo
+WORKDIR /app
+COPY --from=build /app .
+COPY --from=agent-bundles /bundles /app/agent-bundles
+COPY deploy/release-notes.json /app/release-notes.json
+COPY deploy/demo/ /opt/mirbadllm-demo/
+EXPOSE 8080
+USER app
+# Healthy once the fake fleet is seeded (demo.sh writes the file); deploy/release.sh waits for it before it pushes.
+HEALTHCHECK --interval=5s --timeout=3s --start-period=120s --retries=3 CMD ["test", "-f", "/tmp/mirbadllm-demo/ready"]
+ENTRYPOINT ["bash", "/opt/mirbadllm-demo/demo.sh"]
 
 FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_TAG}
 WORKDIR /app
