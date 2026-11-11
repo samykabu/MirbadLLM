@@ -9,8 +9,10 @@ This guide installs MirbadLLM in one of three layouts. Most fleets start with th
 - [Add nodes](#add-nodes): this is where your spare machines join. A Windows gaming PC or gaming laptop with an
   NVIDIA card runs llama.cpp as a native process, a Linux PC runs vLLM, llama.cpp or SGLang in containers, and NIM where it's enabled, and an Apple Silicon Mac or
   MacBook runs llama.cpp on Metal or MLX. Each one serves the models that fit its memory.
-- [Development fleet](#development-fleet): a master and two fake-runtime agents on one computer, for trying the UI or
-  working on the code. No GPU or Docker is needed.
+- [Development fleet](#development-fleet): a master and two fake-runtime agents on one computer, for working on the
+  code. No GPU or Docker is needed.
+
+To look at the UI before you install anything, run the [demo](#demo): one container with a fake fleet.
 
 ![Deployment topologies](images/deployment.svg)
 
@@ -36,11 +38,17 @@ This guide installs MirbadLLM in one of three layouts. Most fleets start with th
 
 ### Install
 
-1. Clone the repository.
+These steps run the published images, so nothing is built and the repository is not needed. The images are
+`ghcr.io/samykabu/mirbadllm` (the master) and `ghcr.io/samykabu/mirbadllm-agent`, for linux/amd64 and linux/arm64.
+To build the images yourself, see [Build from source](#build-from-source).
+
+1. Make a folder for the installation and download the compose file and the example settings of the newest
+   [release](https://github.com/samykabu/MirbadLLM/releases).
 
    ```bash
-   git clone https://github.com/samykabu/MirbadLLM.git
-   cd MirbadLLM
+   mkdir mirbadllm && cd mirbadllm
+   curl -fsSLO https://github.com/samykabu/MirbadLLM/releases/latest/download/compose.release.yaml
+   curl -fsSL -o .env https://github.com/samykabu/MirbadLLM/releases/latest/download/env.example
    ```
 
 2. Create the host folders. The master runs as uid 1654 (the `app` user of the .NET image), so its folders belong to
@@ -51,10 +59,9 @@ This guide installs MirbadLLM in one of three layouts. Most fleets start with th
    sudo install -d /srv/mirbadllm/models /srv/mirbadllm/cache
    ```
 
-3. Create `deploy/.env` from the example and set at least these values:
+3. Edit `.env` and set at least these values:
 
    ```bash
-   cp deploy/.env.example deploy/.env
    stat -c %g /var/run/docker.sock          # the value for DOCKER_GID
    ```
 
@@ -65,31 +72,49 @@ This guide installs MirbadLLM in one of three layouts. Most fleets start with th
    | `MIRBADLLM_ADMIN_PASSWORD` | a password for the UI |
    | `MIRBADLLM_BACKUP_PASSPHRASE` | a passphrase for encrypted backups (keep a copy elsewhere) |
 
+   `MIRBADLLM_VERSION` selects the release: `1.2.0` for that release, `1.2` for the newest 1.2.x. Left unset, it is
+   `latest`, the newest release. The master and the agent always take the same value.
    [configuration.md](configuration.md) lists every variable.
 
-4. Build and start the master and the agent.
+4. Pull the images and start the master and the agent. Compose reads the `.env` next to the compose file.
 
    ```bash
-   docker compose -f deploy/compose.multinode.yaml --env-file deploy/.env up -d --build
+   docker compose -f compose.release.yaml up -d
    ```
 
    The master writes a bootstrap bundle on first start, and the agent enrolls from it as node `dgx`, already
-   approved. The first build takes several minutes.
+   approved.
 
 5. Open `http://<host>:8080/` and sign in with the admin password.
 
 The installation is complete when the **Nodes** page shows the node as **Online** and the Overview shows its memory.
 `docker ps` lists two containers, `mirbadllm` (the master) and `mirbadllm-agent`.
 
-The compose file runs the agent with `deploy/agent/agent.dgx.json`, which treats the machine as one unified memory
+The agent image carries `deploy/agent/agent.dgx.json`, which treats the machine as one unified memory
 pool. That matches a DGX Spark and other unified-memory machines. On a PC with discrete GPUs, admission should count
 each GPU's VRAM: run only the master from this compose file and join the PC as a node with the Linux installer
 (below), or adjust `MemoryModel` in the agent configuration.
 
+### Build from source
+
+To run code that is not released yet, or your own changes, build the two images from a clone. The compose file
+`deploy/compose.multinode.yaml` is the one above with a build section for each image, and it reads `deploy/.env`.
+
+```bash
+git clone https://github.com/samykabu/MirbadLLM.git
+cd MirbadLLM
+cp deploy/.env.example deploy/.env          # set the values of step 3
+docker compose -f deploy/compose.multinode.yaml --env-file deploy/.env up -d --build
+```
+
+The first build takes several minutes. A build from a clone shows version `1.0.0`; only release images carry the
+version of their release.
+
 ### Optional: the host agent
 
 The host agent (`mirbadllm-hostd`) lets the node's **Services** tab manage systemd units such as ComfyUI or Ollama,
-and it mounts a NAS share for backups. Edit `deploy/hostd/hostd.json` first, then install it:
+and it mounts a NAS share for backups. It is installed from a clone of the repository. Edit
+`deploy/hostd/hostd.json` first, then install it:
 
 ```bash
 sudo bash deploy/hostd/install-hostd.sh
@@ -117,7 +142,18 @@ first key exists, `/v1` accepts requests without one, and the header shows a war
 
 ### Update
 
-Pull the new version and rebuild:
+With the published images, pull the release that `MIRBADLLM_VERSION` names and restart. With `latest` or a
+`<major>.<minor>` value, that is the newest matching release. To move to a specific release, change the value first.
+
+```bash
+docker compose -f compose.release.yaml pull
+docker compose -f compose.release.yaml up -d
+```
+
+To go back, set `MIRBADLLM_VERSION` to the earlier release and run the same two commands. Take a backup first: an
+older release is not guaranteed to read data that a newer one has written.
+
+An installation built from source pulls the new code and rebuilds:
 
 ```bash
 git pull
@@ -205,12 +241,56 @@ The operator guides describe placement, moves, per-node jobs and node states in 
 
 ### Agent updates
 
-Every build carries its commit. A node whose agent runs another build shows **Agent from another build** on the Nodes
-page. Update it with **Update now** on the node's page, **Update N nodes** on the Nodes page, or turn on automatic
-updates after each master update. The master signs an update order for that node, the agent downloads the bundle and
+Every build carries its commit, and a release image also carries its version: the sidebar shows `1.2.0 · 826bc75`
+for release 1.2.0 built from commit `826bc75`. Builds are compared by the commit. A node whose agent runs another
+build shows **Agent from another build** on the Nodes page, which is the case for every other node after the master
+moves to a new release. Update it with **Update now** on the node's page, **Update N nodes** on the Nodes page, or
+turn on automatic updates after each master update. The master signs an update order for that node, the agent downloads the bundle and
 a root helper verifies the signature against the CA saved at install time before it runs the bundle's upgrade, which
 rolls back if the new agent does not come up. The agent itself never gets elevated rights. The design is in
 [multinode/agent-updates.md](multinode/agent-updates.md).
+
+## Demo
+
+The demo is one container that shows the UI with a fleet in it. It needs Docker and nothing else: no GPU, no model
+files and no settings.
+
+```bash
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/samykabu/mirbadllm-demo
+```
+
+Open `http://127.0.0.1:8080/` when the log prints `Up`. Once the image is pulled, that takes about 20 seconds
+(measured on an x86_64 PC). Add `:1.2.0` to the image name for a specific release. Stop the demo with Ctrl+C.
+
+The container runs the master and two node agents, the same processes as the
+[development fleet](#development-fleet) below, and a loop that sends chat requests to the models:
+
+| Node | What it stands in for | Fake models |
+|---|---|---|
+| `demo-dgx` | a unified-memory machine with 128 GiB | `fake-chat-large`, `fake-coder` |
+| `demo-pc` | a PC with two 24 GiB GPUs and 64 GiB of RAM | `fake-chat-small`, `fake-assistant` |
+
+What is real and what is fake:
+
+- All data is fake. The models are small servers that answer with made-up text, so token rates, latencies, benchmark
+  results and tuning results are made-up numbers. Memory and GPU figures come from the fake nodes.
+- The master, the agents, mTLS between them, admission, the router and the UI are the real code. You can add, start
+  and stop fake models, create API keys and call `/v1` on the published port. Once an API key exists, `/v1` requires
+  one, and the generated traffic stops because the demo's own requests carry none.
+- Downloads, image pulls and host services are not available, and no real model can run.
+- The state lives inside the container. A new container starts again from the same fleet.
+
+The demo is not a deployment. Its access rules are those of a development machine:
+
+- It has no admin password and no API key. Anyone who can reach the published port can change everything in it and
+  call `/v1`. The header shows **Admin login disabled** and **/v1 open: no API keys** for that reason.
+- The command above publishes the port on `127.0.0.1` only. Keep it there, and do not publish it on a LAN or the
+  internet.
+- The master runs in the ASP.NET Core `Development` environment, because the fake runtime and the join-token helper
+  refuse to start in any other. A failed request therefore shows error details that a production master hides.
+- Publish only port 8080. The agents listen on the container's loopback.
+
+To build the demo image from a clone, run `docker build -f deploy/Dockerfile --target demo -t mirbadllm-demo .`
 
 ## Development fleet
 

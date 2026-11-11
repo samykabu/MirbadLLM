@@ -145,15 +145,66 @@ hardware.
 
 ## Quick start
 
-### Try it on a laptop, without a GPU
+### Look at the UI without a GPU
 
-The development fleet runs a master and two node agents on one machine, with fake models in place of vLLM. Nothing
-touches Docker or a GPU, and everything listens on loopback. You need the .NET 10 SDK (10.0.100 or a later feature
-band) and PowerShell 7 or Bash.
+The demo image runs a master, two fake nodes and four fake models in one container, and keeps calling the models so
+the charts have something to show. You need Docker and nothing else: no GPU, no .NET SDK and no clone.
 
 ```bash
-git clone https://github.com/samykabu/MirbadLLM.git
-cd MirbadLLM
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/samykabu/mirbadllm-demo
+```
+
+Open `http://127.0.0.1:8080/` when the log prints `Up`. Once the image is pulled, that takes about 20 seconds
+(measured on an x86_64 PC).
+
+Everything the demo shows is fake data: the nodes `demo-dgx` and `demo-pc` are processes inside the container, the
+models answer with made-up text, and the traffic is generated. The demo has no login and no API key, so anyone who can
+reach its port has full control of it. The command publishes the port on `127.0.0.1` for that reason; keep it there.
+Stop the demo with Ctrl+C. Its state goes with the container. The [setup guide](docs/setup.md#demo) lists what works
+in the demo and what does not.
+
+### Run the master and your first node
+
+Pick the machine that stays on: the master runs there, together with that machine's own agent, as two containers.
+Any Linux PC with an NVIDIA GPU works, from an old gaming tower to a DGX Spark. You need Docker Engine with the
+NVIDIA Container Toolkit, and a vLLM image the machine can run. Each
+[release](https://github.com/samykabu/MirbadLLM/releases) publishes the master and agent images for x86_64 and arm64,
+so nothing is built on the machine and no clone is needed.
+
+```bash
+mkdir mirbadllm && cd mirbadllm
+curl -fsSLO https://github.com/samykabu/MirbadLLM/releases/latest/download/compose.release.yaml
+curl -fsSL -o .env https://github.com/samykabu/MirbadLLM/releases/latest/download/env.example
+sudo install -d -o 1654 -g 1654 /srv/mirbadllm/data /srv/mirbadllm/backups   # 1654 = the "app" user of the .NET image
+sudo install -d /srv/mirbadllm/models /srv/mirbadllm/cache
+# In .env set at least:
+#   DOCKER_GID=<output of: stat -c %g /var/run/docker.sock>
+#   MIRBADLLM_VLLM_IMAGE=<a vLLM image available on this machine>
+#   MIRBADLLM_ADMIN_PASSWORD=<admin password for the UI>
+docker compose -f compose.release.yaml up -d
+```
+
+Open `http://<host>:8080/`, sign in, and add a model on **Models**. The newest release runs unless
+`MIRBADLLM_VERSION` in `.env` names another, for example `1.2.0`. The compose file treats the machine as one
+unified memory pool, as on a DGX Spark. On a PC with discrete NVIDIA GPUs, join the PC as a node with the Linux agent
+installer instead, so admission works per GPU; the [setup guide](docs/setup.md) covers both.
+
+### Build from source
+
+To run code that is not released yet, build the same two containers from a clone. The settings are the ones above,
+in `deploy/.env`:
+
+```bash
+git clone https://github.com/samykabu/MirbadLLM.git && cd MirbadLLM
+cp deploy/.env.example deploy/.env
+docker compose -f deploy/compose.multinode.yaml --env-file deploy/.env up -d --build
+```
+
+To work on the code without Docker or a GPU, start the development fleet: a master and two fake-runtime agents as
+local processes on loopback, which is what the demo image packages. It needs the .NET 10 SDK (10.0.100 or a later
+feature band) and PowerShell 7 or Bash.
+
+```bash
 pwsh tools/dev-multinode/start.ps1 -Reset      # Windows, or PowerShell 7 anywhere
 tools/dev-multinode/start.sh --reset           # Linux and macOS
 ```
@@ -161,28 +212,6 @@ tools/dev-multinode/start.sh --reset           # Linux and macOS
 Open `http://127.0.0.1:5080/`. The script builds the solution, enrolls agent `dgx` (a unified-memory node) and agent
 `dev-b` (a PC with two fake 16 GiB GPUs), adds a fake model on each and sends chat requests through `/v1`. Stop it
 with `pwsh tools/dev-multinode/stop.ps1` or `tools/dev-multinode/stop.sh`.
-
-### Run the master and your first node
-
-Pick the machine that stays on: the master runs there, together with that machine's own agent, as two containers.
-Any Linux PC with an NVIDIA GPU works, from an old gaming tower to a DGX Spark. You need Docker Engine with the
-NVIDIA Container Toolkit, and a vLLM image the machine can run.
-
-```bash
-git clone https://github.com/samykabu/MirbadLLM.git && cd MirbadLLM
-sudo install -d -o 1654 -g 1654 /srv/mirbadllm/data /srv/mirbadllm/backups   # 1654 = the "app" user of the .NET image
-sudo install -d /srv/mirbadllm/models /srv/mirbadllm/cache
-cp deploy/.env.example deploy/.env
-# In deploy/.env set at least:
-#   DOCKER_GID=<output of: stat -c %g /var/run/docker.sock>
-#   MIRBADLLM_VLLM_IMAGE=<a vLLM image available on this machine>
-#   MIRBADLLM_ADMIN_PASSWORD=<admin password for the UI>
-docker compose -f deploy/compose.multinode.yaml --env-file deploy/.env up -d --build
-```
-
-Open `http://<host>:8080/`, sign in, and add a model on **Models**. The compose file treats the machine as one
-unified memory pool, as on a DGX Spark. On a PC with discrete NVIDIA GPUs, join the PC as a node with the Linux agent
-installer instead, so admission works per GPU; the [setup guide](docs/setup.md) covers both.
 
 ### Add your other machines
 
@@ -226,6 +255,7 @@ Until the first API key exists, `/v1` is open and the UI says so in its header. 
 | Single machine | Master and agent as two containers on one Linux GPU machine | [Single machine](docs/setup.md#single-machine) |
 | Multi-node | Master on one machine; agents on Linux PCs (systemd), Windows PCs (a Windows service) and Apple Silicon Macs (a LaunchDaemon) | [Add nodes](docs/setup.md#add-nodes) |
 | Development | Master and two fake-runtime agents on loopback | [Development fleet](docs/setup.md#development-fleet) |
+| Demo | Master and two fake-runtime agents in one container, with fake models and generated traffic | [Demo](docs/setup.md#demo) |
 
 ![Deployment topologies](docs/images/deployment.svg)
 

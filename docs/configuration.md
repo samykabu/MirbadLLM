@@ -14,7 +14,9 @@ operators only edit that file.
 
 ## `deploy/.env`
 
-Copy `deploy/.env.example` to `deploy/.env` and adjust it. The compose files read these variables:
+Copy `deploy/.env.example` to `deploy/.env` and adjust it. An installation from the published images keeps the same
+settings in `.env` next to `compose.release.yaml`, starting from the release's `env.example`. The compose files read
+these variables:
 
 | Variable | Default | What it does |
 |---|---|---|
@@ -32,6 +34,7 @@ Copy `deploy/.env.example` to `deploy/.env` and adjust it. The compose files rea
 | `MIRBADLLM_ADMIN_PASSWORD` | empty | Admin password for the UI and `/api`. Empty disables the login, and every page shows a warning |
 | `MIRBADLLM_BACKUP_PASSPHRASE` | empty | Encrypts the secrets section of scheduled backups. Empty = scheduled backups carry no secrets. Keep a copy elsewhere: a restore needs it |
 | `MIRBADLLM_BACKUP_HOSTNAME` | `dgx-spark` | Host name written into backup file names |
+| `MIRBADLLM_VERSION` | `latest` | Release of the published images that `compose.release.yaml` runs: `1.2.0`, or `1.2` for the newest 1.2.x. The compose files that build ignore it |
 
 ## Master settings
 
