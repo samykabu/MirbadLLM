@@ -481,12 +481,3 @@ MirbadLLM orchestrates other people's work: [vLLM](https://github.com/vllm-proje
 with [.NET and ASP.NET Core Blazor](https://dotnet.microsoft.com/), [Bootstrap](https://getbootstrap.com/),
 [xUnit](https://xunit.net/) and [bUnit](https://bunit.dev/). The interface uses the Plus Jakarta Sans, Inter and
 Azeret Mono typefaces under the SIL Open Font License.
-
-## Star history
-
-<a href="https://star-history.com/#samykabu/MirbadLLM&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=samykabu/MirbadLLM&type=Date&theme=dark">
-    <img alt="Star history chart" src="https://api.star-history.com/svg?repos=samykabu/MirbadLLM&type=Date">
-  </picture>
-</a>
