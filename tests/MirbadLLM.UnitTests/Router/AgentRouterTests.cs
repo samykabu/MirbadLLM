@@ -582,6 +582,123 @@ public sealed class AgentRouterTests
         Assert.Empty(env.Data.Requests);
     }
 
+    // ---- The Ollama routes take the same agent path ----
+
+    [Fact]
+    public async Task OllamaChat_GoesThroughTheAgentProxy_AndComesBackAsNdjson()
+    {
+        await using var env = await StubEnv.StartAsync();
+        env.Data.Respond = _ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream"),
+        };
+
+        using var response = await env.Client.PostAsync(
+            new Uri("/api/chat", UriKind.Relative),
+            new StringContent($$"""{"model":"{{ServedName}}:latest","messages":[{"role":"user","content":"hi"}]}""", Encoding.UTF8, "application/json"), Ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/x-ndjson", response.Content.Headers.ContentType?.MediaType);
+        string[] lines = (await response.Content.ReadAsStringAsync(Ct)).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        Assert.Contains("\"content\":\"Hi\"", lines[0], StringComparison.Ordinal);
+        Assert.Contains("\"done\":true", lines[1], StringComparison.Ordinal);
+
+        var sent = Assert.Single(env.Data.Requests);
+        Assert.Equal($"/agent/v1/proxy/{ModelId}/v1/chat/completions", sent.Uri.AbsolutePath);
+        using var body = JsonDocument.Parse(sent.Body);
+        Assert.Equal(ServedName, body.RootElement.GetProperty("model").GetString());
+        Assert.True(body.RootElement.GetProperty("stream").GetBoolean());
+        var stats = Assert.Single(env.Stats.Snapshot());
+        Assert.Equal((1, 0), (stats.TotalRequests, stats.FailedRequests));
+        Assert.Equal(1, env.Data.DisposedResponses);
+    }
+
+    [Fact]
+    public async Task OllamaChat_NodeOffline_KeepsTheStatusAndRetryAfter_InOllamasErrorShape()
+    {
+        await using var env = await StubEnv.StartAsync();
+        env.Cache.SetNode(NodeId, NodeState.Offline);
+
+        using var response = await env.Client.PostAsync(
+            new Uri("/api/chat", UriKind.Relative),
+            new StringContent($$"""{"model":"{{ServedName}}","messages":[{"role":"user","content":"hi"}]}""", Encoding.UTF8, "application/json"), Ct);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(30, (int?)response.Headers.RetryAfter?.Delta?.TotalSeconds);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct));
+        Assert.Contains("is offline", body.RootElement.GetProperty("error").GetString(), StringComparison.Ordinal);
+        Assert.Empty(env.Data.Requests);
+    }
+
+    [Fact]
+    public async Task OllamaChat_AgentError_IsTranslatedAsOnV1_ThenShapedForOllama()
+    {
+        await using var env = await StubEnv.StartAsync();
+        env.Data.Respond = _ => AgentErrorAnswer(ErrorCodes.ModelNotRunning, marked: true);
+
+        using var response = await env.Client.PostAsync(
+            new Uri("/api/chat", UriKind.Relative),
+            new StringContent($$"""{"model":"{{ServedName}}","messages":[{"role":"user","content":"hi"}]}""", Encoding.UTF8, "application/json"), Ct);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.False(response.Headers.Contains(Protocol.AgentErrorHeader));
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(Ct));
+        Assert.Equal($"Model '{ServedName}' is not ready (state: Stopped).", body.RootElement.GetProperty("error").GetString());
+        Assert.Equal(1, Assert.Single(env.Stats.Snapshot()).FailedRequests);
+    }
+
+    [Fact]
+    public async Task OllamaChat_FailureAfterTheFirstLine_AbortsTheClient_WithNothingAppended()
+    {
+        await using var env = await StubEnv.StartAsync();
+        env.Data.Respond = _ =>
+        {
+            var content = new StreamContent(new FailingStream(Encoding.UTF8.GetBytes("data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n")));
+            content.Headers.ContentType = new MediaTypeHeaderValue("text/event-stream");
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/chat")
+        {
+            Content = JsonContent.Create(new { model = ServedName, messages = new[] { new { role = "user", content = "hi" } } }),
+        };
+        using var response = await env.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, Ct);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var (received, failure) = await ReadUntilEndOrFailureAsync(response);
+
+        // As on /v1: the client sees a reset. No last object claims the answer is done, and no error object is glued onto
+        // a started stream. (TestServer may drop the line still buffered for the client, so it is not asserted.)
+        Assert.NotNull(failure);
+        Assert.DoesNotContain("\"done\":true", received, StringComparison.Ordinal);
+        Assert.DoesNotContain("error", received, StringComparison.Ordinal);
+        await WaitUntilAsync(() => env.Stats.Snapshot().SingleOrDefault()?.FailedRequests == 1, "the failure to be counted");
+    }
+
+    [Fact]
+    public async Task OllamaChat_FailureBeforeAnythingLeft_Is502_InOllamasErrorShape()
+    {
+        await using var env = await StubEnv.StartAsync();
+        env.Data.Respond = _ =>
+        {
+            // A single (not streamed) answer is held until it is complete, so its failure can still be answered properly.
+            var content = new StreamContent(new FailingStream(Encoding.UTF8.GetBytes("{\"choices\":[{\"message\":{\"content\":\"Hel")));
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        };
+
+        using var response = await env.Client.PostAsync(
+            new Uri("/api/chat", UriKind.Relative),
+            JsonContent.Create(new { model = ServedName, stream = false, messages = new[] { new { role = "user", content = "hi" } } }), Ct);
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Equal(
+            "{\"error\":\"Upstream request failed: The HTTP/2 stream was reset by the agent.\"}",
+            await response.Content.ReadAsStringAsync(Ct));
+        Assert.Equal(1, Assert.Single(env.Stats.Snapshot()).FailedRequests);
+    }
+
     // ---- Helpers ----
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;

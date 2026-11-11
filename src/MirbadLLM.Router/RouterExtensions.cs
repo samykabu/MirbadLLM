@@ -62,7 +62,8 @@ public static class RouterExtensions
         return services;
     }
 
-    /// <summary>Maps <c>GET /v1/models</c> and the catch-all <c>/v1/{**path}</c> proxy, under an API-key
+    /// <summary>Maps <c>GET /v1/models</c>, the catch-all <c>/v1/{**path}</c> proxy and the Ollama-compatible routes
+    /// under <c>/api</c> (<see cref="OllamaApi"/>), under an API-key
     /// gate (see <see cref="ApiKeyAccess.CheckInferenceAsync"/>). Marked anonymous at the ASP.NET Core
     /// authorization level — it authenticates itself via API key, not the admin cookie — and is therefore
     /// unaffected by the app's cookie-authorization fallback policy.
@@ -81,6 +82,15 @@ public static class RouterExtensions
         group.AddEndpointFilter(ApiKeyFilterAsync);
         group.MapGet("/models", ModelsEndpoint.HandleAsync);
         group.Map("/{**path}", ProxyHandler.HandleAsync);
+
+        // The Ollama-compatible routes (OllamaApi): exact paths under /api next to the admin API, anonymous to the admin
+        // login like /v1 and behind the same two gates. Their translation filter is outermost, so the gates' answers
+        // leave in Ollama's error shape too.
+        var ollama = endpoints.MapGroup("/api").AllowAnonymous();
+        ollama.AddEndpointFilter(OllamaApi.TranslateResponsesAsync);
+        ollama.AddEndpointFilter(MaintenanceFilterAsync);
+        ollama.AddEndpointFilter(ApiKeyFilterAsync);
+        OllamaApi.Map(ollama);
         return endpoints;
     }
 

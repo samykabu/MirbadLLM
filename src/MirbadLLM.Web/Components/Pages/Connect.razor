@@ -122,7 +122,7 @@
                 }
             </select>
             <span class="field-hint" id="snippet-model-hint">
-                Cline, Continue and curl are filled in with <code>@ModelName</code>@(SnippetPlace is { } place ? $", served on {place.Where}" : "").
+                Cline, Continue, Ollama and curl are filled in with <code>@ModelName</code>@(SnippetPlace is { } place ? $", served on {place.Where}" : "").
                 The VS Code entry lists every Ready model.
             </span>
         }
@@ -133,11 +133,11 @@
             </p>
         }
     </div>
-    @* One tab per client (?client=vscode|cline|continue|curl), so the page stays one screen tall; a long snippet
+    @* One tab per client (?client=vscode|cline|continue|ollama|curl), so the page stays one screen tall; a long snippet
        scrolls inside its own code block instead of the page. *@
     @if (_client != "vscode")
     {
-        <ol class="snippet-steps"><li>@(_client == "curl" ? "Open a terminal on the client machine." : "Choose the OpenAI Compatible provider in your client.")</li><li>Copy the settings below and use the served name you selected.</li><li>@(_apiKeyConfigured ? "Use your API key from Access / API keys." : "No API key is required yet.")</li></ol>
+        <ol class="snippet-steps"><li>@(_client == "curl" ? "Open a terminal on the client machine." : _client == "ollama" ? "Choose the Ollama provider in your client." : "Choose the OpenAI Compatible provider in your client.")</li><li>Copy the settings below and use the served name you selected.</li><li>@(_apiKeyConfigured ? "Use your API key from Access / API keys." : "No API key is required yet.")</li></ol>
     }
     <div class="connect-clients">
     <Tabs Items="ClientTabs" SelectedId="@_client" SelectedIdChanged="id => _client = id" QueryKey="client"
@@ -165,6 +165,29 @@
                             </button>
                         </div>
                         <pre tabindex="0" aria-label="Continue configuration" data-testid="continue-snippet">@foreach (var part in WordBreakParts(ContinueText())) { @part.Text if (part.BreakAfter) { <wbr /> } }</pre>
+                    </div>
+                    break;
+                case "ollama":
+                    <div class="panel snippet">
+                        <div class="snippet-head">
+                            <h3>Ollama <span class="muted">(clients that only speak the Ollama API)</span></h3>
+                            <button type="button" class="btn btn-sm btn-outline-secondary" aria-label="Copy Ollama settings" @onclick="CopyOllamaAsync">
+                                <Icon Name="@(_copied == CopyTarget.Ollama ? "check" : "copy")" /> @(_copied == CopyTarget.Ollama ? "Copied" : "Copy")
+                            </button>
+                        </div>
+                        <pre tabindex="0" aria-label="Ollama settings" data-testid="ollama-snippet">@foreach (var part in WordBreakParts(OllamaText())) { @part.Text if (part.BreakAfter) { <wbr /> } }</pre>
+                        <p class="field-hint connect-prose" data-testid="ollama-hint">
+                            The address is this server without <code>/v1</code>, and the model names are the served names; <code>@(ModelName):latest</code> is accepted too.
+                            @if (_apiKeyConfigured)
+                            {
+                                <span data-testid="ollama-key-required">A client that cannot send the <code>Authorization</code> header is refused while a key is required. The <code>ollama</code> command line is one of them.</span>
+                            }
+                            else
+                            {
+                                <span data-testid="ollama-key-open">No key is required yet, so clients that cannot send one work, the <code>ollama</code> command line among them. They are refused once a key is required.</span>
+                            }
+                            Models are not pulled, created or deleted through these routes; manage them on <a href="models">Models</a>.
+                        </p>
                     </div>
                     break;
                 case "curl":
@@ -213,6 +236,7 @@
     private HttpContext? HttpContext { get; set; }
 
     private string _baseUrl = "/v1";
+    private string _ollamaUrl = "";
     private string _metricsUrl = "/metrics";
     private bool _apiKeyConfigured;
     private int? _activeKeyCount;
@@ -229,6 +253,7 @@
             ? $"{HttpContext.Request.Scheme}://{HttpContext.Request.Host}"
             : new Uri(Nav.BaseUri).GetLeftPart(UriPartial.Authority);
         _baseUrl = $"{origin}/v1";
+        _ollamaUrl = origin; // the Ollama-compatible routes live under /api on the same address
         _metricsUrl = $"{origin}/metrics";
 
         // Resolved via the service provider (not @inject) so this page keeps working in tests/hosts that
@@ -261,12 +286,13 @@
         new("vscode", "VS Code"),
         new("cline", "Cline / Roo Code"),
         new("continue", "Continue"),
+        new("ollama", "Ollama"),
         new("curl", "curl"),
     ];
 
     private string _client = "vscode";
 
-    private enum CopyTarget { BaseUrl, MetricsUrl, VsCode, Cline, Continue, Curl, ServedName }
+    private enum CopyTarget { BaseUrl, MetricsUrl, VsCode, Cline, Continue, Ollama, Curl, ServedName }
 
     private CopyTarget? _copied;
 
@@ -298,6 +324,11 @@
             ? entry + $"\n  - name: {ModelName} (no thinking)\n    provider: openai\n    apiBase: {_baseUrl}\n    model: {NoThinking.NameFor(ModelName)}{apiKeyLine}"
             : entry;
     }
+
+    private string OllamaText() =>
+        $"Base URL: {_ollamaUrl}\nAPI key: {(_apiKeyConfigured ? "Authorization: Bearer <your key>" : "(not required)")}\nModel: {ModelName}"
+        + (SnippetPlace?.Thinks == true ? $"\nModel without thinking: {NoThinking.NameFor(ModelName)}" : "")
+        + $"\nEnvironment: OLLAMA_HOST={_ollamaUrl}";
 
     private string VsCodeText() => VsCodeSnippet.Build(_baseUrl, _ready, _apiKeyConfigured);
 
@@ -360,6 +391,8 @@
     private Task CopyClineAsync() => CopyAsync(ClineText(), CopyTarget.Cline);
 
     private Task CopyContinueAsync() => CopyAsync(ContinueText(), CopyTarget.Continue);
+
+    private Task CopyOllamaAsync() => CopyAsync(OllamaText(), CopyTarget.Ollama);
 
     private Task CopyCurlAsync() => CopyAsync(CurlText(), CopyTarget.Curl);
 }

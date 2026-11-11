@@ -95,6 +95,63 @@ Use `bearer_token_env_var = "MIRBAD_MCP_KEY"` in Codex rather than static header
 
 MirbadLLM serves plain HTTP for trusted LAN deployment. Bearer credentials are visible to anyone able to intercept that traffic. For access beyond a trusted LAN, terminate TLS at a reverse proxy, restrict source networks, and configure clients with the resulting HTTPS `/mcp` URL.
 
+## Ollama clients
+
+The master answers Ollama's API on its main port, the port of the UI and `/v1` (8080 by default; Ollama's own default
+is 11434), for clients that have an Ollama setting and no OpenAI one. Point the client at `http://<host>:8080`. The
+**Access** page has the settings for your address under **Client settings > Ollama**. There is nothing to switch on.
+
+A chat, generate or embedding request is translated to its `/v1` form and takes the `/v1` path through the router, so
+model resolution, the `<served-name>-nothink` names, maintenance windows, start-on-request and the request statistics
+behave as they do there.
+
+| Route | What it does |
+|---|---|
+| `POST /api/chat` | Chat completion (`/v1/chat/completions`): messages, base64 `images`, `tools` and tool results, `think`, `format` |
+| `POST /api/generate` | The prompt, with `system` when given, as a chat completion; with `raw: true` a plain completion (`/v1/completions`) |
+| `POST /api/embed`, `POST /api/embeddings` | Embeddings (`/v1/embeddings`) |
+| `GET /api/tags` | The models `/v1/models` lists: the Ready ones |
+| `GET /api/ps` | The same models with their context length |
+| `POST /api/show` | A model's capabilities (`completion`, `embedding`, `tools`, `vision`, `thinking`) and details |
+| `GET /api/version` | MirbadLLM's version |
+
+**API key.** The rule is the one of `/v1`: open until the first key exists (unless `MIRBADLLM_REQUIRE_API_KEY=true`),
+then `Authorization: Bearer <key>` with a key that has the **Inference** scope. A client that cannot send that header
+works only while no key is required. The `ollama` command line is such a client: `OLLAMA_HOST=http://<host>:8080`
+points it at the master, and it has no setting for a bearer key.
+
+**Model names.** Clients send the served name, as on `/v1`. Ollama clients append `:latest` to a name without a tag,
+so `<served-name>:latest` is accepted when no model is served under that exact name and `<served-name>` is.
+
+**Streaming.** Answers stream as newline-delimited JSON unless the request says `"stream": false`, as with Ollama.
+
+**Options.** `temperature`, `top_p`, `top_k`, `min_p`, `seed`, `stop`, `presence_penalty`, `frequency_penalty` and
+`num_predict` (as `max_tokens`) are passed on. `think` switches thinking on or off
+(`chat_template_kwargs.enable_thinking`), and `format` becomes `response_format`: JSON mode for `"json"`, a JSON
+schema for a schema. Fields with no OpenAI equivalent are ignored without an error: `num_ctx` and the other load-time
+options (the context length is the model's own setting in MirbadLLM), `repeat_penalty`, `keep_alive`, `truncate`,
+`template` and `context`.
+
+**Numbers.** `prompt_eval_count` and `eval_count` are the token counts the runtime reports. `total_duration` is
+measured on the master, from the request's arrival to the end of the answer. `prompt_eval_duration` and
+`eval_duration` are present only when the runtime's answer carries them (llama.cpp's `timings`); otherwise they are
+left out, and `load_duration` always is. The registry stores no file size, digest or modification time, so in
+`/api/tags` `size` is 0, `digest` is empty and `modified_at` is the zero time. `details` carries only what the
+registry holds: `gguf` as the format of a llama.cpp model, and the quantization when the model definition sets one.
+
+**Not offered.**
+
+- `/api/pull`, `/api/push`, `/api/create`, `/api/copy` and `/api/delete` answer 501 with an error that points to the
+  **Models** page. Models are added and removed there, or through the admin API.
+- A request to unload a model (`keep_alive: 0` with an empty prompt) is refused. Stop the model on **Models**.
+- A load request (an empty prompt or message list) is answered for a model that is Ready. It does not start a stopped
+  model. With `MirbadLLM:AutoStartOnRequest`, the first chat or generate request starts it.
+- `suffix` (fill-in-the-middle) on `/api/generate` is refused with 400.
+- The root path serves the UI, so a client that checks it for Ollama's "Ollama is running" text does not find it,
+  and nothing listens on port 11434. A client that needs either one needs a reverse proxy in front.
+
+Errors use Ollama's shape, `{"error": "<message>"}`, with the status code `/v1` would have answered.
+
 ## Node agent settings
 
 Each agent reads its own `agent.json` (section `Agent`), written by the installer. The examples in

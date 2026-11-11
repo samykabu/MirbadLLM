@@ -117,6 +117,10 @@ hosted service.
 - **One OpenAI-compatible endpoint.** `/v1/models` lists every model on every node. Every other `/v1` path the
   runtime supports (chat completions, completions, embeddings), streaming included, is proxied to the node that
   serves the model named in the request.
+- **An Ollama-compatible API.** Clients that only speak Ollama's API reach the same models on the same port.
+  `/api/chat`, `/api/generate` and `/api/embed` are translated to their `/v1` requests, and `/api/tags`, `/api/show`,
+  `/api/ps` and `/api/version` describe the same models, so the API key, the served names and the routing are the
+  same. Pulling, creating and deleting models through Ollama routes is not offered.
 - **Runtimes follow node capabilities.** Linux and DGX agents run vLLM, llama.cpp and SGLang containers, with NIM only
   when explicitly enabled and digest-approved. Windows and macOS keep native llama.cpp, and Apple Silicon also runs MLX
   (`mlx_lm.server`). SGLang/NIM on Windows require a separately enrolled Linux agent in WSL2, not native-agent control.
@@ -235,6 +239,19 @@ print(reply.choices[0].message.content)
 
 A model tagged Reasoning also answers as `<served-name>-nothink`, the same model with thinking switched off. Clients that can
 send extra body fields can instead set `"chat_template_kwargs": {"enable_thinking": false}` per request.
+
+A client that only speaks Ollama's API uses the same host and port without `/v1`:
+
+```bash
+curl http://<host>:8080/api/chat \
+  -H "Authorization: Bearer $MIRBADLLM_API_KEY" \
+  -d '{"model":"<served-name>","messages":[{"role":"user","content":"Hello"}],"stream":false}'
+```
+
+These routes are translated to `/v1`: the key is the same, and so are the served names (`<served-name>:latest` is
+accepted too). A client that cannot send the `Authorization` header, such as the `ollama` command line with
+`OLLAMA_HOST=http://<host>:8080`, works only while `/v1` is open. [Ollama clients](docs/configuration.md#ollama-clients)
+lists the routes and what is not offered.
 
 Until the first API key exists, `/v1` is open and the UI says so in its header. Create a key on **Access**, or set
 `MIRBADLLM_REQUIRE_API_KEY=true` to require one from the start.

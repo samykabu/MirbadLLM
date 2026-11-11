@@ -18,38 +18,52 @@ internal static class ModelsEndpoint
 {
     public static async Task<IResult> HandleAsync(HttpContext context, IModelEndpointResolver resolver, CancellationToken ct)
     {
+        var data = (await ListServedAsync(context.RequestServices, resolver, ct))
+            .Select(m => new ModelListEntry(
+                m.Name,
+                "model",
+                0,
+                "mirbadllm",
+                m.Definition is null ? null : ModelCapabilities.MaxModelLen(m.Definition),
+                m.Definition is null ? null : new ModelListCapabilities(
+                    ModelCapabilities.IsChat(m.Definition),
+                    PoolingDetection.Detect(m.Definition) == PoolingMode.Embedding,
+                    ModelCapabilities.ToolCalling(m.Definition),
+                    ModelCapabilities.Vision(m.Definition))))
+            .ToArray();
+
+        return Results.Json(new ModelListResponse("list", data));
+    }
+
+    /// <summary>
+    /// The names clients can call now, in the order <c>GET /v1/models</c> lists them: every Ready model no maintenance
+    /// window pauses, each followed by its "-nothink" name when it is offered. The Ollama list (<c>GET /api/tags</c>) reads
+    /// the same list, so the two never differ.
+    /// </summary>
+    internal static async Task<IReadOnlyList<ServedModel>> ListServedAsync(IServiceProvider services, IModelEndpointResolver resolver, CancellationToken ct)
+    {
         var endpoints = await resolver.ListAsync(ct);
-        var services = context.RequestServices;
         var registry = services.GetService<IModelRegistry>();
         var paused = await RouterMaintenance.PausedModelsAsync(
             services.GetService<IMaintenanceMode>(), RouterMaintenance.NodeScoped(services), registry, ct);
         var definitions = registry is null ? [] : (await registry.ListAsync(ct)).ToDictionary(m => m.Id, StringComparer.Ordinal);
         var served = endpoints.Select(e => e.ServedName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var data = endpoints
+        return endpoints
             .Where(e => e.State == ModelState.Ready && paused?.Invoke(e.ModelId) != true)
             .SelectMany(e =>
             {
                 var definition = definitions.GetValueOrDefault(e.ModelId);
-                var entry = new ModelListEntry(
-                    e.ServedName,
-                    "model",
-                    0,
-                    "mirbadllm",
-                    definition is null ? null : ModelCapabilities.MaxModelLen(definition),
-                    definition is null ? null : new ModelListCapabilities(
-                        ModelCapabilities.IsChat(definition),
-                        PoolingDetection.Detect(definition) == PoolingMode.Embedding,
-                        ModelCapabilities.ToolCalling(definition),
-                        ModelCapabilities.Vision(definition)));
+                var entry = new ServedModel(e.ServedName, definition, IsNoThinking: false);
                 string alias = NoThinking.NameFor(e.ServedName);
                 return definition is not null && NoThinking.Offered(definition) && !served.Contains(alias)
-                    ? [entry, entry with { Id = alias }]
+                    ? [entry, new ServedModel(alias, definition, IsNoThinking: true)]
                     : new[] { entry };
             })
             .ToArray();
-
-        return Results.Json(new ModelListResponse("list", data));
     }
+
+    /// <summary>One callable name: a served name, or its "-nothink" name (<paramref name="IsNoThinking"/>); the definition is null when the registry has none.</summary>
+    internal sealed record ServedModel(string Name, ModelDefinition? Definition, bool IsNoThinking);
 
     private sealed record ModelListResponse(
         [property: JsonPropertyName("object")] string Object,

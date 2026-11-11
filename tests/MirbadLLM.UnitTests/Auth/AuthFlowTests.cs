@@ -302,4 +302,72 @@ public sealed class AuthFlowTests
         Assert.Equal(HttpStatusCode.Redirect, loginResponse.StatusCode);
         Assert.Contains("error=1", loginResponse.Headers.Location!.ToString(), StringComparison.Ordinal);
     }
+
+    // ---- The Ollama-compatible routes share the /api prefix with the admin API ----
+
+    [Fact]
+    public async Task OllamaRoutes_AreNotCapturedByTheAdminLogin_AndTheAdminApiStaysBehindIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var factory = new AuthWebFactory { AdminPassword = "correct-password" };
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        // No API key exists, so /v1 is open; the Ollama routes follow that rule and need no admin cookie.
+        using var tags = await client.GetAsync("/api/tags", ct);
+        Assert.Equal(HttpStatusCode.OK, tags.StatusCode);
+        Assert.Contains("\"models\"", await tags.Content.ReadAsStringAsync(ct), StringComparison.Ordinal);
+        using var version = await client.GetAsync("/api/version", ct);
+        Assert.Equal(HttpStatusCode.OK, version.StatusCode);
+        using var chat = await client.PostAsJsonAsync("/api/chat", new { model = "nobody", messages = new[] { new { role = "user", content = "hi" } } }, ct);
+        Assert.Equal(HttpStatusCode.NotFound, chat.StatusCode);
+        Assert.Contains("\"error\":\"Model 'nobody' is not registered.\"", await chat.Content.ReadAsStringAsync(ct), StringComparison.Ordinal);
+
+        // Every admin group under /api still answers 401 without the login.
+        foreach (string path in new[]
+                 {
+                     "/api/models", "/api/status", "/api/jobs", "/api/keys", "/api/nodes", "/api/agent-updates", "/api/services",
+                     "/api/fencing", "/api/backup/status", "/api/audit", "/api/releases", "/api/catalog",
+                 })
+        {
+            using var admin = await client.GetAsync(path, ct);
+            Assert.True(HttpStatusCode.Unauthorized == admin.StatusCode, $"{path} answered {admin.StatusCode} without the admin login.");
+        }
+
+        using var create = await client.PostAsJsonAsync("/api/models", new { id = "x" }, ct);
+        Assert.Equal(HttpStatusCode.Unauthorized, create.StatusCode);
+    }
+
+    [Fact]
+    public async Task OllamaRoutes_NeedAnInferenceKey_WhenV1Does_AndTheAdminLoginIsNotOne()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var factory = new AuthWebFactory { AdminPassword = "correct-password" };
+        factory.Settings["MirbadLLM:RequireApiKey"] = "true";
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        using var anonymous = await client.GetAsync("/api/tags", ct);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        Assert.Equal("""{"error":"Missing or invalid API key."}""", await anonymous.Content.ReadAsStringAsync(ct));
+
+        string token = await GetAntiforgeryTokenAsync(client, ct);
+        using var login = await client.PostAsync("/login/submit", LoginForm(token, "correct-password"), ct);
+        Assert.Equal(HttpStatusCode.Redirect, login.StatusCode);
+        using var withCookie = await client.GetAsync("/api/tags", ct);
+        Assert.Equal(HttpStatusCode.Unauthorized, withCookie.StatusCode);
+        using var adminApi = await client.GetAsync("/api/models", ct);
+        Assert.Equal(HttpStatusCode.OK, adminApi.StatusCode);
+
+        var keys = factory.Services.GetRequiredService<MirbadLLM.Core.IApiKeyStore>();
+        var metrics = await keys.CreateAsync("metrics", MirbadLLM.Core.ApiKeyScope.Metrics, ct);
+        var inference = await keys.CreateAsync("ollama", MirbadLLM.Core.ApiKeyScope.Inference, ct);
+        using var wrongScope = new HttpRequestMessage(HttpMethod.Get, "/api/tags");
+        wrongScope.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", metrics.FullKey);
+        using var refused = await client.SendAsync(wrongScope, ct);
+        Assert.Equal(HttpStatusCode.Unauthorized, refused.StatusCode);
+
+        using var keyed = new HttpRequestMessage(HttpMethod.Get, "/api/tags");
+        keyed.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", inference.FullKey);
+        using var allowed = await client.SendAsync(keyed, ct);
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+    }
 }

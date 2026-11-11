@@ -65,6 +65,17 @@ internal static partial class ProxyHandler
             return;
         }
 
+        // A route that speaks another API (OllamaApi) turns the body, read above under the upload budget, into its /v1 form.
+        if (context.Features.Get<IProxyRequestTranslation>() is { } translation)
+        {
+            if (await translation.TranslateAsync(context, body, ct) is not { } translated)
+            {
+                return; // the translation answered the request itself
+            }
+
+            (path, body) = translated;
+        }
+
         var modelName = TryReadModelName(body);
         if (modelName is null)
         {
@@ -505,12 +516,12 @@ internal static partial class ProxyHandler
         return true;
     }
 
-    private static Task WriteModelNotFoundAsync(HttpContext context, string modelName) =>
+    internal static Task WriteModelNotFoundAsync(HttpContext context, string modelName) =>
         OpenAiError.WriteAsync(
             context, StatusCodes.Status404NotFound,
             $"Model '{modelName}' is not registered.", "invalid_request_error", "model_not_found");
 
-    private static Task WriteNotReadyAsync(HttpContext context, string modelName, string state)
+    internal static Task WriteNotReadyAsync(HttpContext context, string modelName, string state)
     {
         context.Response.Headers["Retry-After"] = "30";
         return OpenAiError.WriteAsync(
@@ -820,4 +831,14 @@ internal static partial class ProxyHandler
             await destination.Body.FlushAsync(ct);
         }
     }
+}
+
+/// <summary>
+/// The seam for a route that accepts another API's request and serves it through <see cref="ProxyHandler"/>: set as a
+/// request feature before <see cref="ProxyHandler.HandleAsync"/> runs, it is called once the body was read.
+/// </summary>
+internal interface IProxyRequestTranslation
+{
+    /// <summary>The <c>/v1</c> path (without the prefix) and body to continue with; null when it wrote the answer itself.</summary>
+    ValueTask<(string Path, ArraySegment<byte> Body)?> TranslateAsync(HttpContext context, ArraySegment<byte> body, CancellationToken ct);
 }
