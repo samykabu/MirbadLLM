@@ -10,6 +10,9 @@ namespace MirbadLLM.NodeRuntime.Runtimes;
 /// </summary>
 public sealed class ContainerRuntimeOptions
 {
+    /// <summary>Most GPUs one container may get on a <see cref="ContainerGpuAccess.DeviceNodes"/> node.</summary>
+    public const int MaxDeviceNodeGpus = 1;
+
     /// <summary>This node's id, written as <c>mirbadllm.node</c> on every instance the driver creates.</summary>
     public string NodeId { get; set; } = "";
 
@@ -55,6 +58,12 @@ public sealed class ContainerRuntimeOptions
     /// </summary>
     public bool RequireApprovedDigest { get; set; }
 
+    /// <summary>
+    /// How a model container gets its GPUs. <see cref="ContainerGpuAccess.Nvidia"/> (the default) is the NVIDIA device
+    /// request every container had before; the agent sets the other values from <c>Agent:Accelerator</c>.
+    /// </summary>
+    public ContainerGpuAccess GpuAccess { get; set; } = ContainerGpuAccess.Nvidia;
+
     /// <summary>The <c>models</c> root the agent checks paths against.</summary>
     internal string ModelsLocalRoot => string.IsNullOrEmpty(ModelsLocalPath) ? ModelsHostPath : ModelsLocalPath;
 
@@ -79,4 +88,22 @@ public sealed class ContainerRuntimeOptions
             UpstreamHost = options.UpstreamHost,
         };
     }
+}
+
+/// <summary>How <see cref="ContainerRuntimeDriver"/> gives a container its GPUs.</summary>
+public enum ContainerGpuAccess
+{
+    /// <summary>The NVIDIA Container Toolkit's device request (every GPU, or the selected UUIDs).</summary>
+    Nvidia,
+
+    /// <summary>No GPU: a CPU-only node. The create body carries no device request.</summary>
+    None,
+
+    /// <summary>
+    /// A Vulkan node (AMD or Intel GPUs, experimental): no NVIDIA device request; the selected GPU's DRM render node is
+    /// mapped into the container. One GPU per container (<see cref="ContainerRuntimeOptions.MaxDeviceNodeGpus"/>): the
+    /// order in which Mesa lists several devices inside the container is not something the agent controls, so a split
+    /// over two cards could put each share on the wrong one.
+    /// </summary>
+    DeviceNodes,
 }

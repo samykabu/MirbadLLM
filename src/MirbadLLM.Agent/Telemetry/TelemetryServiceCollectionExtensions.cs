@@ -42,6 +42,9 @@ public static class TelemetryServiceCollectionExtensions
         services.TryAddSingleton<IGpuTelemetryProbe, NvidiaSmiGpuTelemetryProbe>();
         services.TryAddSingleton<NvidiaSmiGpuInventory>();
         services.TryAddSingleton<IGpuInventory>(sp => sp.GetRequiredService<NvidiaSmiGpuInventory>());
+        // What the memory model and the capability report read at start: nvidia-smi's inventory, unless a Vulkan node
+        // registered its own (Agent:Accelerator = vulkan).
+        services.TryAddSingleton<IGpuStartupInventory>(sp => sp.GetRequiredService<NvidiaSmiGpuInventory>());
 
         // Per-GPU memory for /status (MN-104). Registered as itself only: the composition (MN-130) decides whether it
         // replaces the P1 INodeMemoryReader; on a unified node it answers exactly as P1 does (D66).

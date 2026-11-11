@@ -48,6 +48,21 @@ public sealed class LlamaCppMemoryEstimateTests
         Assert.Empty(estimate.PerGpuGiB);
     }
 
+    [Theory]
+    [InlineData(999)]
+    [InlineData(0)]
+    public void OnACpuOnlyNode_EveryWeightCountsInTheBudget_WhateverGpuLayersSays_AndThereIsNoCudaContext(int gpuLayers)
+    {
+        var settings = OpenVikingEmbedding with { GpuLayers = gpuLayers };
+
+        var estimate = LlamaCppMemoryEstimate.Estimate(GgufReaderTests.Qwen3Embedding, settings, cpuOnly: true);
+
+        Assert.Equal(Math.Round(4075.7 / 1024, 2), estimate.WeightsGiB);
+        Assert.Equal(0, estimate.CudaContextGiB);
+        Assert.Equal(0, estimate.HostGiB);
+        Assert.Equal(8.41, estimate.BudgetGiB); // 1.10 × 7.642 GiB, rounded up: the GPU estimate minus its 0.45 GiB CUDA context
+    }
+
     [Fact]
     public void Qwen3Embedding_ModelCardMicroBatch_Is13Point5GiB()
     {

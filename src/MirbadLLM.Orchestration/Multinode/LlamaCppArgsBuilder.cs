@@ -15,7 +15,8 @@ namespace MirbadLLM.Orchestration.Multinode;
 /// <para>
 /// Paths are <c>{models}/…</c> tokens (the agent substitutes and confines them, §A.1.3); GPUs are never physical indices:
 /// the agent sets <c>CUDA_VISIBLE_DEVICES</c> to the placed UUIDs in order and CUDA renumbers them from 0, so the argv
-/// names <c>CUDA0..n-1</c> (§A.1.5). Pure: no I/O.
+/// names <c>CUDA0..n-1</c> (§A.1.5). On a Vulkan node (<see cref="NodeAccelerators.Vulkan"/>) the agent does the same with
+/// <c>GGML_VK_VISIBLE_DEVICES</c> and the argv names <c>Vulkan0..n-1</c>. Pure: no I/O.
 /// </para>
 /// </summary>
 public static partial class LlamaCppArgsBuilder
@@ -26,11 +27,17 @@ public static partial class LlamaCppArgsBuilder
     /// <summary>The CUDA device name of the <paramref name="index"/>-th placed GPU inside the process.</summary>
     public static string CudaDevice(int index) => "CUDA" + index.ToString(CultureInfo.InvariantCulture);
 
-    /// <summary>The <c>--device</c> value for <paramref name="gpuCount"/> placed GPUs: <c>CUDA0[,CUDA1…]</c>.</summary>
-    public static string Devices(int gpuCount)
+    /// <summary>The Vulkan device name of the <paramref name="index"/>-th placed GPU inside the process.</summary>
+    public static string VulkanDevice(int index) => "Vulkan" + index.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// The <c>--device</c> value for <paramref name="gpuCount"/> placed GPUs: <c>CUDA0[,CUDA1…]</c>, or
+    /// <c>Vulkan0[,Vulkan1…]</c> on a Vulkan node (<paramref name="vulkan"/>).
+    /// </summary>
+    public static string Devices(int gpuCount, bool vulkan = false)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(gpuCount, 1);
-        return string.Join(',', Enumerable.Range(0, gpuCount).Select(CudaDevice));
+        return string.Join(',', Enumerable.Range(0, gpuCount).Select(i => vulkan ? VulkanDevice(i) : CudaDevice(i)));
     }
 
     /// <summary>
@@ -208,12 +215,13 @@ public static partial class LlamaCppArgsBuilder
     /// forces <c>n_batch = n_ubatch</c> with embeddings on, so <see cref="LlamaCppSettings.BatchSize"/> is ignored); a chat
     /// model gets <c>-b</c>/<c>-ub</c> only when set (llama.cpp's defaults otherwise).
     /// </para>
+    /// <paramref name="vulkan"/>: the model's node runs llama.cpp's Vulkan build, so <c>--device</c> names Vulkan devices.
     /// </summary>
     /// <exception cref="ArgumentException">
     /// <see cref="Problems"/> is not empty, split mode <see cref="LlamaCppSplitMode.None"/> on several GPUs, or a layer split
     /// on several GPUs without one weight per GPU.
     /// </exception>
-    public static IReadOnlyList<string> Build(ModelDefinition model, int gpuCount, IReadOnlyList<double>? splitWeights = null)
+    public static IReadOnlyList<string> Build(ModelDefinition model, int gpuCount, IReadOnlyList<double>? splitWeights = null, bool vulkan = false)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentOutOfRangeException.ThrowIfNegative(gpuCount);
@@ -295,7 +303,7 @@ public static partial class LlamaCppArgsBuilder
                 args.AddRange(["--tensor-split", FormatTensorSplit(TensorSplit(splitWeights))]);
             }
 
-            args.AddRange(["--device", Devices(gpuCount)]);
+            args.AddRange(["--device", Devices(gpuCount, vulkan)]);
         }
 
         if (s.ChatTemplate is not null && LlamaCppChatTemplate.TryParse(s.ChatTemplate, out var template))

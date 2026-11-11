@@ -244,6 +244,91 @@ public sealed partial class LinuxAgentPackagingTests
         }
     }
 
+    [Theory]
+    [InlineData("cpu", "cpu")]
+    [InlineData("vulkan", "vulkan")]
+    [InlineData("cuda", null)]
+    [InlineData("auto", null)]
+    [InlineData(null, null)]
+    public async Task RenderConfig_WritesTheAccelerator_OnlyForACpuOrVulkanNode(string? flag, string? expected)
+    {
+        SkipUnlessBash();
+        string[] args = flag is null ? ["render-config", "--node-id", "pc-7"] : ["render-config", "--node-id", "pc-7", "--accelerator", flag];
+        (int exit, string output, string error) = await RunScriptAsync(args);
+        Assert.True(exit == 0, error);
+
+        string path = Path.Combine(Path.GetTempPath(), $"agent-{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(path, output, TestContext.Current.CancellationToken);
+        try
+        {
+            AgentOptions rendered = AgentOptions.FromConfiguration(new ConfigurationBuilder().AddJsonFile(path, optional: false, reloadOnChange: false).Build());
+            Assert.Equal("pc-7", rendered.NodeId);
+            Assert.Equal(expected, rendered.EffectiveAccelerator);
+            // An NVIDIA node's file has no entry at all, as before the setting existed.
+            Assert.Equal(expected is not null, output.Contains("\"Accelerator\"", StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Auto_ChoosesCudaOnlyWhenNvidiaSmiListsAGpu_ElseCpu_AndNeverVulkan()
+    {
+        SkipUnlessBash();
+        string dir = Path.Combine(Path.GetTempPath(), $"mirbad-smi-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        try
+        {
+            // The script's own detect_accelerator, with PATH holding only the stand-in nvidia-smi (or nothing).
+            string script = LinuxFile("install-agent.sh").Replace('\\', '/');
+            string unixDir = dir.Replace('\\', '/');
+            // Git for Windows' bash needs the folder as a POSIX path: a drive colon would split PATH.
+            const string Load = "eval \"$(sed -n '/^detect_accelerator() {/,/^}/p' \"$1\")\"; d=\"$2\"; " +
+                "if command -v cygpath >/dev/null; then d=\"$(cygpath -u \"$2\")\"; fi; PATH=\"$d\"; detect_accelerator";
+
+            (int exit, string none, string error) = await RunBashAsync(["-c", Load, "bash", script, unixDir]);
+            Assert.True(exit == 0, error);
+            Assert.Equal("cpu", none.Trim());
+
+            await File.WriteAllTextAsync(Path.Combine(dir, "nvidia-smi"), "#!/bin/sh\nexit 9\n", TestContext.Current.CancellationToken);
+            Assert.Equal("cpu", (await RunBashAsync(["-c", "chmod +x \"$2/nvidia-smi\"; " + Load, "bash", script, unixDir])).Output.Trim());
+
+            await File.WriteAllTextAsync(Path.Combine(dir, "nvidia-smi"), "#!/bin/sh\necho 'GPU 0: NVIDIA GeForce RTX 5070'\n", TestContext.Current.CancellationToken);
+            Assert.Equal("cuda", (await RunBashAsync(["-c", "chmod +x \"$2/nvidia-smi\"; " + Load, "bash", script, unixDir])).Output.Trim());
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+
+        Assert.DoesNotContain("vulkan", Regex.Match(Script(), @"\ndetect_accelerator\(\) \{.*?\n\}", RegexOptions.Singleline).Value, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ACpuOnlyHost_IsAccepted_WithoutTheNvidiaWarnings_AndVulkanSaysItIsExperimental()
+    {
+        string check = Regex.Match(Script(), @"\ncheck_host\(\) \{.*?\n\}", RegexOptions.Singleline).Value;
+        Assert.NotEmpty(check);
+        string cpu = Regex.Match(check, @"\n        cpu\)(.*?)\n            ;;", RegexOptions.Singleline).Groups[1].Value;
+        string vulkan = Regex.Match(check, @"\n        vulkan\)(.*?)\n            ;;", RegexOptions.Singleline).Groups[1].Value;
+        string nvidia = Regex.Match(check, @"\n        \*\)(.*?)\n            ;;", RegexOptions.Singleline).Groups[1].Value;
+
+        // A machine without an NVIDIA card is told what it becomes; nothing asks it for the NVIDIA driver or toolkit.
+        Assert.Contains("this machine joins as a CPU-only node", cpu, StringComparison.Ordinal);
+        Assert.Contains("ghcr.io/ggml-org/llama.cpp:server,", cpu, StringComparison.Ordinal);
+        Assert.DoesNotContain("warn ", cpu, StringComparison.Ordinal);
+        Assert.DoesNotContain("die ", cpu, StringComparison.Ordinal);
+
+        Assert.Contains("experimental: not yet verified on AMD hardware", vulkan, StringComparison.Ordinal);
+        Assert.Contains("mem_info_vram_total", vulkan, StringComparison.Ordinal);
+
+        // The NVIDIA warnings are where they were, for NVIDIA nodes only.
+        Assert.Contains("the NVIDIA Container Toolkit is not installed", nvidia, StringComparison.Ordinal);
+        Assert.Contains("nvidia-smi not found", nvidia, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task RenderDropin_MakesExactlyTheRootsWritable()
     {
@@ -268,6 +353,7 @@ public sealed partial class LinuxAgentPackagingTests
     [InlineData("unknown option", "install", "--node", "pc-1")]
     [InlineData("--node-uid outside rekey", "install", "--node-id", "pc-1", "--node-uid", "abc-123")]
     [InlineData("--rekey with another verb", "upgrade", "--rekey")]
+    [InlineData("unknown accelerator", "render-config", "--node-id", "pc-1", "--accelerator", "rocm")]
     public async Task UnsafeOrWrongArguments_ExitWithUsage(string why, params string[] args)
     {
         SkipUnlessBash();

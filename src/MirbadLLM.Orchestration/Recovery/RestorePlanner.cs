@@ -265,6 +265,9 @@ public sealed class RestorePlanner(
         ["llamaCpp"] = "llama.cpp settings",
         ["hostMemoryBudgetGiB"] = "host memory budget",
         ["keepServingDuringJobs"] = "keep serving during jobs",
+        ["startOnRequest"] = "start on request",
+        ["idleStopMinutes"] = "stop after idle",
+        ["stopToMakeRoom"] = "may be stopped to make room",
     };
 
     /// <param name="secrets">The decrypted secrets, or null when the backup has none or they were not unlocked.</param>

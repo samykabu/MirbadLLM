@@ -27,7 +27,7 @@
                     {
                         string id = "gguf-variant-" + Slug(variant.Name);
                         bool on = string.Equals(variant.Name, SelectedVariant, StringComparison.Ordinal);
-                        double need = LlamaCppEditing.MinimumNeedGiB(variant.TotalBytes);
+                        double need = LlamaCppEditing.MinimumNeedGiB(variant.TotalBytes, CpuOnly);
                         <tr data-testid="@id" class="@(on ? "gguf-row--on" : null)">
                             <td class="col-check">
                                 <input type="radio" class="form-check-input" name="gguf-variant" id="@id-radio" data-testid="@($"{id}-radio")"
@@ -45,8 +45,15 @@
             </table>
         </div>
         <div class="field-hint" data-testid="gguf-variants-hint">
-            Before the download only the size is known, so each fit counts the weights alone (× 1.10, plus
-            <span class="num">@UiFormat.GiB(MirbadLLM.Orchestration.Multinode.LlamaCppMemoryEstimate.CudaContextGiBPerGpu)</span> CUDA context).
+            @if (CpuOnly)
+            {
+                <span>Before the download only the size is known, so each fit counts the weights alone (× 1.10), all of them in host RAM: this node has no GPU.</span>
+            }
+            else
+            {
+                <span>Before the download only the size is known, so each fit counts the weights alone (× 1.10, plus
+                <span class="num">@UiFormat.GiB(MirbadLLM.Orchestration.Multinode.LlamaCppMemoryEstimate.CudaContextGiBPerGpu)</span> CUDA context).</span>
+            }
             The KV cache and compute buffers are added once the download has read the file's header.
         </div>
 
@@ -131,6 +138,10 @@
     /// <summary>The repo's GGUF variants (download shape); null for the folder shape.</summary>
     [Parameter]
     public IReadOnlyList<GgufVariant>? Variants { get; set; }
+
+    /// <summary>True when the model's node runs llama.cpp on the CPU: the fit before a download counts no CUDA context.</summary>
+    [Parameter]
+    public bool CpuOnly { get; set; }
 
     /// <summary>The repo's vision projectors (<c>mmproj-*</c>), listed apart from the variants.</summary>
     [Parameter]

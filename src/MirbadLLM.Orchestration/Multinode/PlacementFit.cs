@@ -128,7 +128,7 @@ public sealed class PlacementFit
 
         var gguf = node.Revoked || (live is not null && !live.IsServing) ? null : await GgufAsync(node, definition, ct).ConfigureAwait(false);
         return model == MemoryModel.Unified
-            ? WithEstimate(Unified(context, unknownReason is null ? memory : null, unknownReason, measuredAt), Estimate(gguf, definition, 1, null))
+            ? WithEstimate(Unified(context, unknownReason is null ? memory : null, unknownReason, measuredAt), Estimate(gguf, definition, 1, null, CpuOnly(node)))
             : Discrete(context, unknownReason is null ? memory : null, unknownReason, measuredAt, request.GpuUuids, gguf);
     }
 
@@ -279,7 +279,7 @@ public sealed class PlacementFit
         ArgumentNullException.ThrowIfNull(model);
         var uuids = LaunchSpecBuilder.PlacedGpuUuids(model);
         var perGpuBudgets = uuids.Count == 0 ? null : GpuBudgetsOn(model, node);
-        return Estimate(await GgufAsync(node, model, ct).ConfigureAwait(false), model, Math.Max(uuids.Count, 1), perGpuBudgets);
+        return Estimate(await GgufAsync(node, model, ct).ConfigureAwait(false), model, Math.Max(uuids.Count, 1), perGpuBudgets, CpuOnly(node));
     }
 
     /// <summary>
@@ -287,7 +287,8 @@ public sealed class PlacementFit
     /// its per-GPU part split like <paramref name="perGpuBudgets"/> (null = the model's own budgets, else even); null without
     /// a summary or when the summary lacks what the estimate needs.
     /// </summary>
-    private static GgufMemoryEstimate? Estimate(GgufSummary? gguf, ModelDefinition definition, int gpuCount, IReadOnlyList<double>? perGpuBudgets)
+    private static GgufMemoryEstimate? Estimate(
+        GgufSummary? gguf, ModelDefinition definition, int gpuCount, IReadOnlyList<double>? perGpuBudgets, bool cpuOnly = false)
     {
         if (gguf is null || definition.LlamaCpp is not { } settings)
         {
@@ -297,13 +298,16 @@ public sealed class PlacementFit
         try
         {
             return LlamaCppMemoryEstimate.Estimate(
-                gguf, perGpuBudgets is null ? settings : settings with { GpuBudgetsGiB = perGpuBudgets }, Math.Max(gpuCount, 1));
+                gguf, perGpuBudgets is null ? settings : settings with { GpuBudgetsGiB = perGpuBudgets }, Math.Max(gpuCount, 1), cpuOnly);
         }
         catch (ArgumentException)
         {
             return null;
         }
     }
+
+    /// <summary>True when the node's last report says it runs models on the CPU (<see cref="NodeAccelerators.Cpu"/>).</summary>
+    private static bool CpuOnly(NodeRecord node) => NodeAccelerators.IsCpu(node.LastCapabilities);
 
     private static NodeFitResult Unified(FitContext context, NodeMemorySnapshot? memory, string? unknownReason, DateTimeOffset? measuredAt)
     {

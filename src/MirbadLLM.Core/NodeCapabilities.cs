@@ -70,6 +70,56 @@ public sealed record NodeCapabilities
 
     /// <summary>Backup-share mount support (topology a, design §9.3). Null = not supported.</summary>
     public BackupMountCapability? BackupMount { get; init; }
+
+    /// <summary>
+    /// How the node runs model weights when that is not NVIDIA CUDA or Apple Metal: <see cref="NodeAccelerators.Cpu"/> (no
+    /// usable GPU; llama.cpp runs on the CPU and the budget is host memory) or <see cref="NodeAccelerators.Vulkan"/>
+    /// (llama.cpp's Vulkan build on AMD or Intel GPUs; experimental). Set from the agent's <c>Agent:Accelerator</c>, which
+    /// the installers write. Null on every NVIDIA and macOS node and on older agents, so their reports are unchanged.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Accelerator { get; init; }
+}
+
+/// <summary>
+/// Values of <see cref="NodeCapabilities.Accelerator"/> and of the agent setting <c>Agent:Accelerator</c>. Strings, so a
+/// report from a later agent with another value still loads.
+/// </summary>
+public static class NodeAccelerators
+{
+    /// <summary>NVIDIA CUDA: the default. Accepted in <c>Agent:Accelerator</c>; never reported (the report stays null).</summary>
+    public const string Cuda = "cuda";
+
+    /// <summary>No usable GPU: llama.cpp on the CPU, the whole budget counted against host memory.</summary>
+    public const string Cpu = "cpu";
+
+    /// <summary>llama.cpp's Vulkan build on AMD or Intel GPUs (experimental).</summary>
+    public const string Vulkan = "vulkan";
+
+    /// <summary>True when <paramref name="capabilities"/> report a CPU-only node.</summary>
+    public static bool IsCpu(NodeCapabilities? capabilities) =>
+        string.Equals(capabilities?.Accelerator, Cpu, StringComparison.Ordinal);
+
+    /// <summary>True when <paramref name="capabilities"/> report a Vulkan node.</summary>
+    public static bool IsVulkan(NodeCapabilities? capabilities) =>
+        string.Equals(capabilities?.Accelerator, Vulkan, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The value of <c>Agent:Accelerator</c> in its stored form: null for unset or <see cref="Cuda"/>, else
+    /// <see cref="Cpu"/> or <see cref="Vulkan"/> (case-insensitive).
+    /// </summary>
+    /// <exception cref="ArgumentException">Any other value.</exception>
+    public static string? Normalize(string? value)
+    {
+        string text = value?.Trim() ?? "";
+        return text.ToLowerInvariant() switch
+        {
+            "" or Cuda => null,
+            Cpu => Cpu,
+            Vulkan => Vulkan,
+            _ => throw new ArgumentException($"Agent:Accelerator '{value}' must be cuda, cpu or vulkan.", nameof(value)),
+        };
+    }
 }
 
 /// <summary>Operating system of a node (design §3.3).</summary>

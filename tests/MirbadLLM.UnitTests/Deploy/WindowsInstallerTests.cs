@@ -218,6 +218,75 @@ public sealed partial class WindowsInstallerTests
         Assert.All(fixture.Files, f => Assert.Contains(f, lockFile.Files));
     }
 
+    [Fact]
+    public void LockFile_PinsTheCpuAndVulkanBuildsOfTheSameRelease_WithEveryUnpackedFile()
+    {
+        // The hashes and sizes below were computed from the release assets as downloaded on 2026-11-11 and equal the
+        // digests the GitHub API lists for tag b11476.
+        LlamaCppLockFile lockFile = JsonSerializer.Deserialize<LlamaCppLockFile>(
+            File.ReadAllText(RepoFile("deploy", "agent", "windows", "llama-cpp.lock.json")), WireStrict)!;
+
+        Assert.Equal([NodeAccelerators.Cpu, NodeAccelerators.Vulkan], lockFile.Variants!.Select(v => v.Accelerator));
+        var cpu = lockFile.Variants![0];
+        var vulkan = lockFile.Variants[1];
+        Assert.Equal(
+            ("llama-b11476-bin-win-cpu-x64.zip", "a23e548c6b3525c38bcfeceaff919786ae06741857043cb670279b70100e5483", 19441535L),
+            (Assert.Single(cpu.Assets).Name, cpu.Assets[0].Sha256, cpu.Assets[0].Bytes));
+        Assert.Equal(
+            ("llama-b11476-bin-win-vulkan-x64.zip", "5c71e7b749697da4a8d46e9ee55486845cbba27c9dfbecb4007f31ba6610d523", 33380424L),
+            (Assert.Single(vulkan.Assets).Name, vulkan.Assets[0].Sha256, vulkan.Assets[0].Bytes));
+        Assert.Equal((51, 52), (cpu.Files.Count, vulkan.Files.Count));
+
+        foreach (var variant in lockFile.Variants)
+        {
+            Assert.All(variant.Assets, a => Assert.Equal($"https://github.com/ggml-org/llama.cpp/releases/download/{lockFile.Version}/{a.Name}", a.Url));
+            Assert.Equal(variant.Files.Count, variant.Files.Select(f => f.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+            Assert.All(variant.Files, f =>
+            {
+                Assert.Matches(Sha256Regex(), f.Sha256);
+                Assert.True(f.Bytes > 0);
+                Assert.DoesNotContain('\\', f.Path);
+                Assert.DoesNotContain("..", f.Path, StringComparison.Ordinal);
+            });
+            string[] required = ["llama-server.exe", "llama-server-impl.dll", "llama.dll", "llama-common.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu-x64.dll", "mtmd.dll"];
+            Assert.All(required, r => Assert.Contains(variant.Files, f => f.Path == r));
+            // No CUDA file in either: these builds run without an NVIDIA driver.
+            Assert.DoesNotContain(variant.Files, f => f.Path.Contains("cuda", StringComparison.OrdinalIgnoreCase) || f.Path.StartsWith("cublas", StringComparison.OrdinalIgnoreCase));
+        }
+
+        // The Vulkan build is the CPU build plus its Vulkan backend: every shared file except the server binaries that
+        // link it is the same file.
+        Assert.Contains(vulkan.Files, f => f.Path == "ggml-vulkan.dll");
+        Assert.DoesNotContain(cpu.Files, f => f.Path == "ggml-vulkan.dll");
+        Assert.Equal(cpu.Files.Select(f => f.Path), vulkan.Files.Where(f => f.Path != "ggml-vulkan.dll").Select(f => f.Path));
+    }
+
+    [Fact]
+    public void Script_ChoosesTheLlamaCppBuildByAccelerator_AndCpuIsWhatAPcWithoutNvidiaGets()
+    {
+        string script = Script;
+        Assert.Contains("[ValidateSet('auto', 'cuda', 'cpu', 'vulkan')]", script, StringComparison.Ordinal);
+        Assert.Contains("[string] $Accelerator = 'auto'", script, StringComparison.Ordinal);
+
+        // auto never picks the experimental Vulkan build: CUDA with a driver, else the CPU build.
+        string resolve = FunctionText(script, "Resolve-Accelerator");
+        Assert.Contains("return 'cuda'", resolve, StringComparison.Ordinal);
+        Assert.Contains("return 'cpu'", resolve, StringComparison.Ordinal);
+        Assert.DoesNotContain("'vulkan'", resolve, StringComparison.Ordinal);
+
+        // The driver check belongs to the CUDA build only, and the Vulkan build says it is experimental.
+        string host = FunctionText(script, "Test-AcceleratorHost");
+        Assert.Contains("'cuda' { Test-NvidiaDriver $Lock.minDriver }", host, StringComparison.Ordinal);
+        Assert.Contains("experimental", host, StringComparison.Ordinal);
+        Assert.Contains("not been verified on AMD or Intel hardware", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("Test-NvidiaDriver", FunctionText(script, "Install-LlamaCpp"), StringComparison.Ordinal);
+
+        // agent.json carries the choice for the agent; the CUDA build leaves no entry.
+        string register = FunctionText(script, "Register-LlamaCppExecutable");
+        Assert.Contains("Set-JsonProperty $agent 'Accelerator' $accelerator", register, StringComparison.Ordinal);
+        Assert.Contains("Properties.Remove('Accelerator')", register, StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------- MN-216: verbs, service, llama.cpp, warnings
 
     [Fact]
@@ -234,7 +303,14 @@ public sealed partial class WindowsInstallerTests
         Assert.Contains("start= delayed-auto", script, StringComparison.Ordinal);
         Assert.DoesNotContain("start= demand", script, StringComparison.Ordinal);
         Assert.DoesNotContain("docker-users", script, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("LocalGroup", script, StringComparison.Ordinal);
+        // The one local group the script touches is Performance Monitor Users (S-1-5-32-558), by SID, and only for a
+        // Vulkan node, whose agent reads the GPU memory counters; never a Docker group.
+        Assert.All(
+            Regex.Matches(script, @"(Add|Remove|Get)-LocalGroupMember[^\n]*").Select(m => m.Value),
+            call => Assert.Contains("-SID 'S-1-5-32-558'", call, StringComparison.Ordinal));
+        Assert.Single(Regex.Matches(script, @"Add-LocalGroupMember"));
+        Assert.Contains("Add-LocalGroupMember", FunctionText(script, "Grant-PerformanceCounterAccess"), StringComparison.Ordinal);
+        Assert.Equal(2, Regex.Count(script, @"if \(\$resolved -eq 'vulkan'\) \{ Grant-PerformanceCounterAccess \}"));
 
         // One download site, by tag, with the 5.1 progress bar off; nothing else (the VC++ runtime is never downloaded).
         Assert.Single(Regex.Matches(script, @"Invoke-WebRequest"));

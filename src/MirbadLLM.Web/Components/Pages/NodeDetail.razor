@@ -691,7 +691,7 @@ else
                 <h2 id="node-memory-title">Headroom</h2>
                 @if (row.Memory is { } m)
                 {
-                    <span class="section-note">@(m.Model == MemoryModel.Discrete ? "Per GPU: what a new model can still get" : "Unified memory shared by CPU and GPU")</span>
+                    <span class="section-note">@(m.Model == MemoryModel.Discrete ? "Per GPU: what a new model can still get" : NodeAccelerators.IsCpu(row.Capabilities) ? "Host RAM: this node runs models on the CPU" : "Unified memory shared by CPU and GPU")</span>
                 }
             </div>
             @if (row.Memory is { } memory)
@@ -919,10 +919,14 @@ else
             <div class="section-head"><h2 id="node-gpus-title">GPUs</h2></div>
             @if (gpus.Count == 0)
             {
-                <EmptyState Title="@(row.Capabilities is null ? "This node has not reported its GPUs yet." : "This node has no GPU.")" Inline="true" HeadingLevel="3" TestId="node-gpus-empty" />
+                <EmptyState Title="@(row.Capabilities is null ? "This node has not reported its GPUs yet." : NodeAccelerators.IsCpu(row.Capabilities) ? "This node has no supported GPU. Its models run on the CPU and use host RAM." : "This node has no GPU.")" Inline="true" HeadingLevel="3" TestId="node-gpus-empty" />
             }
             else
             {
+                @if (NodeAccelerators.IsVulkan(row.Capabilities))
+                {
+                    <p class="muted" data-testid="node-gpus-vulkan">Vulkan (experimental): not yet verified on AMD or Intel hardware. VRAM total comes from the Vulkan driver and VRAM in use from the operating system; utilization, power and temperature are not read. A start is refused while a GPU's free VRAM cannot be read.</p>
+                }
                 @if (gpus.All(g => g.SharesHostMemory))
                 {
                     <p class="muted" data-testid="node-gpus-unified">Unified memory: the GPU shares the host's memory, shown under Headroom on the Overview tab.</p>

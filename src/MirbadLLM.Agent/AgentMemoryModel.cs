@@ -21,7 +21,7 @@ public sealed partial class AgentMemoryModel
     private readonly Lazy<MemoryModel> _model;
 
     /// <summary>Creates the decision; nothing runs until <see cref="Model"/> is first read.</summary>
-    public AgentMemoryModel(NvidiaSmiGpuInventory inventory, IOptions<TelemetryOptions> telemetry, ILogger<AgentMemoryModel> logger)
+    public AgentMemoryModel(IGpuStartupInventory inventory, IOptions<TelemetryOptions> telemetry, ILogger<AgentMemoryModel> logger)
     {
         ArgumentNullException.ThrowIfNull(inventory);
         ArgumentNullException.ThrowIfNull(telemetry);
@@ -39,7 +39,7 @@ public sealed partial class AgentMemoryModel
     /// <summary>True on a discrete node.</summary>
     public bool IsDiscrete => Model == MemoryModel.Discrete;
 
-    private static MemoryModel Resolve(NvidiaSmiGpuInventory inventory, MemoryModel? forced, ILogger logger)
+    private static MemoryModel Resolve(IGpuStartupInventory inventory, MemoryModel? forced, ILogger logger)
     {
         if (forced is { } model)
         {

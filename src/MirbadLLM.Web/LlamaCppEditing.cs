@@ -429,15 +429,19 @@ public static class LlamaCppEditing
             : null;
     }
 
-    /// <summary>Lower bound of a GGUF's budget from its size alone (before its header can be read): weights × 1.10 + one CUDA context.</summary>
-    public static double MinimumNeedGiB(long bytes) =>
-        Math.Round((LlamaCppMemoryEstimate.Overhead * bytes / LlamaCppMemoryEstimate.GiB) + LlamaCppMemoryEstimate.CudaContextGiBPerGpu, 1);
+    /// <summary>
+    /// Lower bound of a GGUF's budget from its size alone (before its header can be read): weights × 1.10 + one CUDA
+    /// context; no CUDA context on a CPU-only node (<paramref name="cpuOnly"/>).
+    /// </summary>
+    public static double MinimumNeedGiB(long bytes, bool cpuOnly = false) =>
+        Math.Round((LlamaCppMemoryEstimate.Overhead * bytes / LlamaCppMemoryEstimate.GiB) + (cpuOnly ? 0 : LlamaCppMemoryEstimate.CudaContextGiBPerGpu), 1);
 
     /// <summary>
     /// The estimate of <paramref name="settings"/> over <paramref name="summary"/> on <paramref name="gpuCount"/> GPUs, or
-    /// why it cannot be computed (a missing header value, a setting out of range).
+    /// why it cannot be computed (a missing header value, a setting out of range). <paramref name="cpuOnly"/>: the model's
+    /// node runs it on the CPU, so every weight counts in the budget (<see cref="LlamaCppMemoryEstimate.Estimate"/>).
     /// </summary>
-    public static GgufMemoryEstimate? TryEstimate(GgufSummary? summary, LlamaCppSettings settings, int gpuCount, out string? error)
+    public static GgufMemoryEstimate? TryEstimate(GgufSummary? summary, LlamaCppSettings settings, int gpuCount, out string? error, bool cpuOnly = false)
     {
         ArgumentNullException.ThrowIfNull(settings);
         error = null;
@@ -448,7 +452,7 @@ public static class LlamaCppEditing
 
         try
         {
-            return LlamaCppMemoryEstimate.Estimate(summary, settings, Math.Max(1, gpuCount));
+            return LlamaCppMemoryEstimate.Estimate(summary, settings, Math.Max(1, gpuCount), cpuOnly);
         }
         catch (ArgumentException ex)
         {

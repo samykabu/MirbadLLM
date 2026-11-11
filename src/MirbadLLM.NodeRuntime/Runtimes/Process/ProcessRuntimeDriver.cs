@@ -871,6 +871,18 @@ public sealed partial class ProcessRuntimeDriver : IRuntimeDriver, IAsyncDisposa
             return env;
         }
 
+        if (string.Equals(_options.Accelerator, NodeAccelerators.Vulkan, StringComparison.Ordinal))
+        {
+            // A Vulkan node (experimental): llama.cpp's Vulkan backend takes the devices as enumeration indices, in the
+            // order given, and names them Vulkan0, Vulkan1, ... in that order, as CUDA does with the UUIDs. No GPU
+            // selected means no Vulkan device at all: the model then runs on the CPU, which is what its admission
+            // against host memory assumed, instead of on whatever adapter the backend would pick by itself.
+            env[VulkanAdapters.LoaderEnvironment.Key] = VulkanAdapters.LoaderEnvironment.Value;
+            env[ProcessEnvironment.VulkanVisibleDevices] = plan.GpuMode == GpuSelectionMode.Uuids ? VulkanDeviceIndices(plan.GpuUuids!) : "";
+            env[ProcessEnvironment.LlamaApiKey] = apiKey;
+            return env;
+        }
+
         env[ProcessEnvironment.CudaCachePath] = cudaCache;
         env[ProcessEnvironment.CudaCacheMaxSize] = ProcessEnvironment.CudaCacheMaxBytes.ToString(CultureInfo.InvariantCulture);
         switch (plan.GpuMode)
@@ -885,6 +897,41 @@ public sealed partial class ProcessRuntimeDriver : IRuntimeDriver, IAsyncDisposa
 
         env[ProcessEnvironment.LlamaApiKey] = apiKey;
         return env;
+    }
+
+    /// <summary>
+    /// <c>GGML_VK_VISIBLE_DEVICES</c> for the placed GPUs: each UUID's Vulkan enumeration index from the inventory's last
+    /// read (the launch handler refreshes it first), comma-separated in placement order. A GPU the inventory does not
+    /// list is 422 <c>gpu_missing</c>: an index is never assumed.
+    /// </summary>
+    private string VulkanDeviceIndices(IReadOnlyList<string> uuids)
+    {
+        var inventory = _gpus?.Last ?? [];
+        var indices = new List<string>(uuids.Count);
+        var missing = new List<string>();
+        foreach (string uuid in uuids)
+        {
+            if (inventory.FirstOrDefault(g => string.Equals(g.Uuid, uuid, StringComparison.Ordinal)) is { } gpu)
+            {
+                indices.Add(gpu.Index.ToString(CultureInfo.InvariantCulture));
+            }
+            else
+            {
+                missing.Add(uuid);
+            }
+        }
+
+        if (missing.Count > 0)
+        {
+            throw new AgentException(422, new AgentError
+            {
+                Code = ErrorCodes.GpuMissing,
+                Message = $"GPU(s) {string.Join(", ", missing)} are not on node '{_options.NodeId}'; select the model's GPUs again.",
+                Details = AgentJson.ToElement(new GpuMissingDetails(missing)),
+            });
+        }
+
+        return string.Join(',', indices);
     }
 
     /// <summary>The spec as stored in the record: secret values removed (names kept in <c>secretEnvNames</c>).</summary>

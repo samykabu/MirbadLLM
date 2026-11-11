@@ -59,6 +59,8 @@ guide for 4-bit GGUF models with a moderate context window:
 | Gaming PC or gaming laptop with an 8 GB NVIDIA card (RTX 2070, 3060 Ti, 4060) | 8 GB | 7B to 8B |
 | Gaming PC with a 12 to 16 GB card (RTX 3060 12 GB, 4070, 4080) | 12 to 16 GB | up to about 14B |
 | Gaming PC with a 24 GB card (RTX 3090, 4090) | 24 GB | up to about 32B |
+| PC with an AMD or Intel graphics card (Vulkan, experimental) | the card's VRAM | as the NVIDIA rows for the same VRAM; not yet verified on such a card |
+| PC or laptop without a supported GPU (CPU only) | host RAM | whatever fits in RAM; it runs on the CPU, and no speed has been measured yet |
 | Apple Silicon MacBook or Mac with 16 GB | shared with macOS | 7B to 8B |
 | Apple Silicon Mac with 32 GB or more | shared with macOS | 14B to 32B |
 | A DGX Spark or a large GPU workstation | 128 GB unified, or several cards | large models on vLLM |
@@ -68,8 +70,20 @@ them. You do not have to do the arithmetic yourself, though: the agent reads eac
 model needs, and refuses a start that would not fit, with the reason. To look up your own machine, use
 [Will it run?](https://mirbadllm.vektragrid.com/will-it-run/) on the website.
 
-Two limits to know today. A PC node needs an NVIDIA GPU, on Windows 11 (llama.cpp) or on Linux (vLLM, llama.cpp or SGLang in Docker, and NIM where it's enabled), and a
-Mac node needs Apple Silicon. AMD GPUs and CPU-only machines are not supported yet.
+What a node needs today. A Mac node needs Apple Silicon. A PC node runs Windows 11 or Linux, in one of three ways:
+
+- **With an NVIDIA GPU.** llama.cpp on Windows; vLLM, llama.cpp or SGLang in Docker on Linux, and NIM where it's
+  enabled. This is the path the project is measured on.
+- **Without a supported GPU (CPU only).** llama.cpp only. The installer chooses this when it finds no NVIDIA driver.
+  On Windows it installs the CPU build of llama.cpp; on Linux you point the node at the CPU `server` image. A model's
+  whole budget is counted against host RAM, and the node reports no GPU figures because there are none to read.
+- **With an AMD or Intel GPU, through Vulkan (experimental).** llama.cpp only, and only when you ask for it
+  (`-Accelerator vulkan` on Windows, `--accelerator vulkan` on Linux). The Windows GPU readings were checked against
+  `nvidia-smi` on NVIDIA cards; nothing has run on AMD or Intel hardware yet. On Linux it covers AMD cards only, one GPU
+  per model. A machine whose only GPU is integrated joins as a CPU-only node.
+
+A PC with an NVIDIA card keeps the NVIDIA path, and mixing an NVIDIA card with an AMD or Intel one in the same node is
+not supported.
 
 ### Why it exists
 
@@ -113,6 +127,11 @@ hosted service.
   on a node (and on GPUs by UUID), can be moved between nodes, and start one at a time per node.
 - **Recovery.** Models that were running come back after a node or the master restarts, one at a time per node. A
   model you stopped stays stopped.
+- **Swap models on demand.** A GPU that holds one model at a time can serve several. Each model has three optional
+  settings, all off by default: start when a request names it, stop after a number of idle minutes, and allow being
+  stopped while idle so another model can start on request. Memory admission still decides every start, and a model
+  with a request in flight is never stopped. The request waits while the model loads, so this suits llama.cpp and
+  MLX; vLLM, SGLang and NIM take minutes to start, and a waiting client may time out first.
 - **Overview "Command Deck".** A live page with fleet KPIs, a WebGL Signal chart of generation per model and GPU use
   per node, a leaderboard with a full readout per model, the fleet's counters (requests served, tokens today, crash-free
   streak, error budget), service levels, and per-node headroom and disk.
@@ -167,7 +186,8 @@ in the demo and what does not.
 
 Pick the machine that stays on: the master runs there, together with that machine's own agent, as two containers.
 Any Linux PC with an NVIDIA GPU works, from an old gaming tower to a DGX Spark. You need Docker Engine with the
-NVIDIA Container Toolkit, and a vLLM image the machine can run. Each
+NVIDIA Container Toolkit, and a vLLM image the machine can run. This compose file expects the NVIDIA GPU; a machine
+without one joins as a node with the agent installer ([Add your other machines](#add-your-other-machines)). Each
 [release](https://github.com/samykabu/MirbadLLM/releases) publishes the master and agent images for x86_64 and arm64,
 so nothing is built on the machine and no clone is needed.
 

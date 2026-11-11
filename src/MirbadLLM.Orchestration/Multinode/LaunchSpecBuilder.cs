@@ -581,7 +581,8 @@ public static class LaunchSpecBuilder
 
         var gpuUuids = PlacedGpuUuids(model);
         ThrowOnBudgetProblems(model, gpuUuids.Count);
-        IReadOnlyList<string> argv = LlamaCppArgsBuilder.Build(model, gpuUuids.Count, TensorSplitWeights(model, node));
+        IReadOnlyList<string> argv = LlamaCppArgsBuilder.Build(
+            model, gpuUuids.Count, TensorSplitWeights(model, node), vulkan: NodeAccelerators.IsVulkan(node.LastCapabilities));
         string? version = settings.Delivery == LaunchDelivery.Process ? ResolveExecutableVersion(model, node) : null;
         string? image = null;
         string? imageDigest = null;

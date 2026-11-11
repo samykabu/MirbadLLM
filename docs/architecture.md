@@ -63,6 +63,18 @@ models. It runs as a container on the DGX Spark, a systemd service on a Linux PC
   emulates `dimensions` for llama.cpp embedding models. Restart-pending for a process model compares execution
   fingerprints.
 
+**Accelerators.** `Agent:Accelerator`, written by the installers, says what runs the weights on a PC node, and the
+agent reports it as `accelerator` in its capabilities. Unset (or `cuda`) is an NVIDIA node and changes nothing.
+`cpu` is a node without a usable GPU: unified memory, no GPU listed, llama.cpp only (the CPU build on Windows, a
+container created without a GPU request on Linux), and the whole budget admitted against host RAM. `vulkan`
+(experimental, not yet verified on AMD or Intel hardware) is a node whose AMD or Intel GPUs run llama.cpp's Vulkan
+build: discrete memory, with each GPU's identity, VRAM total and system-wide VRAM in use read without `nvidia-smi`
+(`AdapterGpus`: the Vulkan loader and the "GPU Adapter Memory" performance counters on Windows, the `amdgpu` sysfs
+counters on Linux). A `cpu` or `vulkan` node never runs `nvidia-smi`, lists no vLLM, SGLang or NIM runtime, and
+downloads with the agent's own downloader. Free VRAM on a Vulkan node is total minus used, and null when either
+cannot be read; admission then refuses the start on that GPU and the node reports `gpu_probe_failing`
+(`docs/multinode/operations-p2.md` section 5.6).
+
 **Composition.** One setting, `Agent:Docker:Enabled`, decides what an agent composes:
 
 - **Docker on** (the DGX Spark and Linux PCs): the container driver, with host services through Docker and
@@ -208,14 +220,57 @@ The container, memory, metrics and endpoint contracts in this section run on the
   containing **Ready** models by `ServedName`.
 - Any other `/v1/{**path}` (POST/GET): buffer the JSON body (limit 64 MiB), read `model`. Unknown →
   404 OpenAI error shape `{"error":{"message","type":"invalid_request_error","code":"model_not_found"}}`.
-  Known but not Ready → 503 with `Retry-After: 30` and a message naming the state, unless
-  `AutoStartOnRequest`: then start it and wait (poll) up to `StartupTimeout`.
+  Known but not Ready → 503 with `Retry-After: 30` and a message naming the state, unless start on request applies
+  (`AutoStartOnRequest`, or the model's own `StartOnRequest`; see [Swap on demand](#swap-on-demand)): then start it
+  and wait (poll) up to `StartupTimeout`.
 - Proxy to `{BaseUri}v1/{path}{query}` with `HttpCompletionOption.ResponseHeadersRead`; copy status,
   headers (minus hop-by-hop), stream the body with flush per chunk (SSE must not be buffered —
   disable response buffering). Client abort cancels the upstream request (vLLM then aborts it).
   No upstream timeout (long generations); connect timeout 10 s.
 - `ApiKey` set → require `Authorization: Bearer {key}` on `/v1/*`, else 401 in OpenAI error shape.
-- `IRouterStats`: total, failed (non-2xx or exception), in-flight per served name; thread-safe.
+- `IRouterStats`: total, failed (non-2xx or exception), in-flight per served name; thread-safe. For swap on demand it
+  also answers `InUse` and `LastRequestAt` per served name.
+
+### Swap on demand
+
+Three per-model settings, `ModelDefinition.StartOnRequest`, `IdleStopMinutes` and `StopToMakeRoom`. All are off by
+default, omitted from JSON at their default and kept by `PUT /api/models/{id}` when the body leaves them out. None is a
+launch argument: changing one needs no restart and does not change the config hash.
+
+- **Start on request:** the router starts a Stopped or Failed model named by a request when `AutoStartOnRequest` or the
+  model's `StartOnRequest` is on. From the moment it resolves a model that is not Ready until the request ends, the
+  request counts as use of that model (`RouterStats.BeginWaiting`), without counting in total or in-flight.
+- **Use** (`IRouterStats`, in memory): `InUse(servedName)` is true while a request is in flight or waiting;
+  `LastRequestAt(servedName)` is when the model's last request started or finished, null when it had none since the
+  master started. Both cover `/v1` and the Playground. The check and the stop are two steps: a request that arrives in
+  the instant between them can fail (503 `model_not_ready`, or a cut stream), and with start on request the client's
+  retry starts the model again.
+- **Idle stop** (`IdleStopService`, on the master, every 15 s): stops a Ready model once its `IdleStopMinutes` have
+  passed since the later of `LastRequestAt` and the moment the service first saw it Ready. It never stops a model that
+  is in use, that is not Ready, that sits on a node with an open benchmark or tuning window (or under a global window,
+  or is the model under test), or that an ownership record holds (move, job, restore). A stop that fails is logged and
+  tried again on the next pass. The clock is in memory, so after a master restart the count starts again.
+- **Make room** (`IRoomMaker`, implemented by `RoomMaker`): when admission refuses a start on request, the router asks
+  once, passing the `ModelMemoryAdmissionException` with the agent's `AdmissionRefusedDetails`. The missing memory is
+  the refusal's `NeedGiB − FreeGiB`. Candidates carry `StopToMakeRoom`, are on the same node, Ready, not in use and not
+  held (the idle-stop rules), and, when the refusal names a GPU, are placed on that GPU. Each counts with its budget;
+  on a named GPU, with its share there (`LlamaCpp.GpuBudgetsGiB`, else an even split over its GPUs). Candidates are
+  taken least recently used first (never requested first) until they cover the missing memory, then stopped, and the
+  router tries the start once more. Nothing is stopped when the candidates together do not cover it, when the refusal
+  carries no numbers, or when it is about host RAM on a discrete-GPU node. A second refusal answers the usual 503
+  `model_not_ready`. Admission on the agent is unchanged and judges the retry like any other start.
+- **Two requests at once:** one make-room round runs at a time per node. A request that waited for another request's
+  round stops nothing and tries its start again; that start queues behind the other one (`start_conflict`, one start at
+  a time per node) and then meets admission again. A model that a request is waiting for or using is never a
+  candidate, so two requests for two stopped models cannot stop each other's model. The one that does not fit gets 503
+  and can retry after `Retry-After`.
+- **Recovery:** both stops go through `IModelRuntime.StopAsync`, the same acknowledged stop as a stop by hand, and are
+  audited as `model.stop` with the actor `system:idle-stop` or `system:make-room`. The model leaves its node's running
+  set (`ModelRecoveryState`), so it is not relaunched after a node agent restart or a master restart, and crash restart
+  leaves it alone. It stays Stopped until a request names it (with start on request), someone starts it, or the master
+  boots with its `AutoStart` set. `AutoStart` starts it at boot like any stopped model, and the idle limit then
+  applies again. A model that was Ready when its node or the master restarted comes back as before, with a fresh
+  idle count.
 
 ### Web (admin API + UI)
 

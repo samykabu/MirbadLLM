@@ -134,6 +134,19 @@ public static class AgentServiceCollectionExtensions
         // Registered first so it stops last: requests and the other hosted services are gone before it drains.
         services.AddHostedService<AgentDrain>();
 
+        // Agent:Accelerator (cpu or vulkan; null on every NVIDIA and macOS node, where nothing below changes). Such a
+        // node never runs nvidia-smi: Replace, so a runner registered before cannot bring NVIDIA GPUs back.
+        string? accelerator = options.EffectiveAccelerator;
+        if (accelerator is not null)
+        {
+            services.Replace(ServiceDescriptor.Singleton<INvidiaSmiRunner>(AbsentNvidiaSmi.Instance));
+        }
+
+        if (accelerator == NodeAccelerators.Vulkan)
+        {
+            AddVulkanGpus(services);
+        }
+
         AddDocker(services, options, docker);
 
         // The host memory probe follows the operating system, not the delivery (MN-239 item 15): /proc/meminfo does not
@@ -223,7 +236,8 @@ public static class AgentServiceCollectionExtensions
                 Options.Create(runtime),
                 sp.GetRequiredService<ILogger<ContainerRuntimeDriver>>(),
                 sp.GetRequiredService<TimeProvider>(),
-                sp.GetService<IGpuInventory>())); // GPU selection by UUID and gpu_missing (MN-106)
+                sp.GetService<IGpuInventory>(), // GPU selection by UUID and gpu_missing (MN-106)
+                sp.GetService<AdapterGpus>() is { } vulkan ? vulkan.DeviceNodesFor : null)); // a Vulkan node's render nodes
             // A driver registered before (the dev setup's fake runtime, MN-042) replaces the container driver.
             if (!services.Any(d => d.ServiceType == typeof(IRuntimeDriver)))
             {
@@ -242,7 +256,7 @@ public static class AgentServiceCollectionExtensions
         // An explicit Agent:MemoryModel forces the memory model (the DGX: Unified, D102); else the GPU probe decides.
         services.AddAgentTelemetry(boot.BootId, options.MemoryModel is { } forced ? t => t.MemoryModel = forced : null);
 
-        AddDownloads(services, options, docker);
+        AddDownloads(services, options, docker, nativeDownloads: accelerator is not null);
         services.AddAgentStorage(options.ConfigureStorage, docker);
 
         // Decided before the Linux host-service package is added, because it decides how that package is configured.
@@ -330,6 +344,12 @@ public static class AgentServiceCollectionExtensions
             services.AddSingleton<IHealthContributor>(sp => new ExecutableHealthContributor(sp.GetRequiredService<IExecutableCatalog>()));
             // gpu_external_use_high (MN-214, D129 (2)): the sampler's observer and a health contributor in one.
             services.AddSingleton<IHealthContributor>(sp => sp.GetRequiredService<ExternalGpuUseContributor>());
+        }
+
+        // What a node without CUDA reports (Agent:Accelerator): the value itself and only the runtimes that run there.
+        if (accelerator is not null)
+        {
+            services.AddSingleton<ICapabilityContributor>(new AcceleratorContributor(accelerator));
         }
 
         // Last of all the capability contributors (MN-214): with Docker off it removes any Docker feature, container
@@ -453,11 +473,13 @@ public static class AgentServiceCollectionExtensions
     /// <see cref="NativeDownloadHttpClientName"/> — and <see cref="NativeDownloadContributor"/> reports
     /// <c>downloads.hf-native</c>, which is what makes <c>POST /downloads</c> reachable there
     /// (<see cref="AgentRoute.AlternativeFeatures"/>). The repo inspector is the same on both.
+    /// <paramref name="nativeDownloads"/> picks the native downloader on a Docker node too: a CPU-only or Vulkan node
+    /// (<c>Agent:Accelerator</c>) has no vLLM image to run the helper from.
     /// </summary>
-    private static void AddDownloads(IServiceCollection services, AgentOptions options, DockerAvailability docker)
+    private static void AddDownloads(IServiceCollection services, AgentOptions options, DockerAvailability docker, bool nativeDownloads = false)
     {
         services.AddHttpClient(HuggingFaceHttpClientName, client => client.BaseAddress = new Uri("https://huggingface.co/"));
-        if (docker.Enabled)
+        if (docker.Enabled && !nativeDownloads)
         {
             services.TryAddSingleton<IHuggingFaceDownloader>(sp => new HuggingFaceDownloader(
                 sp.GetRequiredService<DockerEngineClient>(),
@@ -582,6 +604,25 @@ public static class AgentServiceCollectionExtensions
     }
 
     /// <summary>
+    /// The GPUs of a Vulkan node (<c>Agent:Accelerator = vulkan</c>, experimental): <see cref="AdapterGpus"/> over the
+    /// Vulkan loader and the operating system's GPU memory counters on Windows, over the <c>amdgpu</c> driver's sysfs
+    /// files on Linux. It takes the place of every <c>nvidia-smi</c> reader: the telemetry probe, the inventory the
+    /// launch path checks placed GPUs against, and the inventory the memory model and the capability report read at
+    /// start. Its source is <c>TryAdd</c>ed, so a test registers its own before <see cref="AddMirbadLLMAgent"/>.
+    /// </summary>
+    private static void AddVulkanGpus(IServiceCollection services)
+    {
+        services.TryAddSingleton<IGpuAdapterSource>(_ =>
+            OperatingSystem.IsWindows() ? VulkanGpuSource.ForWindows() : new LinuxDrmGpuSource());
+        services.TryAddSingleton(sp => new AdapterGpus(
+            sp.GetRequiredService<IGpuAdapterSource>(), sp.GetRequiredService<ILogger<AdapterGpus>>()));
+        services.Replace(ServiceDescriptor.Singleton<IGpuTelemetryProbe>(sp => sp.GetRequiredService<AdapterGpus>()));
+        services.Replace(ServiceDescriptor.Singleton<IGpuInventory>(sp => sp.GetRequiredService<AdapterGpus>()));
+        services.Replace(ServiceDescriptor.Singleton<IGpuStartupInventory>(sp => sp.GetRequiredService<AdapterGpus>()));
+        services.AddSingleton<IHealthContributor>(sp => sp.GetRequiredService<AdapterGpus>());
+    }
+
+    /// <summary>
     /// The two <c>[SupportedOSPlatform("windows")]</c> implementations of <i>process delivery</i>: the job-object process
     /// host (MN-211) and the DPAPI instance-key protector (MN-222, machine scope with the service SID as entropy).
     /// <c>TryAdd</c>ed, so a fake registered before <see cref="AddMirbadLLMAgent"/> keeps its place. The Windows memory
@@ -661,6 +702,7 @@ public static class AgentServiceCollectionExtensions
         CacheRoot = options.CacheRoot ?? "",
         StateDirectory = options.StateDirectory,
         UpstreamHost = options.UpstreamHost,
+        Accelerator = options.EffectiveAccelerator,
         StartTimeout = options.Process.StartTimeout,
         RestartBudget = options.Process.RestartBudget,
         RestartWindow = options.Process.RestartWindow,

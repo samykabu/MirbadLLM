@@ -211,6 +211,24 @@ public sealed class JsonModelRegistryTests : IDisposable
     }
 
     [Fact]
+    public async Task UpsertThenGet_RoundTripsTheOnDemandSettings_AndRefusesAnIdleLimitBelowOneMinute()
+    {
+        var options = Options.Create(new MirbadLLMOptions { DataPath = _dataDir });
+        var model = new ModelDefinition { Id = "swap", ServedName = "Swap", ModelPath = "swap", StartOnRequest = true, IdleStopMinutes = 20, StopToMakeRoom = true };
+        using (var first = new JsonModelRegistry(options))
+        {
+            await first.UpsertAsync(model);
+            var refused = await Assert.ThrowsAsync<ArgumentException>(() => first.UpsertAsync(model with { IdleStopMinutes = 0 }));
+            Assert.Contains("IdleStopMinutes", refused.Message, StringComparison.Ordinal);
+        }
+
+        using var second = new JsonModelRegistry(options);
+        var loaded = (await second.GetAsync("swap"))!;
+
+        Assert.Equal((true, 20, true), (loaded.StartOnRequest, loaded.IdleStopMinutes, loaded.StopToMakeRoom));
+    }
+
+    [Fact]
     public async Task UpsertAsync_WithoutPlacement_StoresTheModelUnplaced()
     {
         using var registry = CreateRegistry();

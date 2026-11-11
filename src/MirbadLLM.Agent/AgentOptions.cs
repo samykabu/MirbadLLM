@@ -156,6 +156,17 @@ public sealed partial class AgentOptions
     /// </summary>
     public MemoryModel? MemoryModel { get; set; }
 
+    /// <summary>
+    /// What runs the model weights on this node: unset or <c>cuda</c> (NVIDIA, the behaviour before this setting existed),
+    /// <c>cpu</c> (no usable GPU: llama.cpp on the CPU, containers created without a GPU request, <c>nvidia-smi</c> never
+    /// run) or <c>vulkan</c> (llama.cpp's Vulkan build on AMD or Intel GPUs, experimental). The installers write it; it
+    /// is reported as <see cref="NodeCapabilities.Accelerator"/>. Re-run the installer after adding or removing a GPU.
+    /// </summary>
+    public string? Accelerator { get; set; }
+
+    /// <summary><see cref="Accelerator"/> in its stored form: null (NVIDIA or macOS), <c>cpu</c> or <c>vulkan</c>.</summary>
+    public string? EffectiveAccelerator => NodeAccelerators.Normalize(Accelerator);
+
     // ---- Image policy (design §10.3; one setting for pulls and launches, W2 review MN-092 item 5) ----
 
     /// <summary>Approved images as <c>repository@sha256:…</c>: pulls naming a digest and launches whose spec names one must match.</summary>
@@ -306,6 +317,14 @@ public sealed partial class AgentOptions
             throw new ArgumentException("Agent:MemoryReserveGiB must not be negative.", nameof(MemoryReserveGiB));
         }
 
+        if (EffectiveAccelerator is { } accelerator && MemoryModel is { } forced &&
+            forced != (accelerator == NodeAccelerators.Cpu ? Core.MemoryModel.Unified : Core.MemoryModel.Discrete))
+        {
+            throw new ArgumentException(
+                $"Agent:MemoryModel {forced} contradicts Agent:Accelerator {accelerator} (cpu admits against host memory, vulkan per GPU); remove Agent:MemoryModel.",
+                nameof(MemoryModel));
+        }
+
         if (ProxyUpstreamIdleTimeout < TimeSpan.Zero)
         {
             throw new ArgumentException("Agent:ProxyUpstreamIdleTimeout must not be negative.", nameof(ProxyUpstreamIdleTimeout));
@@ -443,6 +462,12 @@ public sealed partial class AgentOptions
             UseContainerNetwork = UseContainerNetwork,
             UpstreamHost = UpstreamHost,
             RequireApprovedDigest = !AllowTagPulls,
+            GpuAccess = EffectiveAccelerator switch
+            {
+                NodeAccelerators.Cpu => ContainerGpuAccess.None,
+                NodeAccelerators.Vulkan => ContainerGpuAccess.DeviceNodes,
+                _ => ContainerGpuAccess.Nvidia,
+            },
         };
         foreach (string image in ApprovedImages)
         {

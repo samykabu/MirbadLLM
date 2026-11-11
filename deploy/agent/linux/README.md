@@ -1,14 +1,18 @@
 # mirbadllm-agent on a Linux PC (systemd)
 
-A Linux PC with NVIDIA GPUs joins the fleet as a node: the agent runs as the systemd service `mirbadllm-agent`,
-the master dials it on TCP 9443 (mTLS) and it starts model containers through the local Docker engine (design D7,
-§2.2, §6.6). The DGX does not use this: its agent is a container (`deploy/compose.multinode.yaml`).
+A Linux PC joins the fleet as a node: the agent runs as the systemd service `mirbadllm-agent`, the master dials it
+on TCP 9443 (mTLS) and it starts model containers through the local Docker engine (design D7, §2.2, §6.6). The PC can
+have NVIDIA GPUs, no usable GPU at all (a CPU-only node), or an AMD GPU used through Vulkan (experimental); see
+[Nodes without an NVIDIA GPU](#nodes-without-an-nvidia-gpu). The DGX does not use this: its agent is a container
+(`deploy/compose.multinode.yaml`).
 
 ## Requirements
 
 - systemd 247 or newer (Ubuntu 22.04+, Debian 12+), x86_64 or aarch64, OpenSSL (`libssl3`).
-- Docker Engine (the `docker` group must exist) with the NVIDIA Container Toolkit, and the NVIDIA driver
-  (`nvidia-smi -L` lists the GPUs). Without them the script warns and the node reports Degraded or no GPUs.
+- Docker Engine (the `docker` group must exist).
+- For an NVIDIA node: the NVIDIA Container Toolkit and the NVIDIA driver (`nvidia-smi -L` lists the GPUs). When
+  `nvidia-smi` lists no GPU, the script installs the machine as a CPU-only node and says so; it no longer treats a
+  missing driver as a problem to warn about.
 - `curl` and `sudo` for the master's join command. The master serves ready-built bundles, so the PC needs no
   checkout and no Docker build. Without them: Docker and a mirbadllm checkout (the script builds the binary), a
   bundle made with `package`, or `--published-dir`.
@@ -60,6 +64,59 @@ It then enrolls (`mirbadllm-agent join`, as the service user), starts the servic
 join parameters the service is installed but not started: the unit is skipped until `agent.crt` and `node-uid` exist.
 
 Logs: `journalctl -u mirbadllm-agent`. Status: `systemctl status mirbadllm-agent`.
+
+## Nodes without an NVIDIA GPU
+
+`--accelerator` decides how the node runs models. The script writes the choice to `agent.json` as `Agent:Accelerator`
+when it creates the file, and the agent reports it to the master.
+
+| `--accelerator` | When | What the node does |
+|---|---|---|
+| `auto` (default) | | `cuda` when `nvidia-smi -L` lists a GPU, otherwise `cpu`. It never picks `vulkan`. |
+| `cuda` | NVIDIA GPUs | As before: no `Accelerator` entry in `agent.json`, GPUs through the NVIDIA Container Toolkit. |
+| `cpu` | No usable GPU | llama.cpp on the CPU. Containers are created without a GPU request. |
+| `vulkan` | An AMD GPU | llama.cpp through Vulkan, one GPU per model. Experimental. |
+
+An existing `agent.json` keeps its entry. After you add or remove a GPU, edit `"Accelerator"` in the `Agent` section
+(`"cpu"`, `"vulkan"`, or no entry for NVIDIA) and run `sudo systemctl restart mirbadllm-agent`.
+
+### CPU-only nodes
+
+A CPU-only node runs llama.cpp and nothing else: vLLM and SGLang need an NVIDIA GPU, so the node does not list them
+and the master refuses to place such a model there. Three things differ from an NVIDIA node:
+
+- **The image.** Use the CPU image `ghcr.io/ggml-org/llama.cpp:server`, not `server-cuda`. A PC node only starts
+  images you approved by digest, so read the digest of the tag you pulled
+  (`docker pull ghcr.io/ggml-org/llama.cpp:server`, then
+  `docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/ggml-org/llama.cpp:server`), add
+  `ghcr.io/ggml-org/llama.cpp@sha256:<digest>` to `ApprovedImages` in `agent.json`, restart the agent, and set the
+  node's **Default llama.cpp image** and **Approved llama.cpp image digest** on the master's Nodes page.
+- **Memory.** A model's whole budget is counted against host RAM, minus the node's memory reserve, and one model
+  starts at a time. The **Add model** wizard asks for no GPU. **GPU layers** has no effect: a llama.cpp build
+  without a GPU backend prints a warning and ignores it.
+- **Downloads.** The agent downloads from Hugging Face itself, so the node needs no vLLM image for the download
+  helper. `DownloadHelperImage` is unused.
+
+The node's GPU figures stay empty, because there is no GPU to read. The speed of llama.cpp on a CPU has not been
+measured for this project; benchmark the model on the node before you rely on it.
+
+### Vulkan nodes (experimental)
+
+This path has not been run on AMD hardware. It is built and tested against sysfs trees and Docker requests written by
+the tests, and it is off unless you pass `--accelerator vulkan`. What it does:
+
+- **GPUs.** The agent lists the cards whose driver publishes VRAM counters in sysfs
+  (`/sys/class/drm/card*/device/mem_info_vram_total` and `mem_info_vram_used`, the `amdgpu` driver). A card is
+  identified by its PCI address. Intel GPUs are not listed on Linux: their drivers publish no system-wide VRAM figure
+  there, and a node offers only GPUs whose free memory it can read.
+- **Admission.** Free VRAM is the driver's total minus the driver's used figure, which covers every process. When
+  the used figure cannot be read, the GPU shows "—", the node is Degraded with the reason, and a start on that GPU is
+  refused unless you force it.
+- **Containers.** Use the image `ghcr.io/ggml-org/llama.cpp:server-vulkan`, approved by digest as described above.
+  The agent maps the card's DRM render node (`/dev/dri/renderD*`) into the container; the NVIDIA runtime is not
+  involved. A model gets one GPU: the agent cannot fix the order in which the container lists several cards, so it
+  refuses a placement on two.
+- **Telemetry.** VRAM total, used and free only. Utilization, power and temperature are not read and show "—".
 
 ## Firewall (TCP 9443)
 

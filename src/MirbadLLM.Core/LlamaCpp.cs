@@ -314,7 +314,23 @@ public sealed record LlamaCppLockFile
     /// by MN-207, D120). An empty list (a lock file written before) is refused by the installer.
     /// </summary>
     public IReadOnlyList<LlamaCppLockedFile> Files { get; init; } = [];
+
+    /// <summary>
+    /// The same release's builds for a PC without a usable NVIDIA card: one entry per <see cref="NodeAccelerators"/> value
+    /// (<c>cpu</c>, <c>vulkan</c>), each with its own asset and its own complete file list. The top level stays the CUDA
+    /// build. <c>install-agent.ps1 -Accelerator</c> picks one; every variant is the release tag of
+    /// <see cref="Version"/>, so a node has one llama.cpp version whatever its accelerator. Null in a lock file written
+    /// before, and omitted then.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<LlamaCppLockVariant>? Variants { get; init; }
 }
+
+/// <summary>One non-CUDA build in <see cref="LlamaCppLockFile.Variants"/>.</summary>
+/// <param name="Accelerator"><see cref="NodeAccelerators.Cpu"/> or <see cref="NodeAccelerators.Vulkan"/>.</param>
+/// <param name="Assets">The release assets of this build (one zip; no CUDA runtime zip).</param>
+/// <param name="Files">SHA-256 and size of every file the assets unpack, as <see cref="LlamaCppLockFile.Files"/>.</param>
+public sealed record LlamaCppLockVariant(string Accelerator, IReadOnlyList<LlamaCppLockAsset> Assets, IReadOnlyList<LlamaCppLockedFile> Files);
 
 /// <summary>One unpacked file in <see cref="LlamaCppLockFile.Files"/> (MN-207, D120).</summary>
 /// <param name="Path">Path relative to the version folder, <c>/</c>-separated (the release zips are flat).</param>

@@ -47,7 +47,7 @@ property.
 | `MirbadLLM:MemoryReserveGiB` | `8` | Seed for each node's memory reserve on first boot |
 | `MirbadLLM:AdminPassword` | empty | Admin login password |
 | `MirbadLLM:RequireApiKey` | `false` | Require an API key on `/v1` from the start |
-| `MirbadLLM:AutoStartOnRequest` | `false` | Start a stopped model when a request names it; the request waits until the model is ready or times out |
+| `MirbadLLM:AutoStartOnRequest` | `false` | Start any stopped model when a request names it; the request waits until the model is ready or times out. A model's own **Start when a request names it** switch does the same for that model alone (see [Swap on demand](#swap-on-demand-per-model)) |
 | `MirbadLLM:StartupTimeout` | `00:10:00` | How long a start may take before the model is marked Failed |
 | `MirbadLLM:CrashRestart` | `true` | Restart a model whose process or container died on its own |
 | `MirbadLLM:CrashRestartLimit` | `3` | Consecutive crashes after which automatic restarts pause |
@@ -57,6 +57,36 @@ property.
 | `MirbadLLM:Backup:IncludeCa` | `true` | Put the master's CA into the encrypted section of a backup |
 | `MirbadLLM:NodeApi:EnrollUrl` | the browser's host on port 8443 | Enroll listener URL written into join commands; set it when nodes reach the master by another name or port |
 | `MirbadLLM:NodeApi:AgentBundleUrl` | the address the browser used | Base URL that join commands download agent bundles from |
+
+## Swap on demand (per model)
+
+Three settings on a model let a node that holds one model at a time serve several. Set them in the model editor under
+**On demand**, with `PUT /api/models/{id}`, or with the MCP tools `mirbad_deploy_model` and `mirbad_update_model`. All
+three are off by default. None is a launch argument, so a change applies at once and needs no restart.
+
+| Setting in the editor | JSON field | Default | What it does |
+|---|---|---|---|
+| **Start when a request names it** | `startOnRequest` | `false` | A `/v1` request that names the model while it is Stopped or Failed starts it and waits until it is Ready or `MirbadLLM:StartupTimeout` passes. `MirbadLLM:AutoStartOnRequest` turns this on for every model |
+| **Stop after idle (minutes)** | `idleStopMinutes` | not set: never | Stops the model once it has been Ready this many minutes without a request. The count starts at its last request, or at the moment it became Ready if it has had none. At least 1 |
+| **May be stopped to make room** | `stopToMakeRoom` | `false` | When memory admission refuses a start on request, idle models on the same node that carry this setting are stopped, least recently used first, and the start is tried once more |
+
+What to expect:
+
+- The waiting request stays open while the model loads. llama.cpp and MLX suit this. vLLM, SGLang and NIM take 2–5
+  minutes to start, so a client whose own timeout is shorter gives up before the answer arrives.
+- A model with a request in flight, or with a request waiting for it to start, is never stopped. Neither is a model on
+  a node where a benchmark or tuning job is running.
+- Making room stops only as many models as the missing memory needs, and nothing when the idle models that may be
+  stopped do not cover it. If the start still does not fit, the request gets 503 `model_not_ready`, as it does without
+  these settings. Memory admission on the node is unchanged and decides every start.
+- On a node with discrete GPUs, only models placed on the GPU that is short of memory are stopped. A refusal about
+  host RAM on such a node stops nothing.
+- A model stopped for being idle or to make room stays stopped after a node or master restart, like a model you
+  stopped by hand. It starts again when a request names it (with start on request), when you start it, or at master
+  boot if its **Start when the controller boots** switch is on.
+- The idle count is kept in the master's memory. After a master restart it starts again for every running model.
+- Both kinds of stop are written to the audit log as `model.stop`, with the actor `system:idle-stop` or
+  `system:make-room`.
 
 ## MCP clients
 
