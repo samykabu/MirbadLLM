@@ -619,6 +619,20 @@ public sealed class RegistryMigrationTests : IDisposable
     }
 
     [Fact]
+    public void MergeAbsentFields_KeepsTheOnDemandSettings_UnlessTheBodyNamesThem()
+    {
+        var stored = Placed with { StartOnRequest = true, IdleStopMinutes = 20, StopToMakeRoom = true };
+        var incoming = new ModelDefinition { Id = "placed", ServedName = "placed", ModelPath = "Placed" };
+
+        var none = AdminApiEndpoints.MergeAbsentFields(incoming, stored, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        var all = AdminApiEndpoints.MergeAbsentFields(
+            incoming, stored, new HashSet<string>(["startOnRequest", "idleStopMinutes", "stopToMakeRoom"], StringComparer.OrdinalIgnoreCase));
+
+        Assert.Equal((true, 20, true), (none.StartOnRequest, none.IdleStopMinutes, none.StopToMakeRoom));
+        Assert.Equal((false, (int?)null, false), (all.StartOnRequest, all.IdleStopMinutes, all.StopToMakeRoom));
+    }
+
+    [Fact]
     public void MergeAbsentFields_KeepsRuntimeSettingsAndSpeculativeDecoding_UnlessTheBodyNamesThem()
     {
         var stored = Placed with

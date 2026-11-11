@@ -251,6 +251,9 @@ public sealed partial class MirbadMcpTools(
         [Description("vllm, sglang and mlx: how much to draft per step. Required by vllm and sglang when speculative decoding is on. On sglang this is draft tokens for DFLASH and NGRAM, and steps for EAGLE, EAGLE3 and STANDALONE.")] int? speculativeTokens = null,
         [Description("vllm, sglang and mlx: folder of the draft model, such as a DFlash or DSpark drafter. The image must support that drafter.")] string? draftFolder = null,
         [Description("Hugging Face repository to download into draftFolder. Omit when the folder is already on the node.")] string? draftRepoId = null,
+        [Description("Start the model when a request names it while it is stopped; the request waits for the start. Suits llamacpp and mlx; vllm, sglang and nim take minutes to start, so a waiting client may time out.")] bool? startOnRequest = null,
+        [Description("Stop the model after this many minutes without a request, at least 1. Omit to never stop it for being idle.")] int? idleStopMinutes = null,
+        [Description("Allow stopping this model, while it is idle, to free memory for another model's start on request on the same node.")] bool? stopToMakeRoom = null,
         CancellationToken ct = default)
     {
         RequireOperator();
@@ -293,6 +296,7 @@ public sealed partial class MirbadMcpTools(
             Placement = new ModelPlacement(selected.NodeId, GpuIndices: gpuIndices),
         };
         if (memoryBudgetGiB is { } budget) model = model with { MemoryBudgetGiB = budget };
+        model = model with { StartOnRequest = startOnRequest ?? false, IdleStopMinutes = idleStopMinutes, StopToMakeRoom = stopToMakeRoom ?? false };
         SpeculativeDecoding? speculative = runtime is not (RuntimeKind.Vllm or RuntimeKind.Sglang) || speculativeMethod is null && speculativeTokens is null && draftFolder is null
             ? null
             : new SpeculativeDecoding(speculativeMethod ?? "", speculativeTokens ?? 0)
@@ -387,6 +391,9 @@ public sealed partial class MirbadMcpTools(
         [Description("vllm, sglang and mlx: how much to draft per step, as in mirbad_deploy_model.")] int? speculativeTokens = null,
         [Description("vllm, sglang and mlx: folder of a draft model that is already on the node.")] string? draftFolder = null,
         [Description("vllm, sglang and mlx: turn speculative decoding off. Cannot be combined with the other speculative arguments.")] bool speculativeOff = false,
+        [Description("Start the model when a request names it while it is stopped, as in mirbad_deploy_model. Takes effect at once, without a restart.")] bool? startOnRequest = null,
+        [Description("Stop the model after this many minutes without a request; 0 turns the idle stop off. Takes effect at once, without a restart.")] int? idleStopMinutes = null,
+        [Description("Allow stopping this model, while it is idle, to make room for another model's start on request. Takes effect at once, without a restart.")] bool? stopToMakeRoom = null,
         CancellationToken ct = default)
     {
         RequireOperator();
@@ -423,6 +430,9 @@ public sealed partial class MirbadMcpTools(
         {
             ServedName = servedName ?? before.ServedName,
             MemoryBudgetGiB = memoryBudgetGiB ?? before.MemoryBudgetGiB,
+            StartOnRequest = startOnRequest ?? before.StartOnRequest,
+            IdleStopMinutes = idleStopMinutes is null ? before.IdleStopMinutes : idleStopMinutes == 0 ? null : idleStopMinutes,
+            StopToMakeRoom = stopToMakeRoom ?? before.StopToMakeRoom,
             Placement = gpuIndices is null ? before.Placement : before.Placement! with { GpuUuids = null, GpuIndices = gpuIndices },
         };
         after = before.Runtime switch
@@ -465,9 +475,11 @@ public sealed partial class MirbadMcpTools(
 
         ModelDefinition stored = await models.GetAsync(modelId, ct).ConfigureAwait(false) ?? after;
         var changes = SettingChanges.AllRestartNeeded(before, stored);
+        // The on-demand settings are not launch arguments: they apply at once and are not in the restart list.
+        bool onDemandChanged = (before.StartOnRequest, before.IdleStopMinutes, before.StopToMakeRoom) != (stored.StartOnRequest, stored.IdleStopMinutes, stored.StopToMakeRoom);
         // Labels only: an argument's value can hold a secret, and the audit log keeps it.
-        if (changes.Count > 0)
-            await Audit(AuditActions.ModelUpdate, modelId, stored.Placement?.NodeId, AuditResults.Succeeded, "MCP updated: " + string.Join(", ", changes.Select(c => c.Label))).ConfigureAwait(false);
+        if (changes.Count > 0 || onDemandChanged)
+            await Audit(AuditActions.ModelUpdate, modelId, stored.Placement?.NodeId, AuditResults.Succeeded, "MCP updated: " + string.Join(", ", [.. changes.Select(c => c.Label), .. onDemandChanged ? ["On demand"] : Array.Empty<string>()])).ConfigureAwait(false);
         string[] notes =
         [
             .. speculativeGiven ? [UnprovenSpeculativeNote] : Array.Empty<string>(),
@@ -479,7 +491,7 @@ public sealed partial class MirbadMcpTools(
             changes = changes.Select(c => c.ToString()).ToList(),
             planningNotes = notes,
             nextAction = changes.Count == 0
-                ? "Nothing changed."
+                ? onDemandChanged ? "Saved. The on-demand settings apply at once; no restart is needed." : "Nothing changed."
                 : "Saved. If the model is running, it keeps its old settings until mirbad_stop_model and then mirbad_start_model; clients get 503 until it is Ready again.",
         };
     }

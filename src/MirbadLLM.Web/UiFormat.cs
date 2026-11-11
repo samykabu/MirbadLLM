@@ -149,6 +149,37 @@ public static class UiFormat
         _ => model.KvCacheDtype,
     };
 
+    /// <summary>
+    /// "Starts on request · stops after 15 min idle · may be stopped to make room", with only the parts that are set; null
+    /// when none is.
+    /// </summary>
+    public static string? OnDemandLabel(bool startOnRequest, int? idleStopMinutes, bool stopToMakeRoom)
+    {
+        var parts = new List<string>(3);
+        if (startOnRequest)
+        {
+            parts.Add("starts on request");
+        }
+
+        if (idleStopMinutes is { } minutes)
+        {
+            parts.Add(string.Create(CultureInfo.InvariantCulture, $"stops after {minutes} min idle"));
+        }
+
+        if (stopToMakeRoom)
+        {
+            parts.Add("may be stopped to make room");
+        }
+
+        if (parts.Count == 0)
+        {
+            return null;
+        }
+
+        string text = string.Join(" · ", parts);
+        return char.ToUpperInvariant(text[0]) + text[1..];
+    }
+
     /// <summary>"MTP × 2", "n-gram × 4", or "Off" when speculative decoding is not configured.</summary>
     public static string SpeculativeLabel(SpeculativeDecoding? speculative)
     {

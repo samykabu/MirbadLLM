@@ -117,6 +117,11 @@ hosted service.
   on a node (and on GPUs by UUID), can be moved between nodes, and start one at a time per node.
 - **Recovery.** Models that were running come back after a node or the master restarts, one at a time per node. A
   model you stopped stays stopped.
+- **Swap models on demand.** A GPU that holds one model at a time can serve several. Each model has three optional
+  settings, all off by default: start when a request names it, stop after a number of idle minutes, and allow being
+  stopped while idle so another model can start on request. Memory admission still decides every start, and a model
+  with a request in flight is never stopped. The request waits while the model loads, so this suits llama.cpp and
+  MLX; vLLM, SGLang and NIM take minutes to start, and a waiting client may time out first.
 - **Overview "Command Deck".** A live page with fleet KPIs, a WebGL Signal chart of generation per model and GPU use
   per node, a leaderboard with a full readout per model, the fleet's counters (requests served, tokens today, crash-free
   streak, error budget), service levels, and per-node headroom and disk.

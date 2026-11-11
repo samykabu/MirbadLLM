@@ -157,6 +157,31 @@ public sealed record ModelDefinition
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool KeepServingDuringJobs { get; init; }
+
+    // ---- Swap on demand. All three are off by default and omitted from JSON at their default; none is a launch
+    // ---- argument, so changing them never needs a restart.
+
+    /// <summary>
+    /// Start this model when a request names it while it is stopped; the request waits until the model is Ready or
+    /// <see cref="MirbadLLMOptions.StartupTimeout"/> passes. Also on for every model when
+    /// <see cref="MirbadLLMOptions.AutoStartOnRequest"/> is set. Not <see cref="AutoStart"/>, which starts it at boot.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool StartOnRequest { get; init; }
+
+    /// <summary>
+    /// Stop this model once it has been Ready for this many minutes with no request in flight and none finished.
+    /// Null = never. At least 1.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? IdleStopMinutes { get; init; }
+
+    /// <summary>
+    /// This model may be stopped, while Ready and unused, to free the memory a start on request needs on its node
+    /// (<see cref="IRoomMaker"/>).
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool StopToMakeRoom { get; init; }
 }
 
 /// <summary>
