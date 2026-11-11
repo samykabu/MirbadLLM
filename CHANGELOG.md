@@ -103,3 +103,4 @@ private development history.
 ## 2026-10-10
 
 - Multi-node P3: llama.cpp as a native process runtime (#141)
+
