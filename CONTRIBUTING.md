@@ -92,6 +92,11 @@ The UI is at `http://127.0.0.1:5080/`. Stop it with `tools/dev-multinode/stop.ps
 `main` is protected. A pull request needs a passing **Build and test** check and a maintainer's review before it is
 merged.
 
+A change that touches only Markdown files, such as the README or anything under `docs/`, skips the build, the tests
+and the deploy. One short job looks at the changed files and the other jobs report as skipped, which still satisfies
+the required check. The Markdown under `deploy/` is the exception: the agent READMEs ship inside the agent bundles, so
+a change there runs everything.
+
 ## How CI treats pull requests
 
 CI runs on the project's own self-hosted runners: a Linux arm64 machine for the build, the tests and the packaging

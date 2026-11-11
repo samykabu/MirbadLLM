@@ -3,6 +3,9 @@
 # built natively and deployed in place, a Windows PC (label mirbadllm-win) and a Mac (label mirbadllm-mac).
 # No job ever runs on a GitHub-hosted runner.
 #
+# A change that touches only Markdown files outside deploy/ (the README, docs/) skips the build, the tests, the lint
+# and the deploy: see the `changes` job.
+#
 # Security: this is a public repository, and a self-hosted runner must never run code from a fork. Every job is gated
 # on `github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository`, so a
 # pull request from a fork gets no runner. A maintainer reviews it and pushes the branch to this repository to run CI.
@@ -29,9 +32,44 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Decides whether the other jobs have anything to check. A change made only of Markdown files outside deploy/ cannot
+  # alter the build, the tests or the deployed images, so every other job is skipped. A skipped job reports as
+  # successful, which keeps the required "Build and test" check satisfied. A workflow-level `paths-ignore` would not: the
+  # check would never report and the pull request could not merge. The rule and its exceptions live in
+  # deploy/ci-changed-code.sh. A manual run, an unknown base commit or a failed diff runs everything.
+  changes:
+    name: Changed files
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, dgx-spark]
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.rule.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Does this change need the build and the tests?
+        id: rule
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          files=""
+          if [ "$EVENT" = pull_request ]; then
+            # The checkout is the merge commit, whose first parent is the base branch.
+            files="$(git diff --name-only --no-renames HEAD^1 HEAD)" || files=""
+          elif [ "$EVENT" = push ] && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            files="$(git diff --name-only --no-renames "$BEFORE" HEAD)" || files=""
+          fi
+          code="$(bash deploy/ci-changed-code.sh <<<"$files")"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Needs the build and the tests: $code"
+          echo "$files"
+
   test:
     name: Build and test
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, dgx-spark]
     timeout-minutes: 20
     container:
@@ -66,7 +104,8 @@ jobs:
   # Nothing here needs a GPU, Docker, elevation or a model file: the Windows tests use fakes and temp folders.
   test-windows:
     name: Build and test (Windows)
-    if: vars.WINDOWS_CI == '1' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && vars.WINDOWS_CI == '1' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, windows, mirbadllm-win]
     timeout-minutes: 30
     # cmd, not the default Windows PowerShell: a host whose execution policy is Restricted cannot run the step's script.
@@ -89,7 +128,8 @@ jobs:
   # has little memory and the macOS integration tests start real (tiny) models.
   test-macos:
     name: Build and test (macOS)
-    if: vars.MAC_CI == '1' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && vars.MAC_CI == '1' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, macOS, mirbadllm-mac]
     timeout-minutes: 30
     concurrency:
@@ -111,13 +151,16 @@ jobs:
   # start for the host's memory.
   deploy-artifacts:
     name: Deploy artifacts (lint)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, dgx-spark]
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Shell syntax
-        run: for f in deploy/ci-deploy.sh deploy/ci-deploy-multinode.sh deploy/hostd/install-hostd.sh deploy/agent/agent-update-helper.sh deploy/agent/linux/install-agent.sh deploy/agent/macos/install-agent.sh deploy/release.sh deploy/demo/demo.sh; do bash -n "$f"; done
+        run: for f in deploy/ci-deploy.sh deploy/ci-deploy-multinode.sh deploy/hostd/install-hostd.sh deploy/agent/agent-update-helper.sh deploy/agent/linux/install-agent.sh deploy/agent/macos/install-agent.sh deploy/release.sh deploy/demo/demo.sh deploy/ci-changed-code.sh; do bash -n "$f"; done
+      - name: Changed-files rule (self-test)
+        run: bash deploy/ci-changed-code.sh --self-test
       - name: Compose model (multinode)
         run: DOCKER_GID=0 docker compose -f deploy/compose.multinode.yaml config -q
       - name: Compose model (published images)
@@ -130,7 +173,8 @@ jobs:
         run: DRY_RUN=1 VERSION=1.2.3 PUSH=1 bash deploy/release.sh
 
   # Deploys main to the Linux runner's host. Off unless the repository variable DEPLOY_ENABLED is 1, so a fork or a
-  # new clone never tries to deploy anywhere.
+  # new clone never tries to deploy anywhere. It needs `test`, so a Markdown-only push, where `test` is skipped, does not
+  # deploy either.
   deploy:
     name: Deploy to the DGX Spark
     needs: test
