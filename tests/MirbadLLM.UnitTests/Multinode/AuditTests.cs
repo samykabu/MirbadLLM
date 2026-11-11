@@ -344,6 +344,13 @@ public sealed class AuditTests
             ("POST", "/api/models/{id}/move/force-commit"),
             ("POST", "/api/models/{id}/move/cancel"),
             ("POST", "/api/models/{id}/unplace"),
+            // The Ollama-compatible routes (OllamaApi) share the /api prefix but are inference routes: /v1 in another
+            // shape, behind the API key instead of the admin login, and they change nothing.
+            ("POST", "/api/show"),
+            ("POST", "/api/chat"),
+            ("POST", "/api/generate"),
+            ("POST", "/api/embed"),
+            ("POST", "/api/embeddings"),
         ];
         routes.RemoveAll(r => notFiltered.Contains(r));
 
