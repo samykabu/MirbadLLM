@@ -95,7 +95,7 @@
         <dt>Why it matters</dt>
         <dd>The controller names the container ss-{id} and uses {id} as the registry key. It can't be changed after creation without deleting and re-adding the model.</dd>
         <dt>Example</dt>
-        <dd>ornith-9b-fp8 — the seeded Phase 0 model's id; its container is named ss-ornith-9b-fp8.</dd></dl></div>
+        <dd>qwen-coder-7b, whose container is then named ss-qwen-coder-7b.</dd></dl></div>
                         <input id="field-id" data-testid="field-id" autocomplete="off" spellcheck="false" aria-describedby="field-id-error" name="_model.Id" class="form-control num valid" value="" blazor:onchange=""></input>
                         <div id="field-id-error"></div></div>
                     <div class="field"><div class="field-head"><label class="field-label" for="field-served-name">Served name</label><button type="button" class="info-btn" aria-label="About: Served name" popovertarget="field-served-name-help" style="anchor-name: --field-served-name-help" data-testid="info-toggle-field-served-name"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
@@ -105,7 +105,7 @@
         <dt>Why it matters</dt>
         <dd>The router matches incoming requests to an upstream by this exact name (case-insensitive), and it is passed to the server so /v1/models advertises it too. Two models can't share one.</dd>
         <dt>Example</dt>
-        <dd>Ornith-Uncensored-FP8 — what VS Code/Cline would put in its model picker to reach the seeded model.</dd></dl></div>
+        <dd>Qwen-Coder-7B, the name VS Code or Cline then shows in its model picker.</dd></dl></div>
                         <input id="field-served-name" data-testid="field-served-name" autocomplete="off" spellcheck="false" aria-describedby="field-served-name-error" name="_model.ServedName" class="form-control valid" value="" blazor:onchange=""></input>
                         <div id="field-served-name-error"></div></div><div class="field"><span class="field-label" id="field-node-label">Node</span>
                             <div class="field-static num" aria-labelledby="field-node-label" data-testid="field-node-readonly">dgx</div></div><div class="field field--wide"><div class="field-head"><label class="field-label" for="field-model-path">Model path</label><button type="button" class="info-btn" aria-label="About: Model path" popovertarget="field-model-path-help" style="anchor-name: --field-model-path-help" data-testid="info-toggle-field-model-path"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>
@@ -330,7 +330,7 @@
         <dt>Why it matters</dt>
         <dd>Without it, a model stays Stopped after a controller restart until someone starts it (or a request arrives, if the model starts on request) — useful to avoid keeping every model resident by default.</dd>
         <dt>Example</dt>
-        <dd>Enabled for the seeded ornith-9b-fp8 model, so it's ready right after the controller comes up.</dd></dl></div></div></div></section><section class="panel form-section" aria-labelledby="sec-on-demand" data-wizard-step="tuning" hidden data-testid="on-demand-settings"><div class="form-section-intro"><h2 id="sec-on-demand">On demand</h2>
+        <dd>Enabled for the model your tools use all day, so it's ready right after the controller comes up.</dd></dl></div></div></div></section><section class="panel form-section" aria-labelledby="sec-on-demand" data-wizard-step="tuning" hidden data-testid="on-demand-settings"><div class="form-section-intro"><h2 id="sec-on-demand">On demand</h2>
                     <p>Start the model when a request names it, and stop it when it is idle or another model needs its memory. All three are off unless you set them, and none needs a restart.</p></div>
                 <div class="field-grid"><div class="field field--wide"><div class="field-head"><div class="form-check form-switch switch-row"><input role="switch" id="startOnRequest" data-testid="field-start-on-request" aria-describedby="on-demand-runtime-hint" type="checkbox" name="_model.StartOnRequest" class="form-check-input valid" value="True" blazor:onchange=""></input>
                                     <label class="form-check-label" for="startOnRequest">Start when a request names it</label></div><button type="button" class="info-btn" aria-label="About: Start on request" popovertarget="startOnRequest-help" style="anchor-name: --startOnRequest-help" data-testid="info-toggle-startOnRequest"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4.5M12 8h.01"/></svg></button></div>

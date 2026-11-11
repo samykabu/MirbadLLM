@@ -6,6 +6,8 @@ private development history.
 
 ## Unreleased
 
+- A new install starts with an empty model list. It used to carry one example definition, `ornith-9b-fp8`, whose checkpoint only the first deployment had
+- The master and agent from the compose files work on a PC with discrete GPUs: the agent looks at the GPUs and gives each card its own memory budget, where it used to count every machine as one pool. `MIRBADLLM_MEMORY_MODEL` pins `Unified` or `Discrete`, and `MIRBADLLM_NODE_ID` names the machine's own node before the first start (unset, it stays `dgx`)
 - The `ollama` command line works against the master. `HEAD /` is answered, `ollama list` and `ollama ps` no longer crash on an empty digest, `ollama show <name>` finds the model, and `ollama ps` shows "Forever" where it showed "Stopping...". Checked with ollama 0.40.16
 - A stopped model that starts on request is listed in `/v1/models` and in Ollama's `/api/tags`, so a client with a model picker can choose it. Access > Connect lists it under "Start when a request names them"
 - Streamed answers no longer carry SGLang's `"reasoning_content": null` on every chunk, which GitHub Copilot appended to the model's reasoning as the text "null"

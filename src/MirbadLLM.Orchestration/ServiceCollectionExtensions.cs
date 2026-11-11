@@ -87,11 +87,10 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<RecoveryOptions>().Bind(configuration.GetSection(RecoveryOptions.SectionName));
         MasterBoot boot = MasterBoot.Of(services);
-        if (boot.IsRecovery)
-        {
-            // Recovery mode (D76): a missing models.json stays empty until the backup is installed.
-            services.Configure<ModelRegistryOptions>(o => o.SeedPolicy = ModelSeedPolicy.None);
-        }
+        // A new install starts with an empty model list: the example definition the registry can write on a missing
+        // models.json named a checkpoint only the first deployment had. Recovery mode (D76) needs the same: the file
+        // stays missing until the backup is installed.
+        services.Configure<ModelRegistryOptions>(o => o.SeedPolicy = ModelSeedPolicy.None);
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddMasterFencing();

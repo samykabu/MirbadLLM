@@ -53,6 +53,23 @@ public sealed partial class DeployArtifactsTests
     }
 
     [Fact]
+    public void TheBundledAgent_LeavesItsMemoryModelToTheGpuProbe_AndTakesTheMastersNodeId()
+    {
+        // Neither the image's agent.json nor the compose default names a memory model, so the agent looks at the GPUs and
+        // a PC with discrete cards is not counted as one pool; MIRBADLLM_MEMORY_MODEL pins either model.
+        Assert.Equal("${MIRBADLLM_MEMORY_MODEL:-}", RawEnvironment(Service("agent"))["MIRBADLLM_AGENT_Agent__MemoryModel"]);
+        Assert.Null(DgxAgentOptions().MemoryModel);
+        // The variable reaches the agent as an empty value when the env file leaves it out: that must read as "not set".
+        Assert.Null(AgentWithMemoryModel("").MemoryModel);
+        Assert.Equal(MemoryModel.Unified, AgentWithMemoryModel("Unified").MemoryModel);
+        Assert.Equal(MemoryModel.Discrete, AgentWithMemoryModel("Discrete").MemoryModel);
+
+        // One variable names the node on both sides: the bootstrap bundle is written for the master's id.
+        Assert.Equal("${MIRBADLLM_NODE_ID:-dgx}", RawEnvironment(Service("agent"))["MIRBADLLM_AGENT_Agent__NodeId"]);
+        Assert.Equal("${MIRBADLLM_NODE_ID:-dgx}", RawEnvironment(Service("master"))["MirbadLLM__Nodes__BootstrapNodeId"]);
+    }
+
+    [Fact]
     public void DgxAgent_WithComposeOverrides_IsTheP1ConfigurationSurface()
     {
         AgentOptions agent = DgxAgentOptions();
@@ -66,8 +83,9 @@ public sealed partial class DeployArtifactsTests
         Assert.True(agent.UseContainerNetwork);
         Assert.Equal(8101, agent.PortRangeStart);
         Assert.Equal(8, agent.MemoryReserveGiB);
-        // The GB10 is unified by configuration, not only by the GPU probe (W9 review MN-132, D102).
-        Assert.Equal(MemoryModel.Unified, agent.MemoryModel);
+        // The image names no memory model, so it suits a PC with discrete cards too. The GB10 stays unified by
+        // configuration, not only by the GPU probe (W9 review MN-132, D102): its env file sets MIRBADLLM_MEMORY_MODEL.
+        Assert.Null(agent.MemoryModel);
         Assert.True(agent.HostdExpected);
         Assert.Equal(HostServicesOptions.DefaultHostAgentSocket, agent.HostdSocket);
         Assert.Equal("unix:///var/run/docker.sock", agent.DockerEndpoint);
@@ -295,6 +313,12 @@ public sealed partial class DeployArtifactsTests
     }
 
     // ---- helpers ----
+
+    private static AgentOptions AgentWithMemoryModel(string value) => AgentOptions.FromConfiguration(
+        new ConfigurationBuilder()
+            .AddJsonFile(RepoFile("deploy", "agent", "agent.dgx.json"), optional: false, reloadOnChange: false)
+            .AddInMemoryCollection([KeyValuePair.Create("Agent:MemoryModel", (string?)value)])
+            .Build());
 
     private static AgentOptions DgxAgentOptions()
     {
