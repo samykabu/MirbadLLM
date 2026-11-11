@@ -77,6 +77,41 @@ public sealed class ModelsPageTests
     }
 
     [Fact]
+    public void OnDemandSettings_ShowOnTheRow_AndInTheDetails()
+    {
+        using var ctx = Context(new FakeModelRuntime(), models:
+        [
+            MakeModel("swap") with { StartOnRequest = true, IdleStopMinutes = 15, StopToMakeRoom = true },
+            MakeModel("plain"),
+        ]);
+        var cut = ctx.Render<Models>();
+
+        Assert.Equal("Starts on request · stops after 15 min idle · may be stopped to make room", cut.Find("[data-testid=on-demand-swap]").TextContent);
+        Assert.Empty(cut.FindAll("[data-testid=on-demand-plain]"));
+
+        cut.Find("[data-testid=models-row-plain]").KeyDown(new KeyboardEventArgs { Key = "Enter" });
+        Assert.Equal("Off", cut.Find("[data-testid=models-detail-on-demand]").TextContent);
+    }
+
+    [Fact]
+    public void TheGlobalStartOnRequestSwitch_ShowsOnEveryRow()
+    {
+        using var ctx = Context(new FakeModelRuntime(), models: [MakeModel("plain")]);
+        ctx.Services.AddSingleton(Options.Create(new MirbadLLMOptions { AutoStartOnRequest = true }));
+        var cut = ctx.Render<Models>();
+
+        Assert.Equal("Starts on request", cut.Find("[data-testid=on-demand-plain]").TextContent);
+    }
+
+    [Fact]
+    public void OnDemandLabel_NamesOnlyWhatIsSet()
+    {
+        Assert.Null(UiFormat.OnDemandLabel(false, null, false));
+        Assert.Equal("Stops after 30 min idle", UiFormat.OnDemandLabel(false, 30, false));
+        Assert.Equal("Starts on request · may be stopped to make room", UiFormat.OnDemandLabel(true, null, true));
+    }
+
+    [Fact]
     public void RunningAndStoppedGroups_CollapseIndependently()
     {
         var runtime = new FakeModelRuntime();

@@ -140,6 +140,25 @@ public sealed class AgentRouterTests
     }
 
     [Fact]
+    public async Task StartOnRequest_OnTheModel_StartsItWithTheGlobalSwitchOff()
+    {
+        await using var env = await StubEnv.StartAsync();
+        env.Registry.Add(Model(ModelId, ServedName, NodeId) with { StartOnRequest = true });
+        env.Cache.SetRuntime(ModelId, NodeId, ModelState.Stopped);
+        env.Runtime.StartHandler = (id, _) =>
+        {
+            env.Cache.SetRuntime(id, NodeId, ModelState.Ready);
+            return new ModelStatus(id, ModelState.Ready);
+        };
+
+        using var response = await env.PostChatAsync(ServedName);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, env.Runtime.StartCallCount);
+        Assert.Single(env.Data.Requests);
+    }
+
+    [Fact]
     public async Task ModelsList_ShowsOnlyRoutableModels()
     {
         await using var env = await StubEnv.StartAsync();

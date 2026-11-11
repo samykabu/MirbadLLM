@@ -42,6 +42,9 @@ public sealed class BackupV2Tests : IDisposable
         AutoStart = true,
         Placement = new ModelPlacement("dgx"),
         KeepServingDuringJobs = true,
+        StartOnRequest = true,
+        IdleStopMinutes = 20,
+        StopToMakeRoom = true,
     };
 
     private static readonly ModelDefinition OnPc = new()
@@ -148,6 +151,7 @@ public sealed class BackupV2Tests : IDisposable
         var byId = parsed.Models.ToDictionary(m => m.Id);
         Assert.Equal(OnDgx.Placement, byId["alpha"].Placement);
         Assert.True(byId["alpha"].KeepServingDuringJobs);
+        Assert.Equal((true, 20, true), (byId["alpha"].StartOnRequest, byId["alpha"].IdleStopMinutes, byId["alpha"].StopToMakeRoom));
         Assert.Equal(OnPc.Placement, byId["beta"].Placement);
         Assert.Equal(6, byId["beta"].HostMemoryBudgetGiB);
 

@@ -241,8 +241,36 @@ public static class ModelFieldHelp
     public static readonly FieldHelpText AutoStart = new(
         What: "Start this model automatically when the controller process boots.",
         Why: "Without it, a model stays Stopped after a controller restart until someone starts it (or a request " +
-             "arrives, if AutoStartOnRequest is on) — useful to avoid keeping every model resident by default.",
+             "arrives, if Start on request or AutoStartOnRequest is on) — useful to avoid keeping every model resident by default.",
         Example: "Enabled for the seeded ornith-9b-fp8 model, so it's ready right after the controller comes up.");
+
+    // --- On demand ---
+
+    public static readonly FieldHelpText StartOnRequest = new(
+        What: "Start this model when a request names it while it is stopped. The request waits until the model is Ready, then gets its answer.",
+        Why: "A node that holds one model at a time can then serve several: the client names the model and the router starts it. " +
+             "The wait is the model's start time, up to the startup timeout (10 minutes unless configured). llama.cpp and MLX suit this. " +
+             "vLLM, SGLang and NIM take 2–5 minutes to start, so a client that waits for one of them may time out before it answers. " +
+             "The AutoStartOnRequest setting turns this on for every model; this switch turns it on for one.",
+        Example: "A coding client asks for a stopped llama.cpp model on a 16 GB card: the router starts it and answers once it is Ready. " +
+                 "With the switch off the client gets 503 model_not_ready.");
+
+    public static readonly FieldHelpText IdleStopMinutes = new(
+        What: "Stop this model after this many minutes without a request. Blank means it is never stopped for being idle.",
+        Why: "A stopped model gives its memory back to the node. The count starts at the model's last request, or at the moment it " +
+             "became Ready if it has had none. A model is not stopped while a request is in flight, or while a benchmark or tuning job " +
+             "runs on its node. An idle stop counts as a stop: the model does not come back after a node or controller restart. It " +
+             "starts again on request when Start on request is on, and at controller boot when Auto-start on boot is on.",
+        Example: "15, with Start on request on: the model leaves memory after a quiet quarter of an hour and the next request starts it again, waiting for the load.");
+
+    public static readonly FieldHelpText StopToMakeRoom = new(
+        What: "Allow MirbadLLM to stop this model when another model on the same node needs its memory to start on request.",
+        Why: "When the memory check refuses a start on request, the router stops idle models that carry this switch, least recently used " +
+             "first and only as many as the missing memory needs, then tries the start once more. A model with a request in flight is " +
+             "never stopped, and on a node with discrete GPUs only models on the GPU that is short are considered. If the start still " +
+             "does not fit, the request gets the usual 503 and nothing else is stopped.",
+        Example: "Two llama.cpp models are placed on one 16 GB card that holds one of them, both with Start on request and this switch on. " +
+                 "A request for the stopped one stops the idle one and starts the other.");
 
     // --- Tags ---
 

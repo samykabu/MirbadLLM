@@ -57,4 +57,25 @@ public interface IModelEndpointResolver
 public interface IRouterStats
 {
     IReadOnlyList<RouterModelStats> Snapshot();
+
+    /// <summary>True while a request for the model is in flight, or waits for the model to start on request.</summary>
+    bool InUse(string servedName) =>
+        Snapshot().Any(s => s.InFlight > 0 && string.Equals(s.ServedName, servedName, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>When the model's last request started or finished; null when it had none since the controller started.</summary>
+    DateTimeOffset? LastRequestAt(string servedName) => null;
+}
+
+/// <summary>
+/// Makes room for a start on request that memory admission refused: stops Ready, unused models on the same node that
+/// carry <see cref="ModelDefinition.StopToMakeRoom"/>, least recently used first. Admission stays the only judge of what
+/// fits; this only stops models before the router asks it again.
+/// </summary>
+public interface IRoomMaker
+{
+    /// <summary>
+    /// True when the start of <paramref name="modelId"/> is worth one more try: models were stopped for it, or another
+    /// request made room on the node while this one waited. False when nothing was stopped.
+    /// </summary>
+    Task<bool> TryMakeRoomAsync(string modelId, ModelMemoryAdmissionException refusal, CancellationToken ct = default);
 }

@@ -416,7 +416,7 @@ public sealed partial class ContractShapeTests
         foreach (var options in new[] { RegistryFileOptions, BackupDocument.JsonOptions, AgentJson.Options })
         {
             var node = JsonSerializer.SerializeToNode(definition, options)!.AsObject();
-            foreach (string name in new[] { "Placement", "Runtime", "LlamaCpp", "HostMemoryBudgetGiB", "KeepServingDuringJobs" })
+            foreach (string name in new[] { "Placement", "Runtime", "LlamaCpp", "HostMemoryBudgetGiB", "KeepServingDuringJobs", "StartOnRequest", "IdleStopMinutes", "StopToMakeRoom" })
             {
                 Assert.DoesNotContain(node, p => string.Equals(p.Key, name, StringComparison.OrdinalIgnoreCase));
             }
@@ -428,6 +428,7 @@ public sealed partial class ContractShapeTests
         Assert.Null(read.LlamaCpp);
         Assert.Null(read.HostMemoryBudgetGiB);
         Assert.False(read.KeepServingDuringJobs);
+        Assert.Equal((false, (int?)null, false), (read.StartOnRequest, read.IdleStopMinutes, read.StopToMakeRoom));
         Assert.Equal(definition, read with { ExtraArgs = definition.ExtraArgs, Tags = definition.Tags, Sources = definition.Sources });
     }
 

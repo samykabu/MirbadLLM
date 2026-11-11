@@ -517,6 +517,9 @@ public static class AdminApiEndpoints
             Speculative = present.Contains("speculative") ? model.Speculative : stored.Speculative,
             HostMemoryBudgetGiB = present.Contains("hostMemoryBudgetGiB") ? model.HostMemoryBudgetGiB : stored.HostMemoryBudgetGiB,
             KeepServingDuringJobs = present.Contains("keepServingDuringJobs") ? model.KeepServingDuringJobs : stored.KeepServingDuringJobs,
+            StartOnRequest = present.Contains("startOnRequest") ? model.StartOnRequest : stored.StartOnRequest,
+            IdleStopMinutes = present.Contains("idleStopMinutes") ? model.IdleStopMinutes : stored.IdleStopMinutes,
+            StopToMakeRoom = present.Contains("stopToMakeRoom") ? model.StopToMakeRoom : stored.StopToMakeRoom,
             // A digest pins one image: kept when absent only while the image stays the same (W7 review MN-126).
             ImageDigest = present.Contains("imageDigest")
                 ? model.ImageDigest

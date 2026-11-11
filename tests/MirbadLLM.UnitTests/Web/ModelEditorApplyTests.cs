@@ -108,6 +108,60 @@ public sealed class ModelEditorApplyTests : IDisposable
     }
 
     [Fact]
+    public async Task OnDemandSettings_AreSaved_AndNeedNoRestart()
+    {
+        var registry = new FakeModelRegistry([Saved]);
+        var runtime = new FakeModelRuntime();
+        runtime.SetStatus(new ModelStatus("qwen", ModelState.Ready, HostPort: 8102));
+        using var ctx = MakeContext(registry, runtime);
+        var cut = ctx.Render<ModelEditor>(p => p.Add(x => x.Id, "qwen"));
+
+        // The editor says which runtimes swapping suits before anyone turns it on.
+        Assert.Contains("vLLM, SGLang and NIM take 2–5 minutes to start", cut.Find("[data-testid=on-demand-runtime-hint]").TextContent, StringComparison.Ordinal);
+        cut.Find("[data-testid=field-start-on-request]").Change(true);
+        cut.Find("[data-testid=field-idle-stop-minutes]").Change("15");
+        cut.Find("[data-testid=field-stop-to-make-room]").Change(true);
+        cut.Find("[data-testid=model-form]").Submit();
+
+        Assert.Equal("false", cut.Find("[data-testid=apply-dialog]").GetAttribute("data-open"));
+        var saved = (await registry.GetAsync("qwen", Xunit.TestContext.Current.CancellationToken))!;
+        Assert.Equal((true, 15, true), (saved.StartOnRequest, saved.IdleStopMinutes, saved.StopToMakeRoom));
+        Assert.Empty(runtime.StopCalls);
+    }
+
+    [Fact]
+    public async Task OnDemandSettings_LoadFromTheSavedModel_AndABlankIdleLimitMeansNever()
+    {
+        var registry = new FakeModelRegistry([Saved with { StartOnRequest = true, IdleStopMinutes = 20, StopToMakeRoom = true }]);
+        using var ctx = MakeContext(registry, new FakeModelRuntime());
+        var cut = ctx.Render<ModelEditor>(p => p.Add(x => x.Id, "qwen"));
+
+        Assert.True(cut.Find("[data-testid=field-start-on-request]").HasAttribute("checked"));
+        Assert.Equal("20", cut.Find("[data-testid=field-idle-stop-minutes]").GetAttribute("value"));
+        Assert.True(cut.Find("[data-testid=field-stop-to-make-room]").HasAttribute("checked"));
+
+        cut.Find("[data-testid=field-idle-stop-minutes]").Change("");
+        cut.Find("[data-testid=model-form]").Submit();
+
+        var saved = (await registry.GetAsync("qwen", Xunit.TestContext.Current.CancellationToken))!;
+        Assert.Equal((true, (int?)null, true), (saved.StartOnRequest, saved.IdleStopMinutes, saved.StopToMakeRoom));
+    }
+
+    [Fact]
+    public async Task AnIdleLimitBelowOneMinute_IsRefusedInTheForm()
+    {
+        var registry = new FakeModelRegistry([Saved]);
+        using var ctx = MakeContext(registry, new FakeModelRuntime());
+        var cut = ctx.Render<ModelEditor>(p => p.Add(x => x.Id, "qwen"));
+
+        cut.Find("[data-testid=field-idle-stop-minutes]").Change("0");
+        cut.Find("[data-testid=model-form]").Submit();
+
+        Assert.Contains("Enter 1 or more minutes", cut.Find("#field-idle-stop-minutes-error").TextContent, StringComparison.Ordinal);
+        Assert.Null((await registry.GetAsync("qwen", Xunit.TestContext.Current.CancellationToken))!.IdleStopMinutes);
+    }
+
+    [Fact]
     public async Task StoppedModel_JustSaves()
     {
         var registry = new FakeModelRegistry([Saved]);

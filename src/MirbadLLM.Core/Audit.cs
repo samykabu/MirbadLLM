@@ -44,6 +44,12 @@ public static class AuditActors
     /// <summary>System auto-start (boot or on-request).</summary>
     public const string SystemAutoStart = "system:autostart";
 
+    /// <summary>A model stopped after its idle limit (<see cref="ModelDefinition.IdleStopMinutes"/>).</summary>
+    public const string SystemIdleStop = "system:idle-stop";
+
+    /// <summary>A model stopped to make room for a start on request (<see cref="ModelDefinition.StopToMakeRoom"/>).</summary>
+    public const string SystemMakeRoom = "system:make-room";
+
     /// <summary>A restore job.</summary>
     public const string SystemRestore = "system:restore";
 
