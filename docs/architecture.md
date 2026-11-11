@@ -189,7 +189,7 @@ The container, memory, metrics and endpoint contracts in this section run on the
 - **Stop:** `POST /containers/{id}/stop?t=30` then `DELETE /containers/{id}`.
 - **Registry:** `{DataPath}/models.json`, atomic write (temp file + move), `SemaphoreSlim` guarded.
   Validate `Id` (`^[a-z0-9][a-z0-9-]{0,39}$`) and `ServedName` uniqueness; throw `ArgumentException`.
-  Seed on first run with one example definition, `ornith-9b-fp8`, stopped.
+  A new install starts with an empty registry.
 - **Memory probe:** parse `/proc/meminfo` `MemTotal` / `MemAvailable` (kB → GiB). On non-Linux dev
   boxes return a configurable fake (`MirbadLLM:DevMemoryTotalGiB`, default 121).
 - **Metrics reader:** scrape `GET upstream/metrics` (Prometheus text). Use

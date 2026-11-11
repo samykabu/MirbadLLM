@@ -66,13 +66,13 @@ public static class ModelFieldHelp
         What: "A stable slug for this model: lowercase letters, digits and hyphens, starting with a letter or digit, max 40 characters.",
         Why: "The controller names the container ss-{id} and uses {id} as the registry key. It can't be changed after " +
              "creation without deleting and re-adding the model.",
-        Example: "ornith-9b-fp8 — the seeded Phase 0 model's id; its container is named ss-ornith-9b-fp8.");
+        Example: "qwen-coder-7b, whose container is then named ss-qwen-coder-7b.");
 
     public static readonly FieldHelpText ServedName = new(
         What: "The name clients put in the OpenAI \"model\" field of a chat request.",
         Why: "The router matches incoming requests to an upstream by this exact name (case-insensitive), and it is " +
              "passed to the server so /v1/models advertises it too. Two models can't share one.",
-        Example: "Ornith-Uncensored-FP8 — what VS Code/Cline would put in its model picker to reach the seeded model.");
+        Example: "Qwen-Coder-7B, the name VS Code or Cline then shows in its model picker.");
 
     public static readonly FieldHelpText ModelPath = new(
         What: "The checkpoint's folder name, relative to the models root (bound read-only at /models in the container).",
@@ -242,7 +242,7 @@ public static class ModelFieldHelp
         What: "Start this model automatically when the controller process boots.",
         Why: "Without it, a model stays Stopped after a controller restart until someone starts it (or a request " +
              "arrives, if the model starts on request) — useful to avoid keeping every model resident by default.",
-        Example: "Enabled for the seeded ornith-9b-fp8 model, so it's ready right after the controller comes up.");
+        Example: "Enabled for the model your tools use all day, so it's ready right after the controller comes up.");
 
     // --- On demand ---
 

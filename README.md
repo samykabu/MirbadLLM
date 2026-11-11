@@ -264,13 +264,14 @@ sudo install -d /srv/mirbadllm/models /srv/mirbadllm/cache
 #   DOCKER_GID=<output of: stat -c %g /var/run/docker.sock>
 #   MIRBADLLM_VLLM_IMAGE=<a vLLM image available on this machine>
 #   MIRBADLLM_ADMIN_PASSWORD=<admin password for the UI>
+#   MIRBADLLM_NODE_ID=<a short name for this machine, for example tower>
 docker compose -f compose.release.yaml up -d
 ```
 
 Open `http://<host>:8080/`, sign in, and add a model on **Models**. The newest release runs unless
-`MIRBADLLM_VERSION` in `.env` names another, for example `1.2.0`. The compose file treats the machine as one
-unified memory pool, as on a DGX Spark. On a PC with discrete NVIDIA GPUs, join the PC as a node with the Linux agent
-installer instead, so admission works per GPU; the [setup guide](docs/setup.md) covers both.
+`MIRBADLLM_VERSION` in `.env` names another, for example `1.2.0`. The agent looks at the machine's GPUs: cards with
+their own VRAM get a memory budget each, and a machine whose GPU shares the system memory, such as a DGX Spark, is
+counted as one pool. The model list starts empty; the [setup guide](docs/setup.md) has the details.
 
 ### Build from source
 

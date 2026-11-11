@@ -61,7 +61,8 @@ services:
       MirbadLLM__Backup__Passphrase: ${MIRBADLLM_BACKUP_PASSPHRASE:-}
       # Names the backup files; inside the container the machine name is a random container id.
       MirbadLLM__Backup__HostName: ${MIRBADLLM_BACKUP_HOSTNAME:-dgx-spark}
-      MirbadLLM__Nodes__BootstrapNodeId: dgx
+      # The id of this machine's own node. Set it before the first start: a later change is a different node.
+      MirbadLLM__Nodes__BootstrapNodeId: ${MIRBADLLM_NODE_ID:-dgx}
       # Enrollment (design §3.2; plan §3.6 W4 notes). The CA stays in /data/pki: no MirbadLLM__Pki__* keys here (D63).
       MirbadLLM__Enrollment__Port: "8443"
       MirbadLLM__Enrollment__BootstrapEnabled: "true"
@@ -109,6 +110,12 @@ services:
       MIRBADLLM_AGENT_Agent__ModelsHostPath: ${MIRBADLLM_MODELS:-/srv/mirbadllm/models}
       MIRBADLLM_AGENT_Agent__CacheHostPath: ${MIRBADLLM_CACHE:-/srv/mirbadllm/cache}
       MIRBADLLM_AGENT_Agent__MemoryReserveGiB: ${MIRBADLLM_MEMORY_RESERVE_GIB:-8}
+      # The master's BootstrapNodeId above: the two must be the same id.
+      MIRBADLLM_AGENT_Agent__NodeId: ${MIRBADLLM_NODE_ID:-dgx}
+      # Empty: the agent looks at the GPUs. A card with its own VRAM gets per-GPU budgets (Discrete), a machine whose
+      # GPU shares the host's memory, or has none, is one pool (Unified). Set MIRBADLLM_MEMORY_MODEL=Unified to pin a
+      # unified machine such as a DGX Spark whatever nvidia-smi reports.
+      MIRBADLLM_AGENT_Agent__MemoryModel: ${MIRBADLLM_MEMORY_MODEL:-}
       # Equal to the master's MirbadLLM__VllmImage (W4 review MN-096): the download helper runs huggingface_hub from it.
       MIRBADLLM_AGENT_Agent__DownloadHelperImage: ${MIRBADLLM_VLLM_IMAGE:-local/qwen38-vllm-dflash2:66e5414c6d75}
     healthcheck:

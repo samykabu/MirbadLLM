@@ -280,6 +280,8 @@ public sealed class P2CompositionTests
         // Recovery mode is off and fleet recovery is composed but inactive; audit lines go to {DataPath}/audit.
         Assert.False(master.Services.GetRequiredService<MasterBoot>().IsRecovery);
         Assert.False(master.Services.GetRequiredService<MasterBoot>().RecoveryOptionStillSet);
+        // A new install starts with an empty model list, in a normal boot too.
+        Assert.Equal(ModelSeedPolicy.None, master.Services.GetRequiredService<IOptions<ModelRegistryOptions>>().Value.SeedPolicy);
         Assert.False(master.Services.GetRequiredService<FleetRecovery>().IsActive);
         Assert.NotEmpty(Directory.EnumerateFiles(Path.Combine(dataDir, AuditLogFiles.DirectoryName), "*.jsonl"));
 

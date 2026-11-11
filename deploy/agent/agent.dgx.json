@@ -1,5 +1,5 @@
 {
-  "//": "mirbadllm-agent on the DGX Spark (P1, topology a; MN-041). Baked into the agent image as /etc/mirbadllm-agent/agent.json. Paths are as the agent CONTAINER sees them, except *HostPath (bind sources Docker uses for model and download containers). deploy/compose.multinode.yaml overrides the host-specific values with MIRBADLLM_AGENT_Agent__* variables (ModelsHostPath, CacheHostPath, MemoryReserveGiB, DownloadHelperImage). Keeps today's controller settings 1:1 (plan §3.6 W4 notes). MemoryModel Unified (P2, D102): the GB10's admission, /status and capability flags stay P1 whatever nvidia-smi reports.",
+  "//": "mirbadllm-agent on the DGX Spark (P1, topology a; MN-041). Baked into the agent image as /etc/mirbadllm-agent/agent.json. Paths are as the agent CONTAINER sees them, except *HostPath (bind sources Docker uses for model and download containers). deploy/compose.multinode.yaml overrides the host-specific values with MIRBADLLM_AGENT_Agent__* variables (ModelsHostPath, CacheHostPath, MemoryReserveGiB, DownloadHelperImage). Keeps today's controller settings 1:1 (plan §3.6 W4 notes). No MemoryModel here: the agent looks at the GPUs (a card with its own VRAM makes the node Discrete, otherwise Unified), so the same image suits a DGX Spark and a PC with discrete cards. On the DGX the env file sets MIRBADLLM_MEMORY_MODEL=Unified (D102), so its admission, /status and capability flags stay P1 whatever nvidia-smi reports.",
   "Agent": {
     "NodeId": "dgx",
     "StateDirectory": "/var/lib/mirbadllm-agent",
@@ -13,7 +13,6 @@
     "UseContainerNetwork": true,
     "PortRangeStart": 8101,
     "MemoryReserveGiB": 8,
-    "MemoryModel": "Unified",
     "AllowTagPulls": true,
     "HostdSocket": "/run/mirbadllm-hostd/hostd.sock",
     "HostdExpected": true,

@@ -151,8 +151,8 @@ public sealed partial class AgentOptions
     /// <summary>
     /// Forces the node's memory model (<c>Unified</c> or <c>Discrete</c>; W9 review MN-132, D102). Null (default) = the GPU
     /// probe decides once at startup (<see cref="AgentMemoryModel"/>: discrete when a GPU reports its own VRAM). The DGX's
-    /// <c>agent.dgx.json</c> sets <c>Unified</c>, so its P1 admission, <c>/status</c> and feature list never depend on how
-    /// <c>nvidia-smi</c> reports the GB10's memory.
+    /// env file sets <c>Unified</c> (<c>MIRBADLLM_MEMORY_MODEL</c>, passed by the compose file), so its P1 admission,
+    /// <c>/status</c> and feature list never depend on how <c>nvidia-smi</c> reports the GB10's memory.
     /// </summary>
     public MemoryModel? MemoryModel { get; set; }
 

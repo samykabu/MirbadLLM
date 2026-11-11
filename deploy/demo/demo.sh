@@ -98,8 +98,6 @@ step "Starting the master"
     MirbadLLM__DevJoinTokens__OutputDirectory="$ROOT/join" \
     dotnet MirbadLLM.Web.dll ) >"$ROOT/logs/master.log" 2>&1 &
 wait_until 90 "the master" http GET /healthz
-# A new master seeds one model definition with a real model's name; the demo shows only its own fake ones.
-http DELETE /api/models/ornith-9b-fp8 >/dev/null 2>&1 || true
 
 step "Starting node demo-dgx (128 GiB unified memory)"
 start agent-demo-dgx "$AGENT" --config "$HERE/agent.demo-dgx.json"

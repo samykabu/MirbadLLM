@@ -71,6 +71,7 @@ To build the images yourself, see [Build from source](#build-from-source).
    | `MIRBADLLM_VLLM_IMAGE` | your vLLM image, for example `vllm/vllm-openai:<tag>` |
    | `MIRBADLLM_ADMIN_PASSWORD` | a password for the UI |
    | `MIRBADLLM_BACKUP_PASSPHRASE` | a passphrase for encrypted backups (keep a copy elsewhere) |
+   | `MIRBADLLM_NODE_ID` | a short name for this machine, for example `tower`: lower-case letters, digits and `-`. Set it before the first start, because a later change makes a different node. Left unset, the node is called `dgx` |
 
    `MIRBADLLM_VERSION` selects the release: `1.2.0` for that release, `1.2` for the newest 1.2.x. Left unset, it is
    `latest`, the newest release. The master and the agent always take the same value.
@@ -90,10 +91,10 @@ To build the images yourself, see [Build from source](#build-from-source).
 The installation is complete when the **Nodes** page shows the node as **Online** and the Overview shows its memory.
 `docker ps` lists two containers, `mirbadllm` (the master) and `mirbadllm-agent`.
 
-The agent image carries `deploy/agent/agent.dgx.json`, which treats the machine as one unified memory
-pool. That matches a DGX Spark and other unified-memory machines. On a PC with discrete GPUs, admission should count
-each GPU's VRAM: run only the master from this compose file and join the PC as a node with the Linux installer
-(below), or adjust `MemoryModel` in the agent configuration.
+The agent looks at the GPUs when it starts. Cards with their own VRAM get a memory budget each, so a model is admitted
+against the card it is placed on. A machine whose GPU shares the system memory, such as a DGX Spark, is counted as one
+pool. `MIRBADLLM_MEMORY_MODEL=Unified` or `Discrete` in `.env` pins the answer when `nvidia-smi` reports the memory in
+a way that misleads it. The model list starts empty: add your first model on **Models**.
 
 ### Build from source
 
