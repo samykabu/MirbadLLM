@@ -87,7 +87,7 @@ The UI is at `http://127.0.0.1:5080/`. Stop it with `tools/dev-multinode/stop.ps
 4. Run the build and the full suite locally.
 5. Open a pull request against `main` and fill in the template. Add a `## Release notes` section with `### Added`,
    `### Fixed` or `### Changed` entries when users will notice the change: the deploy job turns these sections into
-   the in-app release notes.
+   the in-app release notes, and a [release](#cutting-a-release) into the notes on its GitHub page.
 
 `main` is protected. A pull request needs a passing **Build and test** check and a maintainer's review before it is
 merged.
@@ -115,6 +115,90 @@ Variables**), all optional:
 | `DEPLOY_ENABLED` | `1` deploys `main` to the Linux runner's host after the tests pass |
 
 No secrets are needed beyond the automatic `GITHUB_TOKEN`.
+
+## Cutting a release
+
+A release is a tag `v<major>.<minor>.<patch>` on a commit of `main`. Pushing the tag starts
+[.github/workflows/release.yml](.github/workflows/release.yml) on the Linux runner. The workflow:
+
+1. Checks that the tagged commit is on `main`.
+2. Collects the release notes from the pull requests merged since the previous release.
+3. Builds the master, agent and demo images for linux/amd64 and linux/arm64 with
+   [deploy/release.sh](deploy/release.sh).
+4. Starts the demo image and waits until its fake fleet is up and reports the release's version.
+5. Pushes the three images to `ghcr.io/samykabu` as `mirbadllm`, `mirbadllm-agent` and `mirbadllm-demo`.
+6. Creates the GitHub Release with the notes and attaches `compose.release.yaml` and `env.example`, the two files
+   an installation downloads.
+
+Nothing is pushed before step 4 passes.
+
+### Versions and tags
+
+- The tag without its `v` is the version. Release `v1.2.0` pushes each image as `1.2.0`, `1.2` and `latest`.
+- A tag with a suffix, such as `v1.2.0-rc.1`, is a prerelease. Its images get the tag `1.2.0-rc.1` and no other:
+  `1.2` and `latest` do not move. The GitHub Release is marked as a prerelease.
+- The binaries report `<version>+<commit>`, for example `1.2.0+826bc75fc222`, and the sidebar shows `1.2.0 · 826bc75`.
+  The commit is still what identifies a build: the master compares it with each agent's and names the agent bundles
+  after it. A build that is not a release, such as the deploy of `main` or a local build, keeps reporting
+  `1.0.0+<commit>`.
+- Choose the number by what changes for an operator: patch for fixes, minor for new features, major when an upgrade
+  needs a manual step or an agent has to be updated before it works with the new master.
+
+### Steps
+
+1. Read what the release will contain: `git log --oneline <previous tag>..origin/main`. The notes are the
+   `## Release notes` sections of those pull requests, read when the workflow runs. To correct a note, edit the pull
+   request's description before you tag.
+2. Do a dry run: **Actions > release > Run workflow** on `main`, or `gh workflow run release.yml --ref main`. It
+   builds both architectures, tests the demo image and writes the notes to the run's summary. It pushes nothing and
+   creates no release.
+3. Tag the commit and push the tag:
+
+   ```bash
+   git switch main && git pull
+   git tag -a v1.2.0 -m "MirbadLLM 1.2.0"
+   git push origin v1.2.0
+   ```
+
+4. When the run has finished, check the result: the release page shows the notes and the two files, and
+   `docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/samykabu/mirbadllm-demo:1.2.0` starts the demo with `1.2.0` in
+   the sidebar.
+
+`CHANGELOG.md` is not part of a release. The workflow neither reads nor changes it.
+
+If the run fails for a reason outside the code, such as a missing tool on the runner or a registry error, fix the
+cause and run the failed job again from the run's page. A second run pushes the same tags again and replaces the
+release's notes and files, so notes edited by hand on the release page are lost. If the tagged commit itself is
+wrong and its images were pushed, leave the tag alone and release the fix as the next patch version. A tag whose
+images were never pushed can be deleted with `git push origin :v1.2.0`.
+
+### One-time setup
+
+The runner needs these tools, installed once on its host and available to the runner's user. The workflow checks for
+them first and stops with a message when one is missing.
+
+- Docker with the buildx plugin (`docker buildx version`).
+- `python3`.
+- The GitHub CLI, `gh`.
+
+The first run creates a BuildKit builder container named `mirbadllm-release`, which pulls the `moby/buildkit` image
+once. The builder is limited to 16 GiB of memory, like the CI build container, and is kept between runs for its
+cache. `docker buildx prune --builder mirbadllm-release` frees the cache's disk space.
+
+The repository owner does these by hand:
+
+- **Make the packages public, once, after the first release.** A new package on ghcr.io is private, and
+  `docker pull` then fails for everyone else. For each of `mirbadllm`, `mirbadllm-agent` and `mirbadllm-demo`: open
+  the package from the owner's **Packages** tab, then **Package settings > Change visibility > Public**. GitHub does
+  not let a public package become private again.
+- **Check the package's access if a later push is refused.** The first push links each package to this repository.
+  If a push fails with `denied`, open **Package settings > Manage Actions access** and give this repository the
+  **Write** role.
+- **Optional: restrict who can create `v*` tags** with a tag ruleset (**Settings > Rules > Rulesets**). Anyone who
+  can push a tag can publish a release.
+
+The workflow uses the job's own `GITHUB_TOKEN` with `contents: write`, `packages: write` and `pull-requests: read`.
+It logs the runner's Docker in to ghcr.io for the push and logs it out at the end of the job.
 
 ## Reporting bugs and asking for features
 

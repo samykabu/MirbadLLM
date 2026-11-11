@@ -106,8 +106,9 @@ jobs:
         run: dotnet artifacts/bin/MirbadLLM.UnitTests/debug/MirbadLLM.UnitTests.dll
 
   # Checks the packaging artifacts without building images or touching a container (seconds; no memory to speak of):
-  # script syntax, the multinode compose model, and the multinode deploy script's dry run. Images are built only by the
-  # deploy job (and locally), so a PR never competes with a model start for the host's memory.
+  # script syntax, the compose models, and the dry runs of the multinode deploy script and the release script. Images are
+  # built only by the deploy job, the release workflow (release.yml) and locally, so a PR never competes with a model
+  # start for the host's memory.
   deploy-artifacts:
     name: Deploy artifacts (lint)
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -116,13 +117,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Shell syntax
-        run: for f in deploy/ci-deploy.sh deploy/ci-deploy-multinode.sh deploy/hostd/install-hostd.sh deploy/agent/agent-update-helper.sh deploy/agent/linux/install-agent.sh deploy/agent/macos/install-agent.sh; do bash -n "$f"; done
+        run: for f in deploy/ci-deploy.sh deploy/ci-deploy-multinode.sh deploy/hostd/install-hostd.sh deploy/agent/agent-update-helper.sh deploy/agent/linux/install-agent.sh deploy/agent/macos/install-agent.sh deploy/release.sh deploy/demo/demo.sh; do bash -n "$f"; done
       - name: Compose model (multinode)
         run: DOCKER_GID=0 docker compose -f deploy/compose.multinode.yaml config -q
+      - name: Compose model (published images)
+        run: DOCKER_GID=0 docker compose -f deploy/compose.release.yaml config -q
       - name: Multinode deploy script (dry run)
         run: DRY_RUN=1 MIRBADLLM_ENV_FILE=/nonexistent bash deploy/ci-deploy-multinode.sh
       - name: Multinode deploy script, rename cut-over (dry run)
         run: DRY_RUN=1 MIRBADLLM_RENAME_CUTOVER=1 MIRBADLLM_ENV_FILE=/nonexistent bash deploy/ci-deploy-multinode.sh
+      - name: Release script (dry run)
+        run: DRY_RUN=1 VERSION=1.2.3 PUSH=1 bash deploy/release.sh
 
   # Deploys main to the Linux runner's host. Off unless the repository variable DEPLOY_ENABLED is 1, so a fork or a
   # new clone never tries to deploy anywhere.

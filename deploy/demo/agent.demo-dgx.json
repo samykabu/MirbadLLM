@@ -1,0 +1,29 @@
+{
+  "//": "The demo image's node demo-dgx (deploy/demo/demo.sh): the development fake runtime on loopback, no Docker and no GPU. Not a template for a real node; those are the agent.*.json files in deploy/agent.",
+  "Agent": {
+    "NodeId": "demo-dgx",
+    "StateDirectory": "/tmp/mirbadllm-demo/demo-dgx/state",
+    "ListenAddress": "127.0.0.1",
+    "Port": 9443,
+    "ModelsRoot": "/tmp/mirbadllm-demo/demo-dgx/models",
+    "ModelsHostPath": "/tmp/mirbadllm-demo/demo-dgx/models",
+    "CacheRoot": "/tmp/mirbadllm-demo/demo-dgx/cache",
+    "CacheHostPath": "/tmp/mirbadllm-demo/demo-dgx/cache",
+    "UseContainerNetwork": false,
+    "DockerStartupTimeout": "00:00:05",
+    "HostdSocket": "/tmp/mirbadllm-demo/demo-dgx/no-hostd.sock",
+    "HostdExpected": false,
+    "ManageSystemdUnits": false,
+    "ManageContainers": false,
+    "ManageBackupMount": false,
+    "AllowTagPulls": true,
+    "PortRangeStart": 18100,
+    "PortRangeEnd": 18149,
+    "ShutdownTimeout": "00:00:10",
+    "BootstrapDirectory": "/tmp/mirbadllm-demo/bootstrap",
+    "BootstrapWait": "00:02:00",
+    "Addresses": [ "127.0.0.1" ]
+  },
+  "DevFakeRuntime": { "Enabled": true, "Memory": "unified:128", "StartDelay": "00:00:02", "TokenDelay": "00:00:00.02" },
+  "Logging": { "LogLevel": { "Default": "Information", "Microsoft.AspNetCore": "Warning", "System.Net.Http.HttpClient": "Warning" } }
+}

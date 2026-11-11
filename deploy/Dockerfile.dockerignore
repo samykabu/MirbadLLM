@@ -1,6 +1,7 @@
 # Build context of deploy/Dockerfile (BuildKit reads <Dockerfile>.dockerignore): the master's sources, plus the agent's
 # sources and the Linux, Windows and macOS packaging files for the agent-bundles stage (the Windows README once it exists),
-# and the host agent's sources, which the macOS bundle carries (mirbadllm-hostd for launchd, Phase 4).
+# and the host agent's sources, which the macOS bundle carries (mirbadllm-hostd for launchd, Phase 4), and the demo
+# image's script and agent configurations (the "demo" target).
 **
 !global.json
 !Directory.Build.props
@@ -19,5 +20,6 @@
 !deploy/agent/agent.macos.example.json
 !deploy/agent/macos/**
 !deploy/release-notes.json
+!deploy/demo/**
 **/bin
 **/obj

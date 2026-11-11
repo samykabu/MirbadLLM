@@ -34,6 +34,9 @@ COPY src/MirbadLLM.Agent/ src/MirbadLLM.Agent/
 # The commit (ci-deploy-multinode.sh passes it): the agent reports 1.0.0+<commit>, as the bundles for other nodes do, and
 # the portal compares it with the master's. Declared after the restore, so a new commit keeps that layer cached.
 ARG SOURCE_REVISION=unknown
+# The release version (deploy/release.sh): MSBuild reads it from the environment as the Version property, as in
+# deploy/Dockerfile. Empty keeps 1.0.0.
+ARG Version=
 RUN set -eu; \
     case "${SOURCE_REVISION}" in *[!A-Za-z0-9._-]* | "") echo "SOURCE_REVISION must be letters, digits, '.', '_' or '-'" >&2; exit 1 ;; esac; \
     dotnet publish src/MirbadLLM.Agent/MirbadLLM.Agent.csproj -c Release -a "$(cat /tmp/arch)" --self-contained false \
