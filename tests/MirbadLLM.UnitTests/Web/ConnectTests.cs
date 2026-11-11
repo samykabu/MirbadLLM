@@ -155,6 +155,7 @@ public sealed class ConnectTests
     [Theory]
     [InlineData("vscode", "vscode-snippet", "Copy VS Code models configuration")]
     [InlineData("cline", "cline-snippet", "Copy Cline and Roo Code settings")]
+    [InlineData("ollama", "ollama-snippet", "Copy Ollama settings")]
     [InlineData("curl", "curl-snippet", "Copy curl command")]
     public void Snippet_RendersWbrAfterSeparators_ButCopySendsTheExactUnbrokenText(string tab, string snippetTestId, string copyButtonLabel)
     {
@@ -208,7 +209,7 @@ public sealed class ConnectTests
         var cut = RenderConnect(ctx);
 
         var tabs = cut.FindAll("[data-testid=client-tabs-list] [role=tab]");
-        Assert.Equal(["VS Code", "Cline / Roo Code", "Continue", "curl"], tabs.Select(t => t.QuerySelector(".tabs-tab-label")!.TextContent.Trim()));
+        Assert.Equal(["VS Code", "Cline / Roo Code", "Continue", "Ollama", "curl"], tabs.Select(t => t.QuerySelector(".tabs-tab-label")!.TextContent.Trim()));
         Assert.Equal("true", cut.Find("[data-testid=client-tabs-tab-vscode]").GetAttribute("aria-selected"));
         Assert.Equal("Client settings", cut.Find("[data-testid=client-tabs-list]").GetAttribute("aria-label"));
         Assert.Equal("tablist", cut.Find("[data-testid=client-tabs-list]").GetAttribute("role"));
@@ -252,6 +253,41 @@ public sealed class ConnectTests
 
         panel.QuerySelector($"button[aria-label='{copyButtonLabel}']")!.Click();
         Assert.Single(module.Invocations["copyText"]);
+    }
+
+    [Fact]
+    public void OllamaTab_GivesTheAddressWithoutV1_TheModel_AndTheOllamaHostVariable()
+    {
+        var (ctx, _) = MakeReadyContext();
+        using var __ = ctx;
+        ctx.Services.GetRequiredService<NavigationManager>().NavigateTo("connect?client=ollama");
+
+        var cut = RenderConnect(ctx);
+
+        Assert.Equal(
+            "Base URL: http://spark:8080\nAPI key: (not required)\nModel: Big-Model\nEnvironment: OLLAMA_HOST=http://spark:8080",
+            cut.Find("[data-testid=client-tabs-panel] [data-testid=ollama-snippet]").TextContent);
+        Assert.Contains("Choose the Ollama provider in your client.", cut.Find(".snippet-steps").TextContent, StringComparison.Ordinal);
+        string hint = cut.Find("[data-testid=ollama-hint]").TextContent;
+        Assert.Contains("Big-Model:latest", hint, StringComparison.Ordinal);
+        // Open now, and the page says what changes once a key is required.
+        Assert.NotNull(cut.Find("[data-testid=ollama-key-open]"));
+        Assert.Empty(cut.FindAll("[data-testid=ollama-key-required]"));
+    }
+
+    [Fact]
+    public void OllamaTab_WithAKeyRequired_ShowsTheHeader_AndSaysWhichClientsAreRefused()
+    {
+        var (ctx, _) = MakeReadyContext();
+        using var __ = ctx;
+        ctx.Services.AddSingleton(Options.Create(new AuthOptions { RequireApiKey = true }));
+        ctx.Services.GetRequiredService<NavigationManager>().NavigateTo("connect?client=ollama");
+
+        var cut = RenderConnect(ctx);
+
+        Assert.Contains("API key: Authorization: Bearer <your key>", cut.Find("[data-testid=ollama-snippet]").TextContent, StringComparison.Ordinal);
+        Assert.Contains("ollama command line", cut.Find("[data-testid=ollama-key-required]").TextContent, StringComparison.Ordinal);
+        Assert.Empty(cut.FindAll("[data-testid=ollama-key-open]"));
     }
 
     [Fact]
