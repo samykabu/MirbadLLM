@@ -114,8 +114,10 @@ CPU has not been measured for this project; benchmark the model on the node befo
 
 This path has not been run on an AMD or Intel graphics card. The GPU readings were compared with `nvidia-smi` on a PC
 with an RTX 5070 and an RTX 5060 Ti (same UUIDs, and free VRAM within 40 MiB), and the device selection was checked
-with the pinned Vulkan build's `--list-devices` on the same PC. Everything else is tested against fakes. It is off
-unless you pass `-Accelerator vulkan`. What it does:
+with the pinned Vulkan build's `--list-devices` on the same PC. On that PC an agent set to `vulkan` also started
+models through the Vulkan build on the card it was told to use, admitted them per GPU and swapped them on demand. That
+agent ran as an administrator's process, not as the installed service. It is off unless you pass `-Accelerator vulkan`.
+What it does:
 
 - **Requirements.** The Vulkan runtime that the graphics driver installs (`vulkan-1.dll` in `System32`). The script
   stops without it.

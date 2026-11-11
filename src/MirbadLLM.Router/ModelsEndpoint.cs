@@ -1,12 +1,14 @@
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using MirbadLLM.Core;
 
 namespace MirbadLLM.Router;
 
 /// <summary>
-/// <c>GET /v1/models</c>: OpenAI list shape containing only Ready models. In the P2 maintenance order (only node-scoped
+/// <c>GET /v1/models</c>: OpenAI list shape containing the Ready models, and the Stopped or Failed ones a request would
+/// start (start on request), so a client that offers a model picker can choose them. In the P2 maintenance order (only node-scoped
 /// windows open, design §6.5 item 2) it never answers 503: it lists the Ready models that are serving now, leaving out the
 /// ones a window pauses, as not-Ready models are left out. A global window is answered 503 by the gate in front of it.
 /// Besides the OpenAI fields each entry carries <c>max_model_len</c> (context per request) and <c>capabilities</c>
@@ -38,9 +40,12 @@ internal static class ModelsEndpoint
     /// <summary>
     /// The names clients can call now, in the order <c>GET /v1/models</c> lists them: every Ready model no maintenance
     /// window pauses, each followed by its "-nothink" name when it is offered. The Ollama list (<c>GET /api/tags</c>) reads
-    /// the same list, so the two never differ.
+    /// the same list, so the two never differ. A Stopped or Failed model that a request starts (the rule of
+    /// <c>ProxyHandler</c>: <see cref="MirbadLLMOptions.AutoStartOnRequest"/> or the model's own setting) is callable too
+    /// and is listed, unless <paramref name="loadedOnly"/> asks for the models in memory (<c>GET /api/ps</c>).
     /// </summary>
-    internal static async Task<IReadOnlyList<ServedModel>> ListServedAsync(IServiceProvider services, IModelEndpointResolver resolver, CancellationToken ct)
+    internal static async Task<IReadOnlyList<ServedModel>> ListServedAsync(
+        IServiceProvider services, IModelEndpointResolver resolver, CancellationToken ct, bool loadedOnly = false)
     {
         var endpoints = await resolver.ListAsync(ct);
         var registry = services.GetService<IModelRegistry>();
@@ -48,8 +53,12 @@ internal static class ModelsEndpoint
             services.GetService<IMaintenanceMode>(), RouterMaintenance.NodeScoped(services), registry, ct);
         var definitions = registry is null ? [] : (await registry.ListAsync(ct)).ToDictionary(m => m.Id, StringComparer.Ordinal);
         var served = endpoints.Select(e => e.ServedName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        bool startsAny = services.GetService<IOptions<MirbadLLMOptions>>()?.Value.AutoStartOnRequest == true;
+        bool Callable(ModelEndpoint e) => e.State == ModelState.Ready ||
+            (!loadedOnly && e.State is ModelState.Stopped or ModelState.Failed &&
+             (startsAny || definitions.GetValueOrDefault(e.ModelId)?.StartOnRequest == true));
         return endpoints
-            .Where(e => e.State == ModelState.Ready && paused?.Invoke(e.ModelId) != true)
+            .Where(e => Callable(e) && paused?.Invoke(e.ModelId) != true)
             .SelectMany(e =>
             {
                 var definition = definitions.GetValueOrDefault(e.ModelId);

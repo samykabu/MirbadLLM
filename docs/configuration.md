@@ -81,6 +81,8 @@ What to expect:
   these settings. Memory admission on the node is unchanged and decides every start.
 - On a node with discrete GPUs, only models placed on the GPU that is short of memory are stopped. A refusal about
   host RAM on such a node stops nothing.
+- A stopped model that a request starts stays in `/v1/models` and in Ollama's `/api/tags`, so a client with a model
+  picker can choose it. A stopped model without the setting is left out, as before.
 - A model stopped for being idle or to make room stays stopped after a node or master restart, like a model you
   stopped by hand. It starts again when a request names it (with start on request), when you start it, or at master
   boot if its **Start when the controller boots** switch is on.
@@ -113,15 +115,16 @@ behave as they do there.
 | `POST /api/chat` | Chat completion (`/v1/chat/completions`): messages, base64 `images`, `tools` and tool results, `think`, `format` |
 | `POST /api/generate` | The prompt, with `system` when given, as a chat completion; with `raw: true` a plain completion (`/v1/completions`) |
 | `POST /api/embed`, `POST /api/embeddings` | Embeddings (`/v1/embeddings`) |
-| `GET /api/tags` | The models `/v1/models` lists: the Ready ones |
-| `GET /api/ps` | The same models with their context length |
+| `GET /api/tags` | The models `/v1/models` lists: the Ready ones, and the stopped ones a request starts |
+| `GET /api/ps` | The Ready models with their context length |
 | `POST /api/show` | A model's capabilities (`completion`, `embedding`, `tools`, `vision`, `thinking`) and details |
 | `GET /api/version` | MirbadLLM's version |
 
 **API key.** The rule is the one of `/v1`: open until the first key exists (unless `MIRBADLLM_REQUIRE_API_KEY=true`),
 then `Authorization: Bearer <key>` with a key that has the **Inference** scope. A client that cannot send that header
 works only while no key is required. The `ollama` command line is such a client: `OLLAMA_HOST=http://<host>:8080`
-points it at the master, and it has no setting for a bearer key.
+points it at the master, and it has no setting for a bearer key. `ollama list`, `ollama ps`, `ollama show` and
+`ollama run` were checked with version 0.40.16.
 
 **Model names.** Clients send the served name, as on `/v1`. Ollama clients append `:latest` to a name without a tag,
 so `<served-name>:latest` is accepted when no model is served under that exact name and `<served-name>` is.
@@ -138,8 +141,10 @@ options (the context length is the model's own setting in MirbadLLM), `repeat_pe
 **Numbers.** `prompt_eval_count` and `eval_count` are the token counts the runtime reports. `total_duration` is
 measured on the master, from the request's arrival to the end of the answer. `prompt_eval_duration` and
 `eval_duration` are present only when the runtime's answer carries them (llama.cpp's `timings`); otherwise they are
-left out, and `load_duration` always is. The registry stores no file size, digest or modification time, so in
-`/api/tags` `size` is 0, `digest` is empty and `modified_at` is the zero time. `details` carries only what the
+left out, and `load_duration` always is. In `/api/ps` `expires_at` is a date far in the future, which `ollama ps`
+shows as "Forever": Ollama's keep-alive unloads nothing here. The registry stores no file size, digest or modification time, so in
+`/api/tags` `size` is 0 and `modified_at` is the zero time. `digest` is the SHA-256 of the served name, a stand-in:
+`ollama list` shortens the digest to 12 characters and fails on an empty one. `details` carries only what the
 registry holds: `gguf` as the format of a llama.cpp model, and the quantization when the model definition sets one.
 
 **Not offered.**
@@ -151,7 +156,8 @@ registry holds: `gguf` as the format of a llama.cpp model, and the quantization 
   model. With `MirbadLLM:AutoStartOnRequest`, the first chat or generate request starts it.
 - `suffix` (fill-in-the-middle) on `/api/generate` is refused with 400.
 - The root path serves the UI, so a client that checks it for Ollama's "Ollama is running" text does not find it,
-  and nothing listens on port 11434. A client that needs either one needs a reverse proxy in front.
+  and nothing listens on port 11434. A client that needs either one needs a reverse proxy in front. `HEAD /` is
+  answered with 200 and no key, because the `ollama` command line sends it before every command.
 
 Errors use Ollama's shape, `{"error": "<message>"}`, with the status code `/v1` would have answered.
 

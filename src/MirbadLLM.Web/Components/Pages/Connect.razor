@@ -82,6 +82,27 @@
             </p>
         }
     }
+    @if (_onRequest.Count > 0)
+    {
+        <div class="served-others">
+            <div class="section-head">
+                <h3>Start when a request names them · @_onRequest.Count</h3>
+                <a href="models">Manage on Models <Icon Name="chevron-right" /></a>
+            </div>
+            <ul class="panel served-list" data-testid="on-request-models">
+            @foreach (var model in _onRequest)
+            {
+                <li class="served-row" data-testid="@($"on-request-model-{model.ModelId}")">
+                    <div class="served-identity">
+                        <a class="served-name" href="@($"models/{Uri.EscapeDataString(model.ModelId)}/overview")">@model.ServedName</a>
+                        <span class="served-where">@model.Where</span>
+                    </div>
+                    <StateBadge State="model.State" TestId="@($"on-request-state-{model.ModelId}")" />
+                </li>
+            }
+            </ul>
+        </div>
+    }
     @if (_notReady.Count > 0)
     {
         <div class="served-others">
@@ -243,6 +264,7 @@
     private IReadOnlyDictionary<string, string> _colors = new Dictionary<string, string>();
     private List<ModelPlace> _ready = [];
     private List<ModelPlace> _notReady = [];
+    private List<ModelPlace> _onRequest = [];
     private string? _snippetModel;
     private IJSObjectReference? _module;
 
@@ -271,7 +293,9 @@
 
         var places = await ModelPlaces.LoadAsync(ServiceProvider, EndpointResolver);
         _ready = places.Where(p => p.IsReady).ToList();
-        _notReady = places.Where(p => !p.IsReady).ToList();
+        // A stopped model that a request starts is callable: clients see it in /v1/models.
+        _onRequest = places.Where(p => p.StartsOnRequest && p.State is ModelState.Stopped or ModelState.Failed).ToList();
+        _notReady = places.Where(p => !p.IsReady && !_onRequest.Contains(p)).ToList();
         _colors = ModelColors.Assign(places.Select(p => p.ModelId));
 
         // ?model= keeps the snippet model across a reload or a shared link; otherwise the first Ready model.

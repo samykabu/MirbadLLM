@@ -6,6 +6,8 @@ private development history.
 
 ## Unreleased
 
+- The `ollama` command line works against the master. `HEAD /` is answered, `ollama list` and `ollama ps` no longer crash on an empty digest, `ollama show <name>` finds the model, and `ollama ps` shows "Forever" where it showed "Stopping...". Checked with ollama 0.40.16
+- A stopped model that starts on request is listed in `/v1/models` and in Ollama's `/api/tags`, so a client with a model picker can choose it. Access > Connect lists it under "Start when a request names them"
 - Streamed answers no longer carry SGLang's `"reasoning_content": null` on every chunk, which GitHub Copilot appended to the model's reasoning as the text "null"
 - Benchmarks of a model tagged Reasoning end by asking the objective questions again with thinking on, and show what thinking costs: time to the answer, thinking time and tokens, and how many answers are right. Every other figure stays measured with thinking off; tuning candidates skip it
 - A model tagged Reasoning is also served as `<name>-nothink`, the same model with thinking switched off, so clients that can't send `chat_template_kwargs` (Copilot, Cline) can choose it by name. `/v1/models` lists it, and it takes no extra memory
