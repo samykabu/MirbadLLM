@@ -34,13 +34,24 @@
                  %ProgramData%\mirbadllm-agent.
 
     Operations that run alone (no verb) or with install:
-      -LlamaCpp [version]       The llama.cpp version pinned in llama-cpp.lock.json (only that one): refuses a driver
-                                below its minDriver and a PC without the Visual C++ 2015-2022 x64 runtime, downloads
-                                both assets by tag (or takes them from -LlamaCppSource), checks their SHA-256, unpacks
-                                both into one staging folder, requires exactly the lock file's files (hash and size,
-                                nothing missing, nothing extra), moves the folder to runtimes\llama.cpp\{tag}\
-                                (read-only for the service account), writes its manifest.json and the
-                                Agent:Executables entry in agent.json.
+      -LlamaCpp [version]       The llama.cpp version pinned in llama-cpp.lock.json (only that one), in the build
+                                -Accelerator names: refuses a PC without the Visual C++ 2015-2022 x64 runtime (and, for
+                                the CUDA build, a driver below minDriver), downloads the build's assets by tag (or takes
+                                them from -LlamaCppSource), checks their SHA-256, unpacks them into one staging folder,
+                                requires exactly the lock file's files (hash and size, nothing missing, nothing extra),
+                                moves the folder to runtimes\llama.cpp\{tag}\ (read-only for the service account),
+                                writes its manifest.json and the Agent:Executables entry in agent.json.
+      -Accelerator <auto|cuda|cpu|vulkan>
+                                Which build -LlamaCpp installs, written to agent.json as Agent:Accelerator (the agent
+                                reports it and the master places models by it). auto, the default: the CUDA build when
+                                an NVIDIA driver answers, else the CPU build, so a PC without an NVIDIA card joins as a
+                                CPU-only node. cpu: the CPU build also on a PC with an NVIDIA card (one too old for the
+                                CUDA build, for example). vulkan: the Vulkan build for AMD and Intel GPUs, experimental
+                                and not yet verified on AMD or Intel hardware; it needs the Vulkan runtime the GPU driver
+                                installs (vulkan-1.dll) and adds the service account to the local group Performance
+                                Monitor Users, because the agent reads each GPU's memory in use from the "GPU Adapter
+                                Memory" performance counters. One build per version folder: a run with another
+                                accelerator replaces the build of that version.
       -RemoveLlamaCpp <version> Removes an installed version; refused while a process runs from it or while it is the
                                 default of other installed versions.
       -ImportGguf <file> -Folder <name> [-Sha256 <hex>]
@@ -125,6 +136,9 @@ param(
     [switch] $NoStart,
 
     [switch] $LlamaCpp,
+
+    [ValidateSet('auto', 'cuda', 'cpu', 'vulkan')]
+    [string] $Accelerator = 'auto',
 
     [string] $LlamaCppSource,
 
@@ -392,13 +406,72 @@ function Get-NvidiaDriverVersion {
 
 function Test-NvidiaDriver([string] $MinDriver) {
     $versions = @(Get-NvidiaDriverVersion | Where-Object { $_ })
-    if ($versions.Count -eq 0) { throw 'No NVIDIA driver found (nvidia-smi.exe is missing or reports no GPU): llama.cpp needs an NVIDIA GPU with its driver.' }
+    if ($versions.Count -eq 0) { throw 'No NVIDIA driver found (nvidia-smi.exe is missing or reports no GPU): the CUDA build of llama.cpp needs an NVIDIA GPU with its driver. Leave out -Accelerator cuda to install the CPU build instead.' }
     foreach ($v in $versions) {
         $parsed = $null
         if (-not [version]::TryParse($v, [ref]$parsed)) { throw "Unreadable NVIDIA driver version '$v'." }
         if ($parsed -lt [version]$MinDriver) {
-            throw "NVIDIA driver $v is older than $MinDriver, the minimum for this llama.cpp build (CUDA runtime in llama-cpp.lock.json). Update the driver and re-run."
+            throw "NVIDIA driver $v is older than $MinDriver, the minimum for this llama.cpp build (CUDA runtime in llama-cpp.lock.json). Update the driver and re-run, or pass -Accelerator cpu to run models on the CPU of this PC."
         }
+    }
+}
+
+function Resolve-Accelerator([string] $Requested) {
+    # The llama.cpp build this PC gets. auto: CUDA when an NVIDIA driver answers, else the CPU build. Vulkan is
+    # experimental, so it is installed only when asked for.
+    if ($Requested -and $Requested -ne 'auto') { return $Requested }
+    if (@(Get-NvidiaDriverVersion | Where-Object { $_ }).Count -gt 0) { return 'cuda' }
+    return 'cpu'
+}
+
+function Test-VulkanRuntime {
+    # The Vulkan build links the system's Vulkan loader, which the GPU driver installs; the release zip has none.
+    return (Test-Path -LiteralPath (Join-Path $SystemDir 'vulkan-1.dll'))
+}
+
+function Test-AcceleratorHost($Lock, [string] $Resolved, [string] $Requested) {
+    # Fails before anything changes when the chosen build cannot run here, and says what was chosen and why.
+    switch ($Resolved) {
+        'cuda' { Test-NvidiaDriver $Lock.minDriver }
+        'cpu' {
+            if ($Requested -eq 'cpu') { Write-Step 'Installing the CPU build of llama.cpp (-Accelerator cpu): this node runs models on the CPU and counts their memory against host RAM.' }
+            else { Write-Step 'No NVIDIA driver found (nvidia-smi.exe is missing or reports no GPU): installing the CPU build of llama.cpp. This node runs models on the CPU and counts their memory against host RAM. With an NVIDIA card, install its driver and re-run; with an AMD or Intel GPU, -Accelerator vulkan installs the experimental Vulkan build.' }
+        }
+        'vulkan' {
+            if (-not (Test-VulkanRuntime)) {
+                throw "The Vulkan runtime is not installed: vulkan-1.dll is missing in $SystemDir. The Vulkan build of llama.cpp needs it. Install the current AMD or Intel graphics driver (it installs the Vulkan runtime) and re-run, or pass -Accelerator cpu."
+            }
+            Write-Alert 'The Vulkan build of llama.cpp (AMD and Intel GPUs) is experimental: it has not been verified on AMD or Intel hardware. Free VRAM is read from Windows performance counters; while it cannot be read the agent refuses to start a model on that GPU.'
+            if (@(Get-NvidiaDriverVersion | Where-Object { $_ }).Count -gt 0) {
+                Write-Alert 'An NVIDIA driver answers on this PC: the CUDA build (-Accelerator cuda, or no -Accelerator) is the supported path for an NVIDIA card.'
+            }
+        }
+    }
+}
+
+function Select-LlamaCppBuild($Lock, [string] $Resolved) {
+    # The lock file's build for an accelerator, in the lock file's own shape (version, assets, files): the top level is
+    # the CUDA build, every other build is an entry of "variants" at the same release tag.
+    if ($Resolved -eq 'cuda') { return $Lock }
+    $variant = @(Get-JsonProperty $Lock 'variants' | Where-Object { $_ -and $_.accelerator -eq $Resolved }) | Select-Object -First 1
+    if (-not $variant) { throw "llama-cpp.lock.json pins no $Resolved build of llama.cpp $($Lock.version)." }
+    return [pscustomobject][ordered]@{ version = $Lock.version; accelerator = $Resolved; assets = $variant.assets; files = $variant.files }
+}
+
+function Grant-PerformanceCounterAccess {
+    # A Vulkan node reads VRAM in use from the "GPU Adapter Memory" performance counters. Windows lets services read
+    # them only as SYSTEM, LOCAL SERVICE, NETWORK SERVICE, an administrator or a member of Performance Monitor Users
+    # (S-1-5-32-558; the ACL of HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Perflib), and the agent's virtual
+    # account is none of them.
+    $sid = Get-ServiceSid $ServiceName
+    if (-not $sid) {
+        Write-Alert "The service $ServiceName does not exist yet, so its account was not added to Performance Monitor Users. Run install first, then -LlamaCpp -Accelerator vulkan again."
+        return
+    }
+    $members = @(Get-LocalGroupMember -SID 'S-1-5-32-558' -ErrorAction SilentlyContinue | ForEach-Object { $_.SID.Value })
+    if ($members -contains $sid) { return }
+    Invoke-Change "Add $ServiceAccount to the local group Performance Monitor Users (GPU memory counters)" {
+        Add-LocalGroupMember -SID 'S-1-5-32-558' -Member $ServiceAccount
     }
 }
 
@@ -436,6 +509,28 @@ function Read-LlamaCppLock([string] $Path) {
         if (-not (Test-RelativePath $f.path)) { throw "$Path`: bad file path '$($f.path)'." }
         if ("$($f.sha256)" -notmatch '^[0-9a-f]{64}$' -or [long]$f.bytes -le 0) { throw "$Path`: file $($f.path) has no SHA-256 or size." }
         if (-not $seen.Add($f.path)) { throw "$Path`: file $($f.path) is listed twice." }
+    }
+    # The CPU and Vulkan builds of the same release: the same rules, per build.
+    $accelerators = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($v in @(Get-JsonProperty $lock 'variants' | Where-Object { $_ })) {
+        $name = "$(Get-JsonProperty $v 'accelerator')"
+        if ($name -notmatch '^(cpu|vulkan)$') { throw "$Path`: variant accelerator '$name' is not cpu or vulkan." }
+        if (-not $accelerators.Add($name)) { throw "$Path`: the $name variant is listed twice." }
+        $variantAssets = @(Get-JsonProperty $v 'assets')
+        if ($variantAssets.Count -eq 0) { throw "$Path`: the $name variant has no assets." }
+        foreach ($a in $variantAssets) {
+            $expected = "https://github.com/ggml-org/llama.cpp/releases/download/$version/$($a.name)"
+            if ($a.url -ne $expected) { throw "$Path`: asset $($a.name) must be downloaded by tag from $expected, not $($a.url)." }
+            if ("$($a.sha256)" -notmatch '^[0-9a-f]{64}$') { throw "$Path`: asset $($a.name) has no SHA-256." }
+        }
+        $variantFiles = @(Get-JsonProperty $v 'files')
+        if ($variantFiles.Count -eq 0) { throw "$Path`: the $name variant lists no files; every unpacked file must be pinned." }
+        $seenInVariant = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($f in $variantFiles) {
+            if (-not (Test-RelativePath $f.path)) { throw "$Path`: bad file path '$($f.path)' in the $name variant." }
+            if ("$($f.sha256)" -notmatch '^[0-9a-f]{64}$' -or [long]$f.bytes -le 0) { throw "$Path`: file $($f.path) of the $name variant has no SHA-256 or size." }
+            if (-not $seenInVariant.Add($f.path)) { throw "$Path`: file $($f.path) is listed twice in the $name variant." }
+        }
     }
     return $lock
 }
@@ -529,7 +624,7 @@ function New-ExecutableManifest($Lock) {
         schemaVersion = 1
         name = $ExecutableName
         version = $Lock.version
-        cuda = $Lock.cuda
+        cuda = Get-JsonProperty $Lock 'cuda'
         sources = @($Lock.assets | ForEach-Object { $_.name })
         files = $files
     }
@@ -554,7 +649,7 @@ function Register-LlamaCppExecutable($Lock, [string] $Target) {
     $versions = @(Get-JsonProperty $entry 'Versions' | Where-Object { $_ -and $_.Version -ne $Lock.version })
     $versions += [pscustomobject][ordered]@{
         Version = $Lock.version
-        Cuda = $Lock.cuda
+        Cuda = Get-JsonProperty $Lock 'cuda'
         Path = Join-Path $Target 'llama-server.exe'
         Manifest = Join-Path $Target 'manifest.json'
     }
@@ -564,29 +659,52 @@ function Register-LlamaCppExecutable($Lock, [string] $Target) {
         Set-JsonProperty $entry 'Default' $Lock.version
     }
     Set-JsonProperty $agent 'Executables' $executables
+    # Agent:Accelerator follows the build just registered: cpu or vulkan, and no entry at all for the CUDA build, so an
+    # NVIDIA node's agent.json is what it always was.
+    $accelerator = Get-JsonProperty $Lock 'accelerator'
+    if ($accelerator) { Set-JsonProperty $agent 'Accelerator' $accelerator }
+    elseif ($agent.PSObject.Properties['Accelerator']) { $agent.PSObject.Properties.Remove('Accelerator') }
     Write-JsonFile $ConfigPath $config
 }
 
-function Install-LlamaCpp([string] $Version, [string] $Source) {
-    $lock = Read-LlamaCppLock $LockPath
-    if ($Version -and $Version -ne $lock.version) {
-        throw "This installer pins llama.cpp $($lock.version) (llama-cpp.lock.json); $Version is not pinned."
+function Get-InstalledLlamaCppSources([string] $Target) {
+    # The asset names the installed version folder was unpacked from (its manifest.json); empty when unreadable.
+    $manifest = Join-Path $Target 'manifest.json'
+    if (-not (Test-Path -LiteralPath $manifest)) { return @() }
+    try { return @((Get-Content -Raw -LiteralPath $manifest | ConvertFrom-Json).sources | Where-Object { $_ }) } catch { return @() }
+}
+
+function Install-LlamaCpp([string] $Version, [string] $Source, [string] $Requested = 'auto') {
+    $pinned = Read-LlamaCppLock $LockPath
+    if ($Version -and $Version -ne $pinned.version) {
+        throw "This installer pins llama.cpp $($pinned.version) (llama-cpp.lock.json); $Version is not pinned."
     }
+    $resolved = Resolve-Accelerator $Requested
+    $lock = Select-LlamaCppBuild $pinned $resolved
     Test-VcRuntime
-    Test-NvidiaDriver $lock.minDriver
+    Test-AcceleratorHost $pinned $resolved $Requested
     $target = Join-Path $RuntimesDir $lock.version
 
     if (Test-Path -LiteralPath $target) {
         $intact = $true
-        try { Test-LlamaCppFiles $lock $target @('manifest.json') } catch { $intact = $false; Write-Alert "$target does not verify ($($_.Exception.Message)); installing it again." }
+        $installed = @(Get-InstalledLlamaCppSources $target)
+        $wanted = @($lock.assets | ForEach-Object { $_.name })
+        if ($installed.Count -gt 0 -and (($installed -join '|') -ne ($wanted -join '|'))) {
+            # Another build of the same version (the CUDA build on a PC that now runs on the CPU, for example).
+            $intact = $false
+            Write-Step "$target holds another build ($($installed -join ', ')); replacing it with the $resolved build."
+        } else {
+            try { Test-LlamaCppFiles $lock $target @('manifest.json') } catch { $intact = $false; Write-Alert "$target does not verify ($($_.Exception.Message)); installing it again." }
+        }
         if ($intact -and (Test-Path -LiteralPath (Join-Path $target 'manifest.json'))) {
-            Write-Step "llama.cpp $($lock.version) is installed and verified in $target"
+            Write-Step "llama.cpp $($lock.version) ($resolved build) is installed and verified in $target"
             Invoke-Change "Register llama.cpp $($lock.version) in $ConfigPath" { Register-LlamaCppExecutable $lock $target }
+            if ($resolved -eq 'vulkan') { Grant-PerformanceCounterAccess }
             return
         }
         $users = @(Get-ProcessesUnder $target)
         if ($users.Count -gt 0) { throw "$target is in use (process $($users[0].ProcessId)); stop its models first." }
-        Invoke-Change "Remove the damaged $target" { Remove-Item -LiteralPath $target -Recurse -Force }
+        Invoke-Change "Remove the previous $target" { Remove-Item -LiteralPath $target -Recurse -Force }
     }
 
     $work = Join-Path ([IO.Path]::GetTempPath()) ('mirbadllm-llama.cpp-' + [guid]::NewGuid().ToString('N'))
@@ -595,7 +713,7 @@ function Install-LlamaCpp([string] $Version, [string] $Source) {
     New-Item -ItemType Directory -Force -Path $work | Out-Null
     try {
         Save-LlamaCppAssets $lock $Source $work
-        Write-Step "Unpacking llama.cpp $($lock.version)"
+        Write-Step "Unpacking llama.cpp $($lock.version) ($resolved build)"
         Expand-LlamaCppAssets $lock $work $staging
         Test-LlamaCppFiles $lock $staging
         Write-Step "All $(@($lock.files).Count) files match llama-cpp.lock.json"
@@ -605,6 +723,7 @@ function Install-LlamaCpp([string] $Version, [string] $Source) {
             Set-PrivateAcl $target (Get-AccountReference) 'RX'
         }
         Invoke-Change "Register llama.cpp $($lock.version) in $ConfigPath" { Register-LlamaCppExecutable $lock $target }
+        if ($resolved -eq 'vulkan') { Grant-PerformanceCounterAccess }
     } finally {
         foreach ($p in @($staging, $work)) {
             if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
@@ -1314,9 +1433,13 @@ function Invoke-Install {
     Assert-JoinInput
     Test-HostWarnings
     if ($LlamaCpp) {
-        # Fail before anything changes when llama.cpp cannot run here.
+        # Fail before anything changes when the chosen llama.cpp build cannot run here.
         Test-VcRuntime
-        Test-NvidiaDriver (Read-LlamaCppLock $LockPath).minDriver
+        $pinned = Read-LlamaCppLock $LockPath
+        $resolved = Resolve-Accelerator $Accelerator
+        [void](Select-LlamaCppBuild $pinned $resolved)
+        if ($resolved -eq 'cuda') { Test-NvidiaDriver $pinned.minDriver }
+        elseif ($resolved -eq 'vulkan' -and -not (Test-VulkanRuntime)) { Test-AcceleratorHost $pinned $resolved $Accelerator }
     }
 
     $work = Join-Path ([IO.Path]::GetTempPath()) ('mirbadllm-agent-' + [guid]::NewGuid().ToString('N'))
@@ -1368,7 +1491,7 @@ function Invoke-Install {
     }
 
     # 5. llama.cpp, before the service starts, so its catalogue sees the version.
-    if ($LlamaCpp) { Install-LlamaCpp $LlamaCppVersion $LlamaCppSource }
+    if ($LlamaCpp) { Install-LlamaCpp $LlamaCppVersion $LlamaCppSource $Accelerator }
 
     # 6. Firewall, and the update helper for updates pushed from the master.
     Set-AgentFirewall
@@ -1432,6 +1555,12 @@ function Invoke-Uninstall {
     }
 
     Unregister-AgentEventSource
+    if ($serviceSid -and (@(Get-LocalGroupMember -SID 'S-1-5-32-558' -ErrorAction SilentlyContinue | ForEach-Object { $_.SID.Value }) -contains $serviceSid)) {
+        # A Vulkan node's account was added by -Accelerator vulkan; a removed account must not stay listed by its SID.
+        Invoke-Change "Remove $ServiceAccount from the local group Performance Monitor Users" {
+            Remove-LocalGroupMember -SID 'S-1-5-32-558' -Member $serviceSid -ErrorAction SilentlyContinue
+        }
+    }
     Invoke-Change "Remove the firewall rule and $InstallDir" {
         Get-NetFirewallRule -DisplayName $FirewallRule -ErrorAction SilentlyContinue | Remove-NetFirewallRule
         if (Test-Path -LiteralPath $InstallDir) { Remove-Item -Recurse -Force -LiteralPath $InstallDir }
@@ -1464,6 +1593,7 @@ if ($AllowServiceAutostart -and -not $AllowService) { throw '-AllowServiceAutost
 if ($action -eq 'install' -and ($RemoveLlamaCpp -or $ImportGguf)) { throw '-RemoveLlamaCpp and -ImportGguf run alone, without a verb.' }
 if ($ImportGguf -and -not $Folder) { throw '-ImportGguf needs -Folder <model folder name>.' }
 if ($LlamaCppSource -and -not $LlamaCpp) { throw '-LlamaCppSource needs -LlamaCpp.' }
+if ($BoundParameters.ContainsKey('Accelerator') -and -not $LlamaCpp) { throw '-Accelerator names the llama.cpp build to install, so it needs -LlamaCpp.' }
 # Here, above the verb: a node id the agent refuses must never reach agent.json, the service or an enrollment, and the
 # operator must read why instead of hunting a 1053 with an empty Application log (MN-239 C1).
 if ($BoundParameters.ContainsKey('NodeId')) { Assert-NodeId $NodeId }
@@ -1480,7 +1610,7 @@ try {
         'rekey' { Invoke-Rekey }
         'uninstall' { Invoke-Uninstall }
         'alone' {
-            if ($LlamaCpp) { Install-LlamaCpp $LlamaCppVersion $LlamaCppSource }
+            if ($LlamaCpp) { Install-LlamaCpp $LlamaCppVersion $LlamaCppSource $Accelerator }
             if ($RemoveLlamaCpp) { Remove-LlamaCpp $RemoveLlamaCpp }
             if ($ImportGguf) {
                 $root = $ModelsRoot
