@@ -1,0 +1,133 @@
+# Publish a release (CONTRIBUTING.md, "Cutting a release"). Pushing a tag v<major>.<minor>.<patch> builds the master, agent
+# and demo images for linux/amd64 and linux/arm64, tests the demo image, pushes all three to ghcr.io under the
+# repository owner and creates the GitHub Release with the notes of the pull requests merged since the previous release.
+# A manual run (workflow_dispatch) is the dry run: it builds and tests the same images and writes the notes to the job
+# summary, but pushes nothing and creates no release.
+#
+# Like every workflow here, it runs on the repository's own self-hosted Linux arm64 runner (label dgx-spark), never on a
+# GitHub-hosted runner. Runner prerequisites, installed once on the host, never per job: Docker with the buildx plugin,
+# python3 and the GitHub CLI (gh). deploy/release.sh creates a BuildKit builder container on its first run and keeps it.
+#
+# Security: a self-hosted runner must never run code from a fork. Only a tag push or a manual run in this repository
+# starts this workflow, and both need write access; the job still carries ci.yml's guard, so the rule holds for every
+# job of every workflow whatever triggers are added later.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One release at a time: two runs would share the builder and the image tags.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish the images
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, dgx-spark]
+    timeout-minutes: 60
+    # contents: write creates the GitHub Release, packages: write pushes to ghcr.io, pull-requests: read collects the
+    # release notes. Nothing else, and no secret beyond the job's own GITHUB_TOKEN.
+    permissions:
+      contents: write
+      packages: write
+      pull-requests: read
+    env:
+      # 1 for a tag push, 0 for a manual run (the dry run).
+      PUBLISH: ${{ github.event_name == 'push' && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Runner prerequisites
+        run: |
+          for tool in docker python3 gh; do
+            command -v "$tool" >/dev/null || { echo "::error::$tool is not installed on the runner (CONTRIBUTING.md, Cutting a release)."; exit 1; }
+          done
+          docker buildx version
+      # The version is the tag without its "v". A release is cut from main only: its notes are main's merged pull
+      # requests, and main's commits have passed the required checks.
+      - name: Version
+        id: version
+        run: |
+          if [ "$PUBLISH" = 1 ]; then
+            version="${GITHUB_REF_NAME#v}"
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::Tag $GITHUB_REF_NAME is not on main. Delete the tag and tag a commit of main."
+              exit 1
+            fi
+          else
+            version="0.0.0-dryrun"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      # Twice the same notes: deploy/release-notes.json, the whole history, goes into the master image for the UI's
+      # Releases page (as in ci.yml's deploy job); the Markdown file, only the pull requests merged since the previous
+      # release, becomes the body of the GitHub Release. A final release skips prerelease tags when it looks for the
+      # previous one, so 1.2.0 lists everything since 1.1.0 even after 1.2.0-rc.1. Never fails the release: without
+      # GitHub it writes empty notes and a warning.
+      - name: Release notes from the merged pull requests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          skip=(); case "$VERSION" in *-*) ;; *) skip=(--exclude 'v*-*') ;; esac
+          previous="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "${skip[@]}" "$GITHUB_SHA^" 2>/dev/null || true)"
+          git rev-list ${previous:+"$previous.."}"$GITHUB_SHA" > "$RUNNER_TEMP/release-commits"
+          python3 deploy/release-notes.py --repo "$GITHUB_REPOSITORY" --head "$GITHUB_SHA" --output deploy/release-notes.json \
+            --commits "$RUNNER_TEMP/release-commits" --markdown "$RUNNER_TEMP/release-notes.md"
+          images="ghcr.io/${OWNER,,}"
+          cat >> "$RUNNER_TEMP/release-notes.md" <<EOF
+
+          ### Install
+
+          Images for linux/amd64 and linux/arm64:
+
+          - \`$images/mirbadllm:$VERSION\`: the master
+          - \`$images/mirbadllm-agent:$VERSION\`: the node agent that runs next to it
+          - \`$images/mirbadllm-demo:$VERSION\`: a master with fake nodes and fake models, to look at the UI without a GPU
+
+          \`compose.release.yaml\` and \`env.example\` below start the master and its agent on one Linux machine with an NVIDIA GPU. The [setup guide]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/docs/setup.md) has the steps.
+          EOF
+          cat "$RUNNER_TEMP/release-notes.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Log in to ghcr.io
+        if: env.PUBLISH == '1'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      # Builds everything, starts the demo image and waits until it is healthy, and only then pushes (PUSH=1).
+      - name: Build the images, test the demo image, push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PUSH: ${{ env.PUBLISH }}
+          IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}
+          SOURCE_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: bash deploy/release.sh
+      # The runner is a long-lived machine: the job's token must not stay in its Docker configuration.
+      - name: Log out of ghcr.io
+        if: always() && env.PUBLISH == '1'
+        run: docker logout ghcr.io
+      # The compose file and the env example travel with the release, so an install needs no clone. A leading dot does
+      # not survive as an asset name, hence env.example. Running the workflow again for a tag replaces the notes.
+      - name: GitHub Release
+        if: env.PUBLISH == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cp deploy/.env.example "$RUNNER_TEMP/env.example"
+          flags=(--title "MirbadLLM $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md")
+          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" "${flags[@]}"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag "${flags[@]}"
+          fi
+          gh release upload "$GITHUB_REF_NAME" --clobber deploy/compose.release.yaml "$RUNNER_TEMP/env.example"

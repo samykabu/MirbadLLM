@@ -19,6 +19,14 @@ A PR body's "## Release notes" section is used as written:
 A PR without one is listed under the group its title implies (Fix... -> fixed; Add.../Phase... -> added; else changed).
 Only the standard library, so it runs on the runner as is. Without a token or network it writes an empty list and
 exits 0: the portal then says the notes are unavailable instead of failing the deploy.
+
+The release workflow (.github/workflows/release.yml) also asks for the body of the GitHub Release:
+
+    ... --commits <file of commit ids, one per line> --markdown release-notes.md
+
+--markdown writes the notes as Markdown, newest PR first, grouped as above; --commits keeps only the PRs merged as one
+of those commits (the commits since the previous release). --entries reads the entries from a release-notes.json
+written earlier instead of asking GitHub.
 """
 
 import argparse
@@ -104,17 +112,33 @@ def entry(pr):
             "url": pr.get("html_url"), **notes}
 
 
+def render_markdown(entries):
+    """The body of a GitHub Release: one list per group, newest PR first, each bullet with its PR number."""
+    lines = []
+    for group in GROUPS:
+        bullets = [f"- {bullet} (#{e['number']})" for e in reversed(entries) for bullet in e[group]]
+        if bullets:
+            lines += [f"### {group.capitalize()}", "", *bullets, ""]
+    return "\n".join(lines) if lines else "No release notes were collected for this release.\n"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--head", default="")
     parser.add_argument("--output", required=True)
     parser.add_argument("--limit", type=int, default=300)
+    parser.add_argument("--entries", help="read the entries from this release-notes.json instead of GitHub")
+    parser.add_argument("--commits", help="for --markdown: a file of commit ids; only PRs merged as one of them are listed")
+    parser.add_argument("--markdown", help="also write the notes as Markdown to this file")
     args = parser.parse_args()
 
     entries, error = [], None
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if not token:
+    if args.entries:
+        with open(args.entries, encoding="utf-8") as f:
+            entries = json.load(f)["entries"]
+    elif not token:
         error = "no GITHUB_TOKEN"
     else:
         try:
@@ -127,6 +151,14 @@ def main():
     with open(args.output, "w", encoding="utf-8", newline="\n") as f:
         json.dump(document, f, ensure_ascii=False, indent=1)
         f.write("\n")
+    if args.markdown:
+        released = entries
+        if args.commits:
+            with open(args.commits, encoding="utf-8") as f:
+                commits = set(f.read().split())
+            released = [e for e in entries if e["commit"] in commits]
+        with open(args.markdown, "w", encoding="utf-8", newline="\n") as f:
+            f.write(render_markdown(released))
     if error:
         print(f"::warning::release notes unavailable ({error}); the portal shows none for this build", file=sys.stderr)
     else:
