@@ -95,7 +95,7 @@ nodes and placement) and `docs/multinode/operations-p3p4.md` (Windows and Mac no
 |---|---|---|
 | `src/MirbadLLM.Core` | Contracts only: `ModelDefinition`, `ModelStatus`, `ModelEndpoint`, `MemorySnapshot`, `ModelMetrics`, `RouterModelStats`, the interfaces in `Abstractions.cs`, `MirbadLLMOptions`. Shared by every project, so changes here are reviewed with extra care. | — |
 | `src/MirbadLLM.Orchestration` | Master side: runtime argument builders, JSON registry, health monitor, metrics history, jobs, backups, the node registry and monitor, agent client, `RemoteModelRuntime`, `RemoteTelemetryCollector`, remote probes/storage/host services, certificate rotation, fencing, `AddMirbadLLMOrchestration`. | Core, Agent.Contracts, Pki, NodeRuntime |
-| `src/MirbadLLM.Router` | `/v1/*` proxy through the agents (`AgentEndpointResolver`), `/v1/models`, API-key check, `IRouterStats`, `AddMirbadLLMRouter` / `MapMirbadLLMRouter`. | Core, Agent.Contracts |
+| `src/MirbadLLM.Router` | `/v1/*` proxy through the agents (`AgentEndpointResolver`), `/v1/models`, the Ollama-compatible routes under `/api` (`OllamaApi`), API-key check, `IRouterStats`, `AddMirbadLLMRouter` / `MapMirbadLLMRouter`. | Core, Agent.Contracts |
 | `src/MirbadLLM.Web` | `Program.cs` composition (the master), `/api/*` admin endpoints, Blazor pages, the enroll listener. | all |
 | `src/MirbadLLM.Agent` | The node agent `mirbadllm-agent`. | Core, Agent.Contracts, NodeRuntime, Pki |
 | `src/MirbadLLM.Agent.Contracts` | Master ↔ agent protocol: routes, envelopes, events, error codes, feature flags. | Core |
@@ -216,6 +216,23 @@ The container, memory, metrics and endpoint contracts in this section run on the
   No upstream timeout (long generations); connect timeout 10 s.
 - `ApiKey` set → require `Authorization: Bearer {key}` on `/v1/*`, else 401 in OpenAI error shape.
 - `IRouterStats`: total, failed (non-2xx or exception), in-flight per served name; thread-safe.
+- Ollama-compatible routes (`OllamaApi`, mapped by `MapMirbadLLMRouter`): exact paths under `/api`, next to the admin
+  API and anonymous to the admin login like `/v1`, behind the same maintenance gate and API-key filter (same key, same
+  scope). No catch-all is mapped, so no admin route is shadowed.
+  - `POST /api/chat`, `/api/generate`, `/api/embed`, `/api/embeddings`: `ProxyHandler` reads the body (64 MiB limit,
+    upload budget), `OllamaRequestTranslator` turns it into the `/v1/chat/completions`, `/v1/completions` (`raw`) or
+    `/v1/embeddings` body, and the request continues on the `/v1` path above. `name:latest` means `name` when
+    `name:latest` itself is not served and `name` is.
+  - The answer is translated on its way out (`OllamaResponseTranslator`): an event stream becomes
+    `application/x-ndjson` line by line, ending with a `done: true` object; a single answer becomes one object.
+    Token counts and durations are the upstream's or measured at the router, and left out when there is no source.
+  - Every error written on the way (401, 503 maintenance, router and upstream errors) leaves as
+    `{"error":"<message>"}` with its status code and `Retry-After`. A failure after the first streamed line aborts
+    the connection, as on `/v1`.
+  - `GET /api/tags` and `GET /api/ps` read the list `GET /v1/models` reads; `POST /api/show` describes one model;
+    `GET /api/version` is this build's version. `/api/pull`, `/api/push`, `/api/create`, `/api/copy` and `/api/delete`
+    answer 501.
+  - In recovery mode the host gate answers every `/api` path, these included, with its own 503 `recovery_mode` body.
 
 ### Web (admin API + UI)
 
