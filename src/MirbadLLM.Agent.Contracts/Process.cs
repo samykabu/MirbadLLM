@@ -37,6 +37,14 @@ public static class ProcessEnvironment
     /// <summary>The placed GPU UUIDs, comma-separated, in placement order (CUDA renumbers them from 0).</summary>
     public const string CudaVisibleDevices = "CUDA_VISIBLE_DEVICES";
 
+    /// <summary>
+    /// On a Vulkan node (<c>Agent:Accelerator = vulkan</c>): the placed GPUs as Vulkan enumeration indices, comma-separated,
+    /// in placement order; llama.cpp's Vulkan backend then names them <c>Vulkan0</c>, <c>Vulkan1</c>, … in that order. Empty
+    /// = no Vulkan device (the model runs on the CPU). Not in <see cref="Reserved"/> (the frozen P3 list): the driver sets
+    /// it after the spec's own variables, so a spec cannot override it.
+    /// </summary>
+    public const string VulkanVisibleDevices = "GGML_VK_VISIBLE_DEVICES";
+
     /// <summary>CUDA JIT cache in the agent's cache root (<c>{cache}/cuda</c>), not in the service account's profile.</summary>
     public const string CudaCachePath = "CUDA_CACHE_PATH";
 

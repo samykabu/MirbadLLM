@@ -673,6 +673,83 @@ public sealed class NodesPageFullTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ACpuOnlyNode_IsShownAsCpuOnlyWithHostRam_AndNoGpuFigureIsInvented()
+    {
+        // Agent:Accelerator = cpu: unified admission against host RAM, no GPU. Nothing may read as a GPU value.
+        Setup();
+        await Nodes.UpsertAsync(Approved("cpu-1"));
+        var caps = PcCaps() with { Accelerator = NodeAccelerators.Cpu, Memory = new NodeMemoryInfo(MemoryModel.Unified, 32), Gpus = [] };
+        var memory = new NodeMemorySnapshot { Model = MemoryModel.Unified, HostTotalGiB = 32, HostAvailableGiB = 20 };
+        _cache.Set(Live("cpu-1", NodeState.Online) with { Capabilities = caps, Memory = memory });
+
+        var list = RenderList();
+        Assert.Contains("Host RAM, CPU only", list.Markup, StringComparison.Ordinal);
+        Assert.DoesNotContain("Unified memory", list.Find("[data-testid=nodes-ring-cpu-1]").ParentElement!.TextContent, StringComparison.Ordinal);
+
+        Navigate("nodes/cpu-1?tab=gpus");
+        var detail = RenderDetail("cpu-1");
+        Assert.Equal("This node has no supported GPU. Its models run on the CPU and use host RAM.", detail.Find("[data-testid=node-gpus-empty]").TextContent.Trim());
+        Assert.Empty(detail.FindAll("[data-testid=node-gpus-table]"));
+
+        Assert.Equal("None (CPU only)", MirbadLLM.Web.Components.Pages.Nodes.GpuText(caps));
+        Assert.Equal("None", MirbadLLM.Web.Components.Pages.Nodes.GpuText(caps with { Accelerator = null }));
+        Assert.Equal(
+            "CPU only · 32.0 GiB RAM",
+            MirbadLLM.Web.Components.Pages.Nodes.MemoryModelText(new MirbadLLM.Web.Components.Pages.Nodes.NodeRow { Id = "cpu-1", Name = "cpu-1", State = NodeState.Online, Capabilities = caps, Memory = memory }));
+    }
+
+    [Fact]
+    public async Task AVulkanNode_IsMarkedExperimental_AndAGpuWithoutAMemoryReadingShowsADash()
+    {
+        // Agent:Accelerator = vulkan: VRAM total from the driver, VRAM in use from the operating system. GPU 1's memory in
+        // use could not be read, and nothing reads utilization: each of those is a dash, never a number.
+        Setup();
+        await Nodes.UpsertAsync(Approved("amd-1"));
+        var caps = PcCaps() with
+        {
+            Accelerator = NodeAccelerators.Vulkan,
+            Gpus =
+            [
+                new GpuCapability { Index = 0, Uuid = "GPU-a", Name = "AMD Radeon RX 7800 XT", MemoryTotalGiB = 16 },
+                new GpuCapability { Index = 1, Uuid = "GPU-b", Name = "Intel(R) Arc(TM) A770", MemoryTotalGiB = 16 },
+            ],
+        };
+        var memory = new NodeMemorySnapshot
+        {
+            Model = MemoryModel.Discrete,
+            HostTotalGiB = 64,
+            HostAvailableGiB = 40,
+            Gpus = [new GpuMemorySnapshot(0, "GPU-a", 16, 4, 12), new GpuMemorySnapshot(1, "GPU-b", 16, null, null)],
+        };
+        _cache.Set(Live("amd-1", NodeState.Online) with { Capabilities = caps, Memory = memory });
+        Navigate("nodes/amd-1?tab=gpus");
+
+        var detail = RenderDetail("amd-1");
+
+        string note = detail.Find("[data-testid=node-gpus-vulkan]").TextContent;
+        Assert.Contains("Vulkan (experimental): not yet verified on AMD or Intel hardware.", note, StringComparison.Ordinal);
+        Assert.Contains("A start is refused while a GPU's free VRAM cannot be read.", note, StringComparison.Ordinal);
+
+        var known = detail.Find("[data-testid=node-gpu-0]");
+        Assert.Equal("16.0 GiB", known.QuerySelector("[data-label='VRAM total']")!.TextContent.Trim());
+        Assert.Equal("4.0 GiB", known.QuerySelector("[data-label=Used]")!.TextContent.Trim());
+        Assert.Equal("12.0 GiB", known.QuerySelector("[data-label=Free]")!.TextContent.Trim());
+        Assert.Equal("—", Text(detail, "node-gpu-0-util"));
+
+        var unread = detail.Find("[data-testid=node-gpu-1]");
+        Assert.Equal("16.0 GiB", unread.QuerySelector("[data-label='VRAM total']")!.TextContent.Trim());
+        Assert.Equal("—", unread.QuerySelector("[data-label=Used]")!.TextContent.Trim());
+        Assert.Equal("—", unread.QuerySelector("[data-label=Free]")!.TextContent.Trim());
+        Assert.Equal("—", Text(detail, "node-gpu-1-util"));
+
+        Assert.Equal(
+            "1 × AMD Radeon RX 7800 XT 16.0 GiB, 1 × Intel(R) Arc(TM) A770 16.0 GiB (Vulkan, experimental)",
+            MirbadLLM.Web.Components.Pages.Nodes.GpuText(caps));
+        // An NVIDIA node shows no such note.
+        Assert.Equal("2 × NVIDIA GeForce RTX 4060 Ti 16.0 GiB", MirbadLLM.Web.Components.Pages.Nodes.GpuText(PcCaps()));
+    }
+
+    [Fact]
     public async Task Detail_GpusTab_OnAMacWithoutTelemetryYet_SaysItHasNoGpuReading()
     {
         Setup();

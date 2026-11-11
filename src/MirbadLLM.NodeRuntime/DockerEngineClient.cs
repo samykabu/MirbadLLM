@@ -77,6 +77,11 @@ public sealed record CreateJobContainerRequest(
 /// GPUs by UUID (MN-106): the NVIDIA device request names exactly these (<c>DeviceIDs</c>, <c>Count</c> 0). Null = every
 /// GPU (<c>Count</c> -1), exactly the P1 body.
 /// </param>
+/// <param name="DevicePaths">
+/// Null = the NVIDIA device request above, exactly as before. Not null = a node without the NVIDIA runtime: the body has
+/// no <c>DeviceRequests</c> at all and maps each path as a device node (<c>HostConfig.Devices</c>, same path inside,
+/// <c>rwm</c>). An empty list is a CPU-only container; a Vulkan node passes the selected GPUs' DRM render nodes.
+/// </param>
 public sealed record CreateContainerRequest(
     string Name,
     string Image,
@@ -90,7 +95,8 @@ public sealed record CreateContainerRequest(
     string NetworkAlias,
     string IpcMode,
     IReadOnlyList<string>? Env = null,
-    IReadOnlyList<string>? GpuDeviceIds = null)
+    IReadOnlyList<string>? GpuDeviceIds = null,
+    IReadOnlyList<string>? DevicePaths = null)
 {
     /// <summary>Everything but the environment values, which may be secrets.</summary>
     public override string ToString() =>
@@ -212,12 +218,17 @@ public sealed class DockerEngineClient(HttpClient httpClient)
                 // found no memory left for its KV cache. A model that should come back after a reboot sets AutoStart.
                 RestartPolicy = new RestartPolicyBody { Name = "no" },
                 IpcMode = request.IpcMode,
-                DeviceRequests =
-                [
-                    request.GpuDeviceIds is { Count: > 0 } devices
-                        ? new DeviceRequestBody { Driver = "nvidia", Count = 0, DeviceIds = devices, Capabilities = [["gpu"]] }
-                        : new DeviceRequestBody { Driver = "nvidia", Count = -1, Capabilities = [["gpu"]] },
-                ],
+                DeviceRequests = request.DevicePaths is not null
+                    ? null
+                    :
+                    [
+                        request.GpuDeviceIds is { Count: > 0 } devices
+                            ? new DeviceRequestBody { Driver = "nvidia", Count = 0, DeviceIds = devices, Capabilities = [["gpu"]] }
+                            : new DeviceRequestBody { Driver = "nvidia", Count = -1, Capabilities = [["gpu"]] },
+                    ],
+                Devices = request.DevicePaths is { Count: > 0 } paths
+                    ? [.. paths.Select(p => new DeviceMappingBody { PathOnHost = p, PathInContainer = p, CgroupPermissions = "rwm" })]
+                    : null,
             },
             NetworkingConfig = new NetworkingConfigBody
             {
@@ -583,8 +594,27 @@ public sealed class DockerEngineClient(HttpClient httpClient)
         [JsonPropertyName("IpcMode")]
         public required string IpcMode { get; set; }
 
+        /// <summary>The NVIDIA device request; omitted when null (a CPU-only or Vulkan node), so an NVIDIA body is unchanged.</summary>
         [JsonPropertyName("DeviceRequests")]
-        public required IReadOnlyList<DeviceRequestBody> DeviceRequests { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public required IReadOnlyList<DeviceRequestBody>? DeviceRequests { get; set; }
+
+        /// <summary>Device nodes mapped into the container (a Vulkan node's DRM render nodes); omitted when null.</summary>
+        [JsonPropertyName("Devices")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyList<DeviceMappingBody>? Devices { get; set; }
+    }
+
+    private sealed class DeviceMappingBody
+    {
+        [JsonPropertyName("PathOnHost")]
+        public required string PathOnHost { get; set; }
+
+        [JsonPropertyName("PathInContainer")]
+        public required string PathInContainer { get; set; }
+
+        [JsonPropertyName("CgroupPermissions")]
+        public required string CgroupPermissions { get; set; }
     }
 
     private sealed class PortBindingBody

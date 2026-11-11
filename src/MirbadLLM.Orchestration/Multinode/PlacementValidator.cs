@@ -431,6 +431,17 @@ public sealed partial class PlacementValidator : IModelDefinitionValidator
                 $"'{AgentFeatures.GpuSelectionUuids}' feature); upgrade the agent."));
         }
 
+        // A Vulkan node gives a container one GPU: its agent passes the card's render node and cannot fix the order in
+        // which the container lists several cards, so a split could put each share on the wrong one. A native process
+        // (Windows) selects its devices by index, in order, and may take several.
+        if (NodeAccelerators.IsVulkan(capabilities) && Delivery(model) == LaunchDelivery.Container && distinct.Count > 1)
+        {
+            problems.Add(new PlacementProblem(
+                PlacementProblemCodes.RuntimeUnavailable,
+                $"Node '{node.Id}' runs llama.cpp containers through Vulkan (experimental), one GPU per model; " +
+                $"{distinct.Count.ToString(CultureInfo.InvariantCulture)} are selected. Select a single GPU."));
+        }
+
         // The saved identity is the UUID; indices are a display aid, refreshed from the last report (§5.1).
         return selected.Count == uuids.Count
             ? placement with { GpuUuids = [.. uuids], GpuIndices = [.. selected.Select(g => g.Index)] }

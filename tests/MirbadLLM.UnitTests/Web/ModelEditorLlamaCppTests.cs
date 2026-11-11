@@ -120,6 +120,36 @@ public sealed class ModelEditorLlamaCppTests
     }
 
     [Fact]
+    public void ACpuOnlyPc_TakesALlamaCppModelWithoutAGpuChoice_AndSaysGpuLayersDoNotApply()
+    {
+        // Agent:Accelerator = cpu: unified memory, no GPU. The wizard must not ask for a GPU, and must not present GPU
+        // settings as if they did something there.
+        string root = Path.Combine(Path.GetTempPath(), "mirbad-cpu-one-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            using var ctx = new BunitContext();
+            OneNode(ctx, root, WindowsPc() with { Accelerator = NodeAccelerators.Cpu, Memory = new NodeMemoryInfo(MemoryModel.Unified, 32), Gpus = [] });
+
+            var cut = ctx.Render<ModelEditor>(p => Quiet(p));
+            cut.WaitForElement("[data-testid=model-form]", Wait);
+            cut.WaitForAssertion(() => Assert.NotNull(cut.Find("[data-testid=placement-runtime-llamacpp]")), Wait);
+            cut.ChangeAt("[data-testid=placement-runtime-llamacpp]", "llamacpp");
+            cut.WaitForAssertion(() => Assert.NotNull(cut.Find("[data-testid=llamacpp-section]")), Wait);
+
+            Assert.Empty(cut.FindAll("[data-testid=single-node-gpus]"));
+            Assert.DoesNotContain("Choose at least one GPU.", cut.Markup, StringComparison.Ordinal);
+            Assert.Equal(
+                "This node has no GPU: llama.cpp ignores this setting and keeps every layer in host RAM.",
+                cut.Find("[data-testid=field-llama-gpu-layers-cpu]").TextContent.Trim());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task FleetOfOneWithDiscreteGpus_ChoosesGpus_AndSavesThemOnAnExistingModel()
     {
         string root = Path.Combine(Path.GetTempPath(), "ss-one-discrete-" + Guid.NewGuid().ToString("N"));

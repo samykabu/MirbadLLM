@@ -119,6 +119,13 @@
                            Candidates="NodeFit(discrete.Id)" Node="@discrete.Id" Disabled="MoveActive" TestId="placement-gpus"
                            AllowUnequal="IsLlamaCpp" Runtime="Runtime" Budgets="GpuBudgets" BudgetsChanged="GpuBudgetsChanged"
                            TotalBudgetGiB="MemoryBudgetGiB" TensorSplit="@TensorSplit" />
+                @if (discrete.Vulkan)
+                {
+                    <div class="field-hint" data-testid="placement-gpus-vulkan">
+                        @discrete.Id runs llama.cpp through Vulkan (experimental, not yet verified on AMD or Intel hardware). Free VRAM is
+                        total minus the memory in use the operating system reports; while that cannot be read, a start on the GPU is refused.
+                    </div>
+                }
             </div>
         }
 
