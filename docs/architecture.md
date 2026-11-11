@@ -63,6 +63,18 @@ models. It runs as a container on the DGX Spark, a systemd service on a Linux PC
   emulates `dimensions` for llama.cpp embedding models. Restart-pending for a process model compares execution
   fingerprints.
 
+**Accelerators.** `Agent:Accelerator`, written by the installers, says what runs the weights on a PC node, and the
+agent reports it as `accelerator` in its capabilities. Unset (or `cuda`) is an NVIDIA node and changes nothing.
+`cpu` is a node without a usable GPU: unified memory, no GPU listed, llama.cpp only (the CPU build on Windows, a
+container created without a GPU request on Linux), and the whole budget admitted against host RAM. `vulkan`
+(experimental, not yet verified on AMD or Intel hardware) is a node whose AMD or Intel GPUs run llama.cpp's Vulkan
+build: discrete memory, with each GPU's identity, VRAM total and system-wide VRAM in use read without `nvidia-smi`
+(`AdapterGpus`: the Vulkan loader and the "GPU Adapter Memory" performance counters on Windows, the `amdgpu` sysfs
+counters on Linux). A `cpu` or `vulkan` node never runs `nvidia-smi`, lists no vLLM, SGLang or NIM runtime, and
+downloads with the agent's own downloader. Free VRAM on a Vulkan node is total minus used, and null when either
+cannot be read; admission then refuses the start on that GPU and the node reports `gpu_probe_failing`
+(`docs/multinode/operations-p2.md` section 5.6).
+
 **Composition.** One setting, `Agent:Docker:Enabled`, decides what an agent composes:
 
 - **Docker on** (the DGX Spark and Linux PCs): the container driver, with host services through Docker and

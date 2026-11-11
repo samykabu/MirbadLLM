@@ -62,8 +62,9 @@ approved node at all, the non-revoked nodes count instead.
 Packaging, paths and hardening are in [`deploy/agent/linux/README.md`](../../deploy/agent/linux/README.md). The
 short version follows.
 
-**Requirements on the PC:** systemd 247+ (Ubuntu 22.04+, Debian 12+), x86_64 or aarch64, Docker Engine with the
-NVIDIA Container Toolkit, the NVIDIA driver (`nvidia-smi -L` lists the GPUs), `curl` and `sudo`. You need no checkout
+**Requirements on the PC:** systemd 247+ (Ubuntu 22.04+, Debian 12+), x86_64 or aarch64, Docker Engine, `curl` and
+`sudo`. With NVIDIA GPUs it also needs the NVIDIA Container Toolkit and the NVIDIA driver (`nvidia-smi -L` lists the
+GPUs); a PC where `nvidia-smi` lists no GPU joins as a CPU-only node (section 5.6). You need no checkout
 and no Docker build: the master image carries ready-built agent bundles for `linux-x64` and `linux-arm64`, and the
 join command downloads the right one.
 
@@ -436,6 +437,68 @@ Folders downloaded as root before keep root ownership (`chown` them once).
   DGX); without per-GPU rows it is split evenly over the model's GPUs. PCs run no hostd (`HostdExpected: false`).
 
 ---
+
+### 5.6 Nodes without an NVIDIA GPU
+
+`Agent:Accelerator` in `agent.json` says what runs the model weights on a node. The installers write it
+(`install-agent.sh --accelerator`, `install-agent.ps1 -Accelerator`), the agent reports it in its capabilities as
+`accelerator`, and the master places and labels by it. An NVIDIA or macOS node has no entry and reports none, so
+nothing on those nodes changes.
+
+| `Agent:Accelerator` | Node | Memory model | Runtimes | Status |
+|---|---|---|---|---|
+| unset or `cuda` | NVIDIA GPUs | As section 5.1 | As before | Supported |
+| `cpu` | No usable GPU | Unified: the budget counts against host RAM | llama.cpp only | Supported; tested with fakes and the real installers' artefacts, not yet on a dedicated CPU-only machine |
+| `vulkan` | AMD or Intel GPUs | Discrete: per-GPU budgets | llama.cpp only | Experimental; not yet verified on AMD or Intel hardware |
+
+**What a `cpu` or `vulkan` node does differently**
+
+- It never runs `nvidia-smi`, also when an unused NVIDIA card is in the machine. A missing `nvidia-smi` does not make
+  the node Degraded.
+- It lists only llama.cpp among its runtimes. vLLM, SGLang and NIM need CUDA, so placing such a model there is
+  refused with `runtime_unavailable` when you save it.
+- It downloads from Hugging Face with the agent's own downloader (`downloads.hf-native`), so it needs no vLLM image
+  for the download helper.
+- A Linux node creates model containers without the NVIDIA device request. A CPU-only container gets no device; a
+  Vulkan container gets the DRM render node of its one GPU.
+
+**CPU-only nodes.** The node is unified with no GPU: the Nodes page shows "CPU only" and host RAM, and the GPUs tab
+says the node has no supported GPU. A model is placed without GPUs, its whole budget must fit host RAM minus the
+node's memory reserve, and one model starts at a time (section 5.2 does not apply). On a Windows node the GGUF
+estimate counts every weight in RAM and no CUDA context, whatever **GPU layers** says; the pinned CPU build prints
+"no usable GPU found, --gpu-layers option will be ignored". On a Linux node, set the node's default llama.cpp image to `ghcr.io/ggml-org/llama.cpp:server` and
+approve its digest (section 5.4).
+
+**Vulkan nodes: where each figure comes from**
+
+| | Windows | Linux |
+|---|---|---|
+| GPUs listed | Discrete adapters the Vulkan loader reports; integrated GPUs are left out | Cards with `amdgpu` VRAM counters in sysfs; Intel cards are left out |
+| Identity | `GPU-` + the Vulkan device UUID | `GPU-pci-` + the PCI address |
+| VRAM total | The adapter's device-local Vulkan heaps | `mem_info_vram_total` |
+| VRAM in use, all processes | Performance counter `\GPU Adapter Memory(*)\Dedicated Usage`, matched by LUID | `mem_info_vram_used` |
+| GPU given to the model | Vulkan device index in `GGML_VK_VISIBLE_DEVICES`, in placement order | The card's `/dev/dri/renderD*` node mapped into the container |
+| GPUs per model | Several (llama.cpp's layer split) | One |
+| Image or build | The Vulkan build pinned in `llama-cpp.lock.json` | `ghcr.io/ggml-org/llama.cpp:server-vulkan`, approved by digest |
+
+**The admission rule on a Vulkan node.** Free VRAM is VRAM total minus VRAM in use, both read from the machine. The
+agent never estimates either. When the figure in use cannot be read for a GPU (the counters are not readable by the
+service account, a card has no counter, a sysfs file is missing):
+
+- the GPU's **Used** and **Free** show "—" on the node's GPUs tab;
+- the node is Degraded with `gpu_probe_failing` and the reason;
+- a start on that GPU is refused (`admission_refused`, "GPU memory unknown") until the figure can be read. **Start
+  anyway** skips memory admission, as on any node.
+
+Utilization, power and temperature are not read on a Vulkan node and show "—". On a Windows node the memory a model
+takes is still measured at start, from the change in VRAM in use.
+
+**What was checked, and on what.** On a Windows PC with an RTX 5070 and an RTX 5060 Ti (driver 621.01), the Vulkan
+source reported the same GPU UUIDs as `nvidia-smi`, VRAM totals of 11 943 and 16 050 MiB against `nvidia-smi`'s 12 227
+and 16 311 MiB (the difference is what the driver keeps for itself), and free VRAM 15 and 32 MiB below `nvidia-smi`'s
+`memory.free`. On the same PC the pinned Vulkan build listed its devices in the order the agent reads, and
+`GGML_VK_VISIBLE_DEVICES` selected and reordered them as the agent expects. No model was loaded through Vulkan, and no
+AMD or Intel discrete card, no Linux Vulkan node and no run under the Windows service account has been tested.
 
 ## 6. Getting models onto a node, moves and unplace
 

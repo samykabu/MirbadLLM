@@ -108,7 +108,8 @@ admission lock.
 
 | Check | Why |
 |---|---|
-| NVIDIA driver ≥ the lock file's `minDriver` (`615.00` for `b11476`, CUDA 13.4) | The installer refuses an older driver. `nvidia-smi --query-gpu=driver_version --format=csv,noheader` |
+| With an NVIDIA GPU: driver ≥ the lock file's `minDriver` (`615.00` for `b11476`, CUDA 13.4) | The installer refuses an older driver for the CUDA build. `nvidia-smi --query-gpu=driver_version --format=csv,noheader` |
+| Without an NVIDIA GPU: nothing more | The installer finds no NVIDIA driver and installs the CPU build; the PC joins as a CPU-only node (section 4.6) |
 | **Microsoft Visual C++ 2015–2022 Redistributable (x64)** | The llama.cpp binaries import `msvcp140.dll`, `vcruntime140.dll` and `vcruntime140_1.dll`, and the release zips ship none of them. The installer checks `System32` and stops naming the redistributable; it never downloads it |
 | The PC can reach the master on TCP 8443 (enroll) and 8080 (agent bundle) | As for a Linux PC (operations-p2 section 2) |
 | The master can reach the PC on TCP 9443 | The master dials every agent. The installer opens 9443 for the service, Private profile, master address only |
@@ -244,6 +245,24 @@ service, its Event Log source, the firewall rule and `C:\Program Files\mirbadllm
 until a reboot, so the script prints the command that removes it afterwards instead of failing.
 
 ---
+
+### 4.6 CPU-only and Vulkan nodes
+
+`install-agent.ps1 -LlamaCpp` installs one of three builds of the pinned release, chosen by `-Accelerator`
+(`auto`, `cuda`, `cpu`, `vulkan`), and writes the choice to `agent.json` as `Agent:Accelerator`. The install guide
+([`deploy/agent/windows/README.md`](../../deploy/agent/windows/README.md)) lists the assets; operations-p2 section 5.6
+has the rules that hold on every operating system, including where a Vulkan node's VRAM figures come from and what
+happens when one cannot be read.
+
+- **`auto`** (the default, and what the **Add node** command uses) installs the CUDA build when an NVIDIA driver
+  answers and the CPU build otherwise. It never installs the Vulkan build.
+- **A CPU-only node** is unified: a model takes no GPU, its budget counts against host RAM, and one model starts at a
+  time. Sections 5.3 and 11.3 (per-GPU memory, external VRAM use) do not apply to it.
+- **A Vulkan node** is discrete, like an NVIDIA PC: per-GPU budgets, one start per GPU, and "measured at start"
+  (section 5.3) from the Windows GPU memory counters instead of `nvidia-smi`. It is experimental and has not run on
+  an AMD or Intel graphics card.
+- To change the build, run `install-agent.ps1 -LlamaCpp -Accelerator <value>` again with the node's models stopped.
+  The version folder is replaced and the service is restarted.
 
 ## 5. Windows node differences
 
@@ -996,7 +1015,8 @@ Section 5.3 explains the mechanism. The symptoms:
 | Model stuck Starting for minutes | A large GGUF from a cold disk; `StartTimeout` is 10 min | Wait, or watch the log. `llama-server` answers 503 `Loading model` on everything until it is ready |
 | A model's port is not the one you expected | The agent skips every port a process already listens on, then test-binds | Normal. `PortRangeStart` 8101 keeps it away from 8000 |
 | The installer stops naming `msvcp140.dll` | No Visual C++ 2015–2022 x64 redistributable | Install it from Microsoft. The installer never downloads it |
-| The installer refuses the driver | Below the lock file's `minDriver` (`615.00`) | Update the NVIDIA driver |
+| The installer refuses the driver | Below the lock file's `minDriver` (`615.00`) | Update the NVIDIA driver, or pass `-Accelerator cpu` to run models on the CPU |
+| A Vulkan node is Degraded with `gpu_probe_failing`, and a GPU shows "—" for Used and Free | The agent cannot read the GPU memory counters, or Windows lists none for that card | Check that `NT SERVICE\mirbadllm-agent` is in **Performance Monitor Users** (the installer adds it) and restart the service. Until then starts on that GPU are refused |
 | Red warning: the Windows Firewall is off | It is off on all three profiles | The 9443 rule then has no effect and 9443 is reachable from any network the PC joins. Owner's call |
 | Node Online but no llama.cpp runtime listed | `Agent:Executables` is empty (`install-agent.ps1 install` without `-LlamaCpp`) | `install-agent.ps1 -LlamaCpp` |
 | Editor's runtime control is disabled | The selected node reports no llama.cpp runtime | Pick the Windows node; check its capabilities |
@@ -1046,6 +1066,7 @@ The template is [`deploy/agent/agent.windows.example.json`](../../deploy/agent/a
 | `Docker:Enabled` | bool | `true` | **The composition gate** (section 2). `false` on Windows |
 | `CacheRoot` | path | unset | **Mandatory with Docker off**; `{cache}` in a launch's argv, and the home of `cuda\` and `tmp\` |
 | `Executables[]` | array | empty | One entry per logical name: `Name`, optional `Default`, and `Versions[]` of `{Version, Path, Manifest, Cuda?}`. Empty = no process runtime |
+| `Accelerator` | string | unset | `cpu` or `vulkan` on a node without a usable NVIDIA GPU (section 4.6); unset or `cuda` on an NVIDIA node. Written by `install-agent.ps1 -LlamaCpp -Accelerator`. It may not be combined with an `Agent:MemoryModel` that contradicts it |
 | `Process:StartTimeout` | TimeSpan | `00:10:00` | How long a process may stay Starting before it is Failed |
 | `Process:RestartBudget` | int | `2` | Restarts allowed after Ready within the window |
 | `Process:RestartWindow` | TimeSpan | `00:10:00` | Window of the restart budget |
@@ -1128,6 +1149,13 @@ plan-p3p4.md §4.2 and is run on the owner's PC (MN-241). It is not repeated her
 - Loading the planner's `qwen35` GGUF on the pinned build. The architecture has been supported since `b7990`, but
   that specific file has not been loaded.
 - `llama-fit-params` as a second opinion on the estimate. It ships in the pinned folder and is not used.
+- **Vulkan nodes** (section 4.6). The GPU readings were compared with `nvidia-smi` on NVIDIA cards and the device
+  selection with the pinned build's `--list-devices`. No model was loaded through Vulkan, nothing ran on an AMD or
+  Intel graphics card, and the counters were not read under the service account.
+- **CPU-only nodes** on a machine of their own. The CPU build's files were verified against the lock file and it
+  starts and lists no device; no model was served from it, and its speed was not measured.
+- **Tuning on a CPU-only node.** The tuner's memory check still uses the GPU estimate, which adds 0.45 GiB of CUDA
+  context, so its plan skips a candidate unless the model's budget has that much room above the CPU estimate.
 
 ---
 
