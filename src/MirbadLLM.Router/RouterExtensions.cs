@@ -91,6 +91,10 @@ public static class RouterExtensions
         ollama.AddEndpointFilter(MaintenanceFilterAsync);
         ollama.AddEndpointFilter(ApiKeyFilterAsync);
         OllamaApi.Map(ollama);
+
+        // Ollama's command line opens every command with HEAD / and gives up on anything but a success. The UI answers
+        // only GET there, so without this the client never reaches /api. No key: the answer says nothing.
+        endpoints.MapMethods("/", [HttpMethods.Head], () => Results.Ok()).AllowAnonymous();
         return endpoints;
     }
 

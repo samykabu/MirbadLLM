@@ -31,6 +31,9 @@ internal static class OllamaApi
     // What Go writes for a time or a list it has no value for; Ollama's clients expect the fields to be there.
     private const string NoTime = "0001-01-01T00:00:00Z";
 
+    // Ollama's keep-alive unloads nothing here, and "ollama ps" prints "Stopping..." for an expiry in the past.
+    private const string NoExpiry = "2262-01-01T00:00:00Z";
+
     private static readonly JsonSerializerOptions Json = new();
     private static readonly string[] NotOffered = ["pull", "push", "create", "copy", "delete"];
 
@@ -136,7 +139,7 @@ internal static class OllamaApi
     private static async Task<IResult> TagsAsync(HttpContext context, IModelEndpointResolver resolver, CancellationToken ct)
     {
         var models = (await ModelsEndpoint.ListServedAsync(context.RequestServices, resolver, ct))
-            .Select(m => new TagEntry(m.Name, m.Name, NoTime, 0, "", DetailsOf(m.Definition)))
+            .Select(m => new TagEntry(m.Name, m.Name, NoTime, 0, DigestOf(m.Name), DetailsOf(m.Definition)))
             .ToArray();
         return Results.Json(new ListResponse<TagEntry>(models), Json);
     }
@@ -144,10 +147,10 @@ internal static class OllamaApi
     /// <summary>The models that are loaded: the served ones, without the "-nothink" names (the same instance).</summary>
     private static async Task<IResult> PsAsync(HttpContext context, IModelEndpointResolver resolver, CancellationToken ct)
     {
-        var models = (await ModelsEndpoint.ListServedAsync(context.RequestServices, resolver, ct))
+        var models = (await ModelsEndpoint.ListServedAsync(context.RequestServices, resolver, ct, loadedOnly: true))
             .Where(m => !m.IsNoThinking)
             .Select(m => new PsEntry(
-                m.Name, m.Name, 0, "", DetailsOf(m.Definition), NoTime, 0,
+                m.Name, m.Name, 0, DigestOf(m.Name), DetailsOf(m.Definition), NoExpiry, 0,
                 m.Definition is null ? 0 : ModelCapabilities.MaxModelLen(m.Definition)))
             .ToArray();
         return Results.Json(new ListResponse<PsEntry>(models), Json);
@@ -161,8 +164,8 @@ internal static class OllamaApi
             using var document = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: ct);
             if (document.RootElement.ValueKind == JsonValueKind.Object)
             {
-                // "name" is the field's older spelling.
-                requested = StringOf(document.RootElement, "model") ?? StringOf(document.RootElement, "name");
+                // "name" is the field's older spelling. "ollama show" sends it next to an empty "model".
+                requested = StringOf(document.RootElement, "model") is { Length: > 0 } model ? model : StringOf(document.RootElement, "name");
             }
         }
         catch (JsonException)
@@ -240,6 +243,13 @@ internal static class OllamaApi
 
         return [.. capabilities];
     }
+
+    /// <summary>
+    /// The registry stores no digest. "ollama list" and "ollama ps" print a digest's first 12 characters and crash on
+    /// a shorter one, so each name gets a stand-in of a digest's length: the SHA-256 of the name.
+    /// </summary>
+    private static string DigestOf(string name) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(name)));
 
     private static string? StringOf(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;

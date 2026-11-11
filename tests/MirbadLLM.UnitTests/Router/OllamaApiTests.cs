@@ -696,7 +696,8 @@ public sealed class OllamaApiTests
         Assert.Equal("", embed.GetProperty("details").GetProperty("parent_model").GetString());
         Assert.Equal(JsonValueKind.Null, embed.GetProperty("details").GetProperty("families").ValueKind);
         Assert.Equal(0, embed.GetProperty("size").GetInt64());
-        Assert.Equal("", embed.GetProperty("digest").GetString());
+        // "ollama list" prints the digest's first 12 characters and crashes on a shorter one.
+        Assert.Matches("^[0-9a-f]{64}$", embed.GetProperty("digest").GetString());
         Assert.Equal("0001-01-01T00:00:00Z", embed.GetProperty("modified_at").GetString());
     }
 
@@ -712,7 +713,38 @@ public sealed class OllamaApiTests
         var embed = models.EnumerateArray().Single(m => m.GetProperty("name").GetString() == "embed-model");
         Assert.Equal(8192, embed.GetProperty("context_length").GetInt32());
         Assert.Equal(0, embed.GetProperty("size_vram").GetInt64());
-        Assert.Equal("0001-01-01T00:00:00Z", embed.GetProperty("expires_at").GetString());
+        Assert.Matches("^[0-9a-f]{64}$", embed.GetProperty("digest").GetString());
+        // "ollama ps" prints "Stopping..." for an expiry in the past; nothing expires here.
+        Assert.True(embed.GetProperty("expires_at").GetDateTimeOffset() > DateTimeOffset.UtcNow.AddYears(50));
+    }
+
+    [Fact]
+    public async Task AStoppedModelThatStartsOnRequest_IsListedForPickers_ButNotAsLoaded()
+    {
+        var registry = Registry().Add(new ModelDefinition
+        {
+            Id = "cold-1", ServedName = "cold-model", ModelPath = "c", Runtime = RuntimeKind.LlamaCpp, StartOnRequest = true,
+            LlamaCpp = new LlamaCppSettings { ModelFile = "c.gguf", ContextSize = 4096 },
+        });
+        await using var env = await Env.StartAsync(
+            services: s => s.AddSingleton<IModelRegistry>(registry),
+            setup: e =>
+            {
+                e.Resolver.Set(new ModelEndpoint("cold-1", "cold-model", new Uri("http://upstream-cold/"), ModelState.Stopped));
+                e.Resolver.Set(new ModelEndpoint("stopped-1", "stopped-model", new Uri("http://upstream-stopped/"), ModelState.Stopped));
+            });
+
+        using var v1 = await env.Client.GetAsync(new Uri("/v1/models", UriKind.Relative), Ct);
+        using var tags = await env.Client.GetAsync(new Uri("/api/tags", UriKind.Relative), Ct);
+        using var ps = await env.Client.GetAsync(new Uri("/api/ps", UriKind.Relative), Ct);
+
+        static string?[] Names(JsonElement list, string field) => [.. list.EnumerateArray().Select(m => m.GetProperty(field).GetString())];
+        Assert.Contains("cold-model", Names((await JsonAsync(v1)).GetProperty("data"), "id"));
+        string?[] tagged = Names((await JsonAsync(tags)).GetProperty("models"), "name");
+        Assert.Contains("cold-model", tagged);
+        // A stopped model without the setting is still left out, and nothing stopped counts as loaded.
+        Assert.DoesNotContain("stopped-model", tagged);
+        Assert.DoesNotContain("cold-model", Names((await JsonAsync(ps)).GetProperty("models"), "name"));
     }
 
     [Fact]
@@ -735,6 +767,12 @@ public sealed class OllamaApiTests
             Assert.Equal(["completion", "tools", "vision"], (await JsonAsync(response)).GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
         }
 
+        // What "ollama show <name>" sends: the name in the older field, next to an empty "model".
+        using (var response = await env.PostAsync("/api/show", """{"model":"","name":"embed-model"}"""))
+        {
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        }
+
         using (var response = await env.PostAsync("/api/show", """{"model":"embed-model"}"""))
         {
             Assert.Equal(["embedding"], (await JsonAsync(response)).GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
@@ -744,6 +782,17 @@ public sealed class OllamaApiTests
         await AssertErrorAsync(unknown, HttpStatusCode.NotFound, "Model 'nobody' is not registered.");
         using var empty = await env.PostAsync("/api/show", "");
         await AssertErrorAsync(empty, HttpStatusCode.BadRequest, "Request does not name a model.");
+    }
+
+    [Fact]
+    public async Task HeadOfTheRoot_Succeeds_WithoutAKey_BecauseOllamasCommandLineStartsWithIt()
+    {
+        await using var env = await Env.StartAsync(auth: a => a.RequireApiKey = true);
+        using var request = new HttpRequestMessage(HttpMethod.Head, "/");
+
+        using var response = await env.Client.SendAsync(request, Ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]

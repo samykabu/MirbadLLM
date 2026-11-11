@@ -18,6 +18,7 @@ namespace MirbadLLM.Web;
 /// <param name="MaxModelLen">Context length in tokens (llama.cpp: per-request context), 32,768 when unknown.</param>
 /// <param name="AcceptsImages">Tagged Vision or Multimodal, so the Playground offers to attach images.</param>
 /// <param name="Thinks">Tagged Reasoning, so it is also served as "&lt;served&gt;-nothink" (<see cref="NoThinking"/>).</param>
+/// <param name="StartsOnRequest">A request that names it while it is Stopped or Failed starts it (swap on demand).</param>
 public sealed record ModelPlace(
     string ModelId,
     string ServedName,
@@ -27,7 +28,8 @@ public sealed record ModelPlace(
     RuntimeKind? Runtime,
     int MaxModelLen,
     bool AcceptsImages = false,
-    bool Thinks = false)
+    bool Thinks = false,
+    bool StartsOnRequest = false)
 {
     /// <summary>"vLLM", "llama.cpp", "MLX", or null when unknown.</summary>
     public string? RuntimeName => Runtime is { } kind ? LlamaCppEditing.RuntimeName(kind) : null;
@@ -76,6 +78,7 @@ public static class ModelPlaces
             }
         }
 
+        bool startsAny = services.GetService<IOptions<MirbadLLMOptions>>()?.Value.AutoStartOnRequest == true;
         return [.. endpoints
             .Select(e =>
             {
@@ -84,7 +87,8 @@ public static class ModelPlaces
                 int context = definition is null ? DefaultContext : ModelCapabilities.MaxModelLen(definition);
                 bool images = definition is not null && ModelCapabilities.Vision(definition);
                 bool thinks = definition is not null && NoThinking.Offered(definition);
-                return new ModelPlace(e.ModelId, e.ServedName, e.State, nodeId, names.GetValueOrDefault(nodeId, nodeId), definition?.Runtime, context, images, thinks);
+                bool starts = startsAny || definition?.StartOnRequest == true;
+                return new ModelPlace(e.ModelId, e.ServedName, e.State, nodeId, names.GetValueOrDefault(nodeId, nodeId), definition?.Runtime, context, images, thinks, starts);
             })
             .OrderBy(p => p.ServedName, StringComparer.OrdinalIgnoreCase)];
     }

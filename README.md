@@ -153,8 +153,8 @@ translates them to `/v1`. The API key, the model names and the routing stay the 
 
 The limits: you manage models in MirbadLLM, so pulling, creating and deleting models through Ollama routes is not
 offered. A client that cannot send an API key, such as the `ollama` command line, works only while `/v1` is open.
-It was built against Ollama's published API and has not been tried with real clients yet, so tell us in an issue if
-yours trips over something.
+It has been checked with the `ollama` command line (0.40.16) and Ollama's Python library (0.6.3) against llama.cpp
+models. Other clients have not been tried, so tell us in an issue if yours trips over something.
 
 ### Machines without an NVIDIA card
 
