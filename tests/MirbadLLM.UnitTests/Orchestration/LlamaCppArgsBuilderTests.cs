@@ -151,6 +151,7 @@ public sealed class LlamaCppArgsBuilderTests
                 Reasoning = true,
                 ChatTemplate = "chatml-ollama.jinja",
                 ProjectorFile = "ov-intent-analysis-v7-q8/mmproj.gguf",
+                DraftModelFile = "drafter/d-q8.gguf",
                 GpuLayers = 20,
             },
         };
@@ -162,12 +163,15 @@ public sealed class LlamaCppArgsBuilderTests
         Assert.Equal("20", argv[argv.IndexOf("-ngl") + 1]);
         Assert.Equal("{models}/ov-intent-analysis-v7-q8/chatml-ollama.jinja", argv[argv.IndexOf("--chat-template-file") + 1]);
         Assert.DoesNotContain("--chat-template", argv);
-        Assert.Equal(["-m", "{models}/ov-intent-analysis-v7-q8/model.gguf", "--mmproj", "{models}/ov-intent-analysis-v7-q8/mmproj.gguf"], argv.Take(4));
+        Assert.Equal(
+            ["-m", "{models}/ov-intent-analysis-v7-q8/model.gguf", "--mmproj", "{models}/ov-intent-analysis-v7-q8/mmproj.gguf", "-md", "{models}/drafter/d-q8.gguf"],
+            argv.Take(6));
 
         var auto = LlamaCppArgsBuilder.Build(LlamaCppFixtures.Chat() with { LlamaCpp = s with { Reasoning = null, ChatTemplate = null } }, 1);
         Assert.DoesNotContain("--reasoning", auto);
         Assert.DoesNotContain("--chat-template", auto);
         Assert.DoesNotContain("-t", auto);
+        Assert.DoesNotContain("-md", auto);
     }
 
     [Fact]
@@ -313,6 +317,7 @@ public sealed class LlamaCppArgsBuilderTests
         Assert.Contains("micro-batch", Single(s with { MicroBatchSize = 0 }), StringComparison.Ordinal);
         Assert.Contains("Threads", Single(s with { Threads = 0 }), StringComparison.Ordinal);
         Assert.Contains("projector", Single(s with { ProjectorFile = "../p.gguf" }), StringComparison.Ordinal);
+        Assert.Contains("draft model", Single(s with { DraftModelFile = "../d.gguf" }), StringComparison.Ordinal);
         Assert.Empty(LlamaCppArgsBuilder.Problems(LlamaCppFixtures.Embedder()));
 
         var missing = Assert.Single(LlamaCppArgsBuilder.Problems(LlamaCppFixtures.Embedder() with { LlamaCpp = null }));
@@ -454,7 +459,7 @@ public sealed class LlamaCppArgsBuilderTests
             "embedder-noncausal" => (embedder with { LlamaCpp = e with { MicroBatchSize = e.ContextSize } }, 1, null),
             "embedder-no-pooling" => (embedder with { LlamaCpp = e with { Pooling = null } }, 1, null),
             "chat" => (chat, 1, null),
-            "chat-file-template" => (chat with { LlamaCpp = c with { ChatTemplate = "chatml-ollama.jinja", ProjectorFile = "ov-intent-analysis-v7-q8/mm.gguf" } }, 1, null),
+            "chat-file-template" => (chat with { LlamaCpp = c with { ChatTemplate = "chatml-ollama.jinja", ProjectorFile = "ov-intent-analysis-v7-q8/mm.gguf", DraftModelFile = "drafter/d-q8.gguf" } }, 1, null),
             "chat-batches" => (chat with { LlamaCpp = c with { BatchSize = 4096, MicroBatchSize = 1024, FlashAttention = true } }, 1, null),
             "chat-threads-reasoning-on" => (chat with { LlamaCpp = c with { Threads = 12, Reasoning = true, CacheTypeV = "q4_0" } }, 1, null),
             "split" => (split, 2, s.GpuBudgetsGiB),

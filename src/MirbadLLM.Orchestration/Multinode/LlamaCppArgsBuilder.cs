@@ -8,7 +8,7 @@ namespace MirbadLLM.Orchestration.Multinode;
 /// Builds the <c>llama-server</c> argv of a llama.cpp <see cref="ModelDefinition"/> (design-p3p4 §A.1.5–§A.1.7, MN-210):
 /// the only place on the master that knows <c>llama-server</c> flags. The order is fixed, so the argv is canonical and the
 /// execution fingerprint (which covers the argv of every non-vLLM runtime) is stable:
-/// <c>-m</c>, <c>--mmproj</c>, <c>--alias</c>, <c>-c</c>, <c>-np</c>, <c>-ngl</c>, <c>-fa</c>, <c>-ctk</c>, <c>-ctv</c>,
+/// <c>-m</c>, <c>--mmproj</c>, <c>-md</c>, <c>--alias</c>, <c>-c</c>, <c>-np</c>, <c>-ngl</c>, <c>-fa</c>, <c>-ctk</c>, <c>-ctv</c>,
 /// <c>-b</c>, <c>-ub</c>, <c>--embedding</c>, <c>--pooling</c>, <c>--split-mode</c>, <c>--tensor-split</c>,
 /// <c>--device</c>, <c>--chat-template</c>/<c>--chat-template-file</c>, <c>--reasoning</c>, <c>-t</c>, then
 /// <see cref="LlamaCppFlags.AlwaysArgs"/> (with the <c>{port}</c> token) and the ExtraArgs last.
@@ -98,6 +98,11 @@ public static partial class LlamaCppArgsBuilder
         if (s.ProjectorFile is not null && !IsRelativePath(s.ProjectorFile))
         {
             Add($"The projector file '{s.ProjectorFile}' must be a relative path inside the models folder.");
+        }
+
+        if (s.DraftModelFile is not null && !IsRelativePath(s.DraftModelFile))
+        {
+            Add($"The draft model file '{s.DraftModelFile}' must be a relative path inside the models folder.");
         }
 
         if (s.ContextSize < 1)
@@ -236,6 +241,11 @@ public static partial class LlamaCppArgsBuilder
         if (s.ProjectorFile is not null)
         {
             args.AddRange(["--mmproj", Models(s.ProjectorFile)]);
+        }
+
+        if (s.DraftModelFile is not null)
+        {
+            args.AddRange(["-md", Models(s.DraftModelFile)]);
         }
 
         args.AddRange(["--alias", model.ServedName]);

@@ -1221,11 +1221,26 @@ public sealed class ProcessRuntimeDriverTests
     [InlineData("--chat-template-file", "C:\\Windows\\win.ini")]
     [InlineData("--chat-template-file={models}/" + ModelFile, null)]
     [InlineData("--rpc", "10.0.0.1:50052")]
+    [InlineData("-md", "/etc/passwd")]
+    [InlineData("--model-draft", "{models}/" + ModelFile)]
+    [InlineData("--spec-draft-model", "{models}/" + ModelFile)]
     public async Task CheckSpec_RefusesPathValuedAndOwnedFlagsInExtraArgs(string flag, string? value)
     {
         await using var h = new Harness();
         var extra = value is null ? new[] { flag } : [flag, value];
         AssertRejected(() => h.Driver.CheckSpec("m1", Spec(argv: Argv(extra: extra))));
+    }
+
+    [Fact]
+    public async Task CheckSpec_AcceptsADraftModelUnderTheModelsRoot_Once()
+    {
+        await using var h = new Harness();
+        var argv = Argv();
+        argv.InsertRange(2, ["-md", "{models}/" + ModelFile]);
+        h.Driver.CheckSpec("m1", Spec(argv: argv));
+
+        argv.InsertRange(2, ["-md", "{models}/" + ModelFile]);
+        AssertRejected(() => h.Driver.CheckSpec("m1", Spec(argv: argv)));
     }
 
     [Fact]

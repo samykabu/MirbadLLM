@@ -205,6 +205,38 @@ public sealed class McpEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task DeployAndUpdate_OnLlamaCpp_SetADraftGguf_AndDownloadOnlyThatFile()
+    {
+        using var client = Client();
+        string key = await NodeReporting(Capabilities(LlamaCppProcess));
+        object Deploy(string id, string? draftFolder, string? draftFile) => new
+        {
+            modelId = id, servedName = id, repoId = "org/small-GGUF", folder = id, nodeId = "dgx", runtime = "llamacpp", modelFile = "small-q8.gguf",
+            draftFolder, draftFile, draftRepoId = draftFolder is null ? null : "org/small-DFlash-GGUF",
+        };
+
+        string result = await CallTool(client, key, "mirbad_deploy_model", Deploy("drafted", "small-dflash", "d-q8.gguf"));
+
+        Assert.DoesNotContain("\"isError\":true", result, StringComparison.Ordinal);
+        Assert.Contains("\"draftDownload\":{", result, StringComparison.Ordinal);
+        Assert.Contains("saved but not proven", result, StringComparison.Ordinal);
+        var model = await Models().GetAsync("drafted");
+        Assert.Equal("small-dflash/d-q8.gguf", model!.LlamaCpp!.DraftModelFile);
+        Assert.Equal(["d-q8.gguf"], model.Sources[1].AllowPatterns);
+
+        string half = await CallTool(client, key, "mirbad_deploy_model", Deploy("half", "small-dflash", null));
+        Assert.Contains("draftFolder and draftFile together", half, StringComparison.Ordinal);
+        Assert.Null(await Models().GetAsync("half"));
+        string onVllm = await CallTool(client, key, "mirbad_update_model", new { modelId = "drafted", draftFile = "x.gguf" });
+        Assert.Contains("draftFolder and draftFile together", onVllm, StringComparison.Ordinal);
+
+        await CallTool(client, key, "mirbad_update_model", new { modelId = "drafted", draftFolder = "other", draftFile = "o.gguf" });
+        Assert.Equal("other/o.gguf", (await Models().GetAsync("drafted"))!.LlamaCpp!.DraftModelFile);
+        await CallTool(client, key, "mirbad_update_model", new { modelId = "drafted", speculativeOff = true });
+        Assert.Null((await Models().GetAsync("drafted"))!.LlamaCpp!.DraftModelFile);
+    }
+
+    [Fact]
     public async Task Deploy_OnVllm_SetsKvCacheAndADraftModel_AndDownloadsTheDrafter()
     {
         using var client = Client();
@@ -356,7 +388,8 @@ public sealed class McpEndpointTests : IDisposable
 
         using var connected = await Post(client, Initialize(), key);
         string instructions = await connected.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
-        Assert.Contains("speculative decoding on vllm, sglang and mlx", instructions, StringComparison.Ordinal);
+        Assert.Contains("speculative decoding on vllm, sglang, mlx and llamacpp, never on nim", instructions, StringComparison.Ordinal);
+        Assert.Contains("llamacpp takes only a draft GGUF, draftFolder with draftFile", instructions, StringComparison.Ordinal);
         Assert.Contains("depends on the runtime's image and the drafter", instructions.Replace("\\u0027", "'", StringComparison.Ordinal), StringComparison.Ordinal);
 
         string plain = await CallTool(client, key, "mirbad_deploy_model", new { modelId = "plain", servedName = "p", repoId = "org/p", folder = "p", nodeId = "dgx" });

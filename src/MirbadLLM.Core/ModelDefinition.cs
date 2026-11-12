@@ -350,6 +350,13 @@ public sealed record LlamaCppSettings
     public string? ProjectorFile { get; init; }
 
     /// <summary>
+    /// <c>-md</c> draft GGUF for speculative decoding (e.g. a DFlash drafter), relative to the models root. Null = none.
+    /// llama.cpp reads the method from the draft GGUF; <c>--spec-type</c> and <c>--spec-draft-n-max</c> stay ExtraArgs.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DraftModelFile { get; init; }
+
+    /// <summary>
     /// Context size in tokens <b>per slot</b>, i.e. per request (design-p3p4 §A.1.6, MN-202). The builder emits
     /// <c>-c ContextSize × Parallel</c>, because <c>llama-server</c> divides <c>-c</c> among its <c>-np</c> slots.
     /// </summary>

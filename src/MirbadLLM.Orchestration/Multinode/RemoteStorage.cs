@@ -258,7 +258,7 @@ public sealed class RemoteModelFolders
     /// <summary>
     /// True when <paramref name="model"/> is placed on <paramref name="nodeId"/> and references the top-level folder
     /// <paramref name="folder"/>: its checkpoint, a source, the speculative draft model, a <c>/models/…</c> path in its
-    /// extra arguments, or a llama.cpp model or projector file.
+    /// extra arguments, or a llama.cpp model, projector or draft model file.
     /// </summary>
     public static bool References(ModelDefinition model, string nodeId, string folder)
     {
@@ -275,6 +275,7 @@ public sealed class RemoteModelFolders
             model.Speculative?.DraftModel,
             model.LlamaCpp?.ModelFile,
             model.LlamaCpp?.ProjectorFile,
+            model.LlamaCpp?.DraftModelFile,
         ];
         return paths.Any(p => string.Equals(TopFolder(p), folder, StringComparison.Ordinal))
             || model.ExtraArgs.Any(a => MentionsModelsPath(a, folder));

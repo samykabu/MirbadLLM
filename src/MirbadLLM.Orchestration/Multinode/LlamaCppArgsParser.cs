@@ -74,7 +74,7 @@ public static class LlamaCppArgsParser
         var extra = new List<string>();
         string servedName = template.ServedName;
         string modelFile = saved.ModelFile;
-        string? projector = null, cacheK = null, cacheV = null, pooling = null, chatTemplate = null, tensorSplit = null;
+        string? projector = null, draft = null, cacheK = null, cacheV = null, pooling = null, chatTemplate = null, tensorSplit = null;
         int? contextTotal = null, parallel = null, gpuLayers = null, batch = null, micro = null, threads = null, devices = null;
         bool? flashAttention = null, reasoning = null;
         bool embedding = false;
@@ -92,6 +92,9 @@ public static class LlamaCppArgsParser
                     break;
                 case "--mmproj" when value is not null:
                     projector = StripModels(value);
+                    break;
+                case "-md" when value is not null:
+                    draft = StripModels(value);
                     break;
                 case "--alias" when value is not null:
                     servedName = value;
@@ -181,6 +184,7 @@ public static class LlamaCppArgsParser
         {
             ModelFile = modelFile,
             ProjectorFile = projector,
+            DraftModelFile = draft,
             ContextSize = contextSize,
             Parallel = np,
             GpuLayers = gpuLayers ?? saved.GpuLayers,

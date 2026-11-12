@@ -6,6 +6,7 @@ private development history.
 
 ## Unreleased
 
+- llama.cpp models take a draft model for speculative decoding: **Draft model** in the editor, or `draftFolder` with `draftFile` over MCP, passes a draft GGUF such as a DFlash drafter as `-md`. The method and depth stay extra arguments (`--spec-type`, `--spec-draft-n-max`), and `--spec-draft-model` and `--spec-draft-hf` are now refused there like the other path flags
 - A new install starts with an empty model list. It used to carry one example definition, `ornith-9b-fp8`, whose checkpoint only the first deployment had
 - The master and agent from the compose files work on a PC with discrete GPUs: the agent looks at the GPUs and gives each card its own memory budget, where it used to count every machine as one pool. `MIRBADLLM_MEMORY_MODEL` pins `Unified` or `Discrete`, and `MIRBADLLM_NODE_ID` names the machine's own node before the first start (unset, it stays `dgx`)
 - The `ollama` command line works against the master. `HEAD /` is answered, `ollama list` and `ollama ps` no longer crash on an empty digest, `ollama show <name>` finds the model, and `ollama ps` shows "Forever" where it showed "Stopping...". Checked with ollama 0.40.16
