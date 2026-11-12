@@ -44,24 +44,25 @@ public static class SearchPlanner
     /// <param name="gguf">A llama.cpp model's GGUF summary (its candidates' memory checks); ignored for vLLM.</param>
     public static TuningPlan Plan(
         ModelDefinition baseline, ModelFolderInspection? inspection, IReadOnlyCollection<TuningDimension>? dimensions,
-        Func<string, ModelFolderInspection?>? inspectFolder, IReadOnlyCollection<string> mtpArchitectures, GgufSummary? gguf = null)
+        Func<string, ModelFolderInspection?>? inspectFolder, IReadOnlyCollection<string> mtpArchitectures, GgufSummary? gguf = null,
+        IReadOnlyCollection<TuningValueRef>? excluded = null)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         if (LlamaCppTuning.Applies(baseline))
         {
-            return LlamaCppTuning.Plan(baseline, gguf, dimensions);
+            return LlamaCppTuning.Plan(baseline, gguf, dimensions, excluded);
         }
 
         if (SmallRuntimeTuning.Applies(baseline))
         {
-            return SmallRuntimeTuning.Plan(baseline, inspection, dimensions);
+            return SmallRuntimeTuning.Plan(baseline, inspection, dimensions, excluded);
         }
 
         baseline = VllmArgsNormalizer.Apply(baseline);
         if (PoolingDetection.Detect(baseline) != PoolingMode.None)
         {
             // Pooling models keep the phase-A plan: max num seqs and max batched tokens only.
-            return TuningPlanner.Plan(baseline, inspection, dimensions);
+            return TuningPlanner.Plan(baseline, inspection, dimensions, excluded: excluded);
         }
 
         var dims = dimensions is null || dimensions.Count == 0 ? Full : dimensions;
@@ -125,6 +126,9 @@ public static class SearchPlanner
             "Max num seqs and speculative-depth neighbours of the winners, everything else fixed.", TuningDescriptions.PhaseRefinement, RefineKey));
         steps.Add(Step(TuningDimension.Refinement, "Final prefix-cache check", [], refine ? null : NotSelected,
             "Prefix caching on and off with the winning decode settings.", TuningDescriptions.PhaseRefinement, PrefixCheckKey));
+
+        // The follow-ups and the refinement pass choose their own values from the winners, so they are not narrowed here.
+        steps = TuningPlanner.Without(steps, excluded);
 
         // Preview: every step applied to the baseline (refinement too), duplicates removed.
         var preview = new List<TuningCandidatePlan> { new("Baseline", "Baseline (saved settings)", baseline, "Measure the saved settings as the reference every candidate is compared with.") };

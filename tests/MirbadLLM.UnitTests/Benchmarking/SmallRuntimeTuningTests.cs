@@ -49,6 +49,72 @@ public sealed class SmallRuntimeTuningTests
     }
 
     [Fact]
+    public void ACustomSearch_LeavesOutUntickedValues_KeepsThemOnOffer_AndSkipsAStepLeftEmpty()
+    {
+        var all = PlanOf(Sglang);
+        var requests = all.Steps.Single(s => s.Dimension == TuningDimension.SglangMaxRunningRequests);
+        var depth = all.Steps.Single(s => s.Dimension == TuningDimension.SglangDraftDepth);
+        TuningValueRef[] excluded =
+        [
+            new(TuningDimension.SglangMaxRunningRequests, "32"),
+            .. depth.Values.Select(v => new TuningValueRef(TuningDimension.SglangDraftDepth, v.Label)),
+        ];
+
+        var plan = TuningPlanner.Plan(Sglang, null, excluded: excluded);
+
+        var narrowed = plan.Steps.Single(s => s.Dimension == TuningDimension.SglangMaxRunningRequests);
+        Assert.Equal(requests.Values.Where(v => v.Label != "32"), narrowed.Values);
+        Assert.Equal(requests.Values, narrowed.Offered);
+        Assert.Null(narrowed.SkipReason);
+
+        var empty = plan.Steps.Single(s => s.Dimension == TuningDimension.SglangDraftDepth);
+        Assert.Empty(empty.Values);
+        Assert.Equal(depth.Values, empty.Offered);
+        Assert.Equal(TuningPlanner.NoValueSelected, empty.SkipReason);
+
+        // A step nobody narrowed is untouched, and the preview and the run both follow the narrowed steps.
+        Assert.Null(plan.Steps.Single(s => s.Dimension == TuningDimension.SglangSchedulePolicy).Offered);
+        Assert.Equal(
+            ["Baseline (saved settings)", "Max running requests 4", "Max running requests 16", "Schedule policy lpm"],
+            plan.PreviewCandidates.Select(c => c.Label));
+        Assert.DoesNotContain(SmallRuntimeTuning.CandidatesFor(narrowed, Sglang, null), c => c.Label == "Max running requests 32");
+        Assert.Empty(SmallRuntimeTuning.CandidatesFor(empty, Sglang, null));
+    }
+
+    [Fact]
+    public void EveryPlanner_LeavesOutAnExcludedValue()
+    {
+        var vllm = new ModelDefinition { Id = "v", ServedName = "v", ModelPath = "v" };
+        var llama = new ModelDefinition
+        {
+            Id = "l", ServedName = "l", ModelPath = "l", Runtime = RuntimeKind.LlamaCpp,
+            LlamaCpp = new LlamaCppSettings { ModelFile = "l/l.gguf" },
+        };
+        (string Name, Func<IReadOnlyCollection<TuningValueRef>?, TuningPlan> Plan)[] planners =
+        [
+            ("classic", excluded => TuningPlanner.Plan(vllm, null, excluded: excluded)),
+            ("search", excluded => SearchPlanner.Plan(vllm, null, null, null, [], excluded: excluded)),
+            ("llama.cpp", excluded => TuningPlanner.Plan(llama, null, excluded: excluded)),
+            ("small", excluded => TuningPlanner.Plan(Mlx, null, excluded: excluded)),
+        ];
+
+        foreach (var (name, planOf) in planners)
+        {
+            var full = planOf(null);
+            var step = full.Steps.First(s => s.SkipReason is null && s.Values.Count > 1);
+            var left = step.Values[0];
+
+            var plan = planOf([new TuningValueRef(step.Dimension, left.Label)]);
+
+            var narrowed = plan.Steps.First(s => s.Dimension == step.Dimension && s.Key == step.Key);
+            Assert.True(narrowed.Values.SequenceEqual(step.Values.Skip(1)), name);
+            Assert.True(narrowed.Offered!.SequenceEqual(step.Values), name);
+            Assert.True(plan.PreviewCandidates.Count <= full.PreviewCandidates.Count, name);
+            Assert.True(plan.MaxCandidates < full.MaxCandidates, name);
+        }
+    }
+
+    [Fact]
     public void Sglang_WithoutSpeculativeDecoding_SkipsTheDepthStep_AndAnUnrelatedSelectionMeansAllSteps()
     {
         var plan = PlanOf(Sglang with { Speculative = null }, TuningDimension.MaxNumSeqs);

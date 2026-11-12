@@ -104,7 +104,9 @@ public static class LlamaCppTuning
     /// <param name="gguf">The model file's GGUF summary; null when it could not be read.</param>
     /// <param name="dimensions">The selection (see the class remarks); null = all.</param>
     /// <exception cref="ArgumentException"><paramref name="baseline"/> is not a llama.cpp model.</exception>
-    public static TuningPlan Plan(ModelDefinition baseline, GgufSummary? gguf, IReadOnlyCollection<TuningDimension>? dimensions = null)
+    public static TuningPlan Plan(
+        ModelDefinition baseline, GgufSummary? gguf, IReadOnlyCollection<TuningDimension>? dimensions = null,
+        IReadOnlyCollection<TuningValueRef>? excluded = null)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         if (!Applies(baseline))
@@ -176,6 +178,8 @@ public static class LlamaCppTuning
             steps.Add(new TuningStepPlan(dimension, StepTitle(dimension), values, skip, notes.Count == 0 ? null : string.Join(" ", notes),
                 Description: Description(dimension, s.Embedding)));
         }
+
+        steps = TuningPlanner.Without(steps, excluded);
 
         var preview = new List<TuningCandidatePlan> { new("Baseline", "Baseline (saved settings)", baseline, "Measure the saved settings as the reference every candidate is compared with.") };
         var seen = new HashSet<string>(StringComparer.Ordinal) { Fingerprint(baseline) };

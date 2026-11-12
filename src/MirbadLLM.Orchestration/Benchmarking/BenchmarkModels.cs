@@ -623,9 +623,13 @@ public sealed record TuningValue(string Label, int? Number = null, string? Text 
 /// <param name="Phase">The search phase the step belongs to (workload presets), e.g. "Phase 2 · Concurrency".</param>
 /// <param name="Description">What the step tries to achieve and its tradeoff (<see cref="TuningDescriptions"/>).</param>
 /// <param name="Key">Distinguishes two steps of one dimension (the refinement pass and the final prefix-cache check).</param>
+/// <param name="Offered">Every value the step offers, when a custom search left some of them out of <paramref name="Values"/>; null = <paramref name="Values"/>.</param>
 public sealed record TuningStepPlan(
     TuningDimension Dimension, string Title, IReadOnlyList<TuningValue> Values, string? SkipReason, string? Note = null,
-    string? Phase = null, string? Description = null, string? Key = null);
+    string? Phase = null, string? Description = null, string? Key = null, IReadOnlyList<TuningValue>? Offered = null);
+
+/// <summary>One value of one step, named by its label: how a custom search says which values it leaves out.</summary>
+public sealed record TuningValueRef(TuningDimension Dimension, string Label);
 
 /// <param name="Description">What this candidate tries to achieve and its tradeoff.</param>
 public sealed record TuningCandidatePlan(string Step, string Label, ModelDefinition Settings, string? Description = null);

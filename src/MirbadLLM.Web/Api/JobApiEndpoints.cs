@@ -9,7 +9,9 @@ namespace MirbadLLM.Web.Api;
 /// <summary>Body of <c>POST /api/models/{id}/tune</c>. Both optional: goal defaults to Balanced, steps to all four.</summary>
 /// <summary>Body of <c>POST /api/models/{id}/tune</c>.</summary>
 /// <param name="Search">Quick or Full (workload presets); explicit <paramref name="Steps"/> win when both are given.</param>
-public sealed record TuneRequest(TuningGoal? Goal = null, IReadOnlyList<TuningDimension>? Steps = null, TuningSearch? Search = null);
+/// <param name="Exclude">Values to leave out of their step, each a step's dimension and the value's label as the plan shows it.</param>
+public sealed record TuneRequest(
+    TuningGoal? Goal = null, IReadOnlyList<TuningDimension>? Steps = null, TuningSearch? Search = null, IReadOnlyList<TuningValueRef>? Exclude = null);
 
 /// <summary>The search presets (D2): Quick = max num seqs + speculative × FULL_AND_PIECEWISE; Full = every phase.</summary>
 public enum TuningSearch
@@ -87,7 +89,7 @@ public static class JobApiEndpoints
             try
             {
                 var steps = request?.Steps ?? (request?.Search == TuningSearch.Quick ? SearchPlanner.Quick : request?.Search == TuningSearch.Full ? SearchPlanner.Full : null);
-                var job = await jobs.StartTuningAsync(id, request?.Goal ?? goal ?? TuningGoal.Balanced, steps?.ToList(), ct);
+                var job = await jobs.StartTuningAsync(id, request?.Goal ?? goal ?? TuningGoal.Balanced, steps?.ToList(), request?.Exclude, ct);
                 return Results.Accepted("/api/tuning", job);
             }
             catch (JobConflictException ex)

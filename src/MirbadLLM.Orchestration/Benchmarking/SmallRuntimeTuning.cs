@@ -78,7 +78,9 @@ public static class SmallRuntimeTuning
         return $"{StepTitle(dimension)} {value.Label}";
     }
 
-    public static TuningPlan Plan(ModelDefinition baseline, ModelFolderInspection? inspection, IReadOnlyCollection<TuningDimension>? dimensions = null)
+    public static TuningPlan Plan(
+        ModelDefinition baseline, ModelFolderInspection? inspection, IReadOnlyCollection<TuningDimension>? dimensions = null,
+        IReadOnlyCollection<TuningValueRef>? excluded = null)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         if (!Applies(baseline))
@@ -129,6 +131,8 @@ public static class SmallRuntimeTuning
             skip ??= values.Count == 0 ? "Skipped: no other value to try." : null;
             steps.Add(new TuningStepPlan(dimension, StepTitle(dimension), values, skip, notes.Count == 0 ? null : string.Join(" ", notes), Description: description));
         }
+
+        steps = TuningPlanner.Without(steps, excluded);
 
         var preview = new List<TuningCandidatePlan> { new("Baseline", "Baseline (saved settings)", baseline, "Measure the saved settings as the reference every candidate is compared with.") };
         var seen = new HashSet<string>(StringComparer.Ordinal) { Fingerprint(baseline) };
