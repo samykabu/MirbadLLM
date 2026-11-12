@@ -19,6 +19,9 @@ public sealed class LlamaCppForm
     /// <summary>The vision projector (<c>--mmproj</c>) relative to the model folder; empty = none.</summary>
     public string ProjectorFile { get; set; } = "";
 
+    /// <summary>The draft GGUF (<c>-md</c>) relative to the models root, since a drafter is its own download; empty = none.</summary>
+    public string DraftModelFile { get; set; } = "";
+
     /// <summary>Context per request (per slot).</summary>
     public int ContextSize { get; set; } = 32_768;
 
@@ -94,6 +97,7 @@ public sealed class LlamaCppForm
             Baseline = settings,
             File = Relative(settings.ModelFile, folder),
             ProjectorFile = settings.ProjectorFile is { } projector ? Relative(projector, folder) : "",
+            DraftModelFile = settings.DraftModelFile ?? "",
             ContextSize = settings.ContextSize,
             Parallel = settings.Parallel,
             GpuLayers = settings.GpuLayers,
@@ -142,6 +146,7 @@ public sealed class LlamaCppForm
         {
             ModelFile = Join(root, File),
             ProjectorFile = string.IsNullOrWhiteSpace(ProjectorFile) ? null : Join(root, ProjectorFile),
+            DraftModelFile = Blank(DraftModelFile),
             ContextSize = ContextSize,
             Parallel = Parallel,
             GpuLayers = GpuLayers,
@@ -396,6 +401,7 @@ public static class LlamaCppEditing
         ("--embedding, --embeddings, --pooling", "Embedding mode and Pooling"),
         ("-ts, --tensor-split, -mg, --main-gpu", "Per-GPU budgets (the tensor split) and the GPUs under Placement"),
         ("--host, --port, --api-key, --alias, -m, --model, --fit, --log-file, --device", "set by MirbadLLM for every model"),
+        ("-md, --model-draft, --spec-draft-model", "Draft model"),
         ("--ui, --no-ui, --webui, --no-webui, --cache-ram, -cram", "fixed off by MirbadLLM (no web UI, no host-RAM prompt cache)"),
         ("-hf, --hf-token, --lora, --mmproj, --chat-template-file, …", "any flag that takes a path, a URL or a download source"),
     ];
@@ -537,6 +543,7 @@ public static class LlamaCppEditing
         var b = after.LlamaCpp ?? new LlamaCppSettings { ModelFile = "" };
         Add("GGUF file", Or(a.ModelFile, "none"), Or(b.ModelFile, "none"));
         Add("Projector", a.ProjectorFile ?? "none", b.ProjectorFile ?? "none");
+        Add("Draft model", a.DraftModelFile ?? "none", b.DraftModelFile ?? "none");
         Add("Context per request", Tokens(a.ContextSize), Tokens(b.ContextSize));
         Add("Parallel slots", a.Parallel.ToString(Culture), b.Parallel.ToString(Culture));
         Add("GPU layers", Layers(a.GpuLayers), Layers(b.GpuLayers));
@@ -686,6 +693,12 @@ public static class LlamaCppFieldHelp
         What: "CPU threads (-t). Empty = llama.cpp's choice.",
         Why: "Matters only for layers left on the CPU; the desktop keeps the remaining cores.",
         Example: "Empty with every layer on the GPU.");
+
+    public static readonly FieldHelpText DraftModel = new(
+        What: "A draft GGUF for speculative decoding, passed as -md. The path starts at the models folder, because a drafter is its own download.",
+        Why: "The drafter proposes several tokens and the model verifies them in one pass, which can raise single-stream speed. " +
+             "llama.cpp reads the method from the draft file; whether the build and the drafter fit this model only shows at a start.",
+        Example: "Qwen3.8-27B-DFlash2-GGUF/Qwen3.8-27B-DFlash2-Q8_0.gguf, with --spec-draft-n-max 7 under Extra args.");
 
     public static readonly FieldHelpText Version = new(
         What: "The llama-server build the model runs with: the node's default, or a version pinned on this model.",

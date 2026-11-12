@@ -46,7 +46,8 @@ public sealed partial class MirbadMcpTools(
         "Planning a model deployment. " +
         "(1) Call mirbad_list_node_runtimes first: a node only runs the runtimes it reports, and a node with discrete GPUs needs gpuIndices. " +
         "(2) Settings depend on the runtime, and mirbad_deploy_model refuses one the runtime would ignore: kvCacheDtype works on vllm, llamacpp and mlx; enablePrefixCaching on vllm; " +
-        "speculative decoding on vllm, sglang and mlx, never on llamacpp or nim; sglang needs speculativeMethod, an algorithm such as DFLASH, EAGLE3, STANDALONE or NGRAM. " +
+        "speculative decoding on vllm, sglang, mlx and llamacpp, never on nim; sglang needs speculativeMethod, an algorithm such as DFLASH, EAGLE3, STANDALONE or NGRAM; " +
+        "llamacpp takes only a draft GGUF, draftFolder with draftFile, and reads the method from that file. " +
         "(3) A deploy only proves the settings are valid. " + UnprovenSpeculativeNote + " " +
         "(4) " + UnprovenImageNote + " " +
         "(5) Tuning works on vllm, llamacpp, mlx and sglang, and every candidate restarts the model. On nim it is refused because it could not change anything; mirbad_start_benchmark still works there. " +
@@ -249,8 +250,9 @@ public sealed partial class MirbadMcpTools(
         [Description("vllm: reuse the KV cache across requests that share a prefix. On by default.")] bool? enablePrefixCaching = null,
         [Description("vllm: speculative method such as mtp, ngram or dflash; omit with draftFolder to let vLLM infer it from the drafter. sglang: required algorithm such as DFLASH, EAGLE, EAGLE3, STANDALONE or NGRAM. Support depends on the image and the checkpoint, and is only proven when the model starts.")] string? speculativeMethod = null,
         [Description("vllm, sglang and mlx: how much to draft per step. Required by vllm and sglang when speculative decoding is on. On sglang this is draft tokens for DFLASH and NGRAM, and steps for EAGLE, EAGLE3 and STANDALONE.")] int? speculativeTokens = null,
-        [Description("vllm, sglang and mlx: folder of the draft model, such as a DFlash or DSpark drafter. The image must support that drafter.")] string? draftFolder = null,
+        [Description("vllm, sglang, mlx and llamacpp: folder of the draft model, such as a DFlash or DSpark drafter. The image must support that drafter. llamacpp also needs draftFile.")] string? draftFolder = null,
         [Description("Hugging Face repository to download into draftFolder. Omit when the folder is already on the node.")] string? draftRepoId = null,
+        [Description("llamacpp: the draft GGUF inside draftFolder. With draftRepoId it is the only file downloaded from that repository.")] string? draftFile = null,
         [Description("Start the model when a request names it while it is stopped; the request waits for the start. Suits llamacpp and mlx; vllm, sglang and nim take minutes to start, so a waiting client may time out.")] bool? startOnRequest = null,
         [Description("Stop the model after this many minutes without a request, at least 1. Omit to never stop it for being idle.")] int? idleStopMinutes = null,
         [Description("Allow stopping this model, while it is idle, to free memory for another model's start on request on the same node.")] bool? stopToMakeRoom = null,
@@ -275,7 +277,7 @@ public sealed partial class MirbadMcpTools(
         if (draftRepoId is not null && (draftFolder is null || !RepoIdRegex().IsMatch(draftRepoId)))
             throw new McpException("draftRepoId must be a Hugging Face owner/repository identifier and needs draftFolder.");
         ValidateSettings(image, imageDigest, extraArgs, kvCacheDtype, speculativeMethod);
-        RefuseIgnoredSettings(runtime, modelFile, image, kvCacheDtype, enablePrefixCaching, speculativeMethod, speculativeTokens, draftFolder);
+        RefuseIgnoredSettings(runtime, modelFile, image, kvCacheDtype, enablePrefixCaching, speculativeMethod, speculativeTokens, draftFolder, draftFile);
         if (await models.GetAsync(modelId, ct).ConfigureAwait(false) is not null)
             throw new McpException($"Model '{modelId}' already exists; choose another id.");
 
@@ -284,6 +286,7 @@ public sealed partial class MirbadMcpTools(
         string? digest = imageDigest ?? capabilities?.Images.FirstOrDefault(i => i.Ref == image)?.Digest;
 
         IReadOnlyList<string>? patterns = allowPatterns is not { Count: > 0 } && runtime == RuntimeKind.LlamaCpp && modelFile is not null ? [modelFile] : allowPatterns;
+        IReadOnlyList<string>? draftPatterns = draftFile is null ? null : [draftFile];
         var model = new ModelDefinition
         {
             Id = modelId,
@@ -292,7 +295,7 @@ public sealed partial class MirbadMcpTools(
             Sources = nim ? []
                 : draftRepoId is null
                 ? [new ModelSource(repoId!, folder, revision, patterns)]
-                : [new ModelSource(repoId!, folder, revision, patterns), new ModelSource(draftRepoId, draftFolder!)],
+                : [new ModelSource(repoId!, folder, revision, patterns), new ModelSource(draftRepoId, draftFolder!, AllowPatterns: draftPatterns)],
             Placement = new ModelPlacement(selected.NodeId, GpuIndices: gpuIndices),
         };
         if (memoryBudgetGiB is { } budget) model = model with { MemoryBudgetGiB = budget };
@@ -308,7 +311,11 @@ public sealed partial class MirbadMcpTools(
             RuntimeKind.LlamaCpp => model with
             {
                 Runtime = runtime,
-                LlamaCpp = LlamaCppFor(selected.NodeId, capabilities, folder, modelFile, image, digest, kvCacheDtype) with { ExtraArgs = extraArgs ?? [] },
+                LlamaCpp = LlamaCppFor(selected.NodeId, capabilities, folder, modelFile, image, digest, kvCacheDtype) with
+                {
+                    ExtraArgs = extraArgs ?? [],
+                    DraftModelFile = draftFolder is null ? null : $"{draftFolder}/{draftFile}",
+                },
             },
             RuntimeKind.Mlx => model with
             {
@@ -357,12 +364,12 @@ public sealed partial class MirbadMcpTools(
             // The small drafter goes first, so a refused draft leaves no large download running for a deleted model.
             DownloadStatus? draft = draftRepoId is null
                 ? null
-                : await selected.Value.StartAsync(new DownloadRequest(draftRepoId, Folder: draftFolder), ct).ConfigureAwait(false);
+                : await selected.Value.StartAsync(new DownloadRequest(draftRepoId, Folder: draftFolder, AllowPatterns: draftPatterns), ct).ConfigureAwait(false);
             DownloadStatus state = await selected.Value.StartAsync(new DownloadRequest(repoId!, revision, Folder: folder, AllowPatterns: patterns), ct).ConfigureAwait(false);
             await Audit(AuditActions.ModelCreate, modelId, selected.NodeId, AuditResults.Accepted, "MCP deploy and download started").ConfigureAwait(false);
             string[] notes =
             [
-                .. model.Speculative is not null || model.Mlx?.DraftModelFolder is not null ? [UnprovenSpeculativeNote] : Array.Empty<string>(),
+                .. model.Speculative is not null || model.Mlx?.DraftModelFolder is not null || model.LlamaCpp?.DraftModelFile is not null ? [UnprovenSpeculativeNote] : Array.Empty<string>(),
                 .. image is not null ? [UnprovenImageNote] : Array.Empty<string>(),
             ];
             return new { model, folder, nodeId = selected.NodeId, download = state, draftDownload = draft, planningNotes = notes, nextAction = "Poll mirbad_get_download for each folder; when complete, call mirbad_start_model." };
@@ -389,8 +396,9 @@ public sealed partial class MirbadMcpTools(
         [Description("vllm: reuse the KV cache across requests that share a prefix.")] bool? enablePrefixCaching = null,
         [Description("vllm or sglang: speculative method or algorithm, as in mirbad_deploy_model.")] string? speculativeMethod = null,
         [Description("vllm, sglang and mlx: how much to draft per step, as in mirbad_deploy_model.")] int? speculativeTokens = null,
-        [Description("vllm, sglang and mlx: folder of a draft model that is already on the node.")] string? draftFolder = null,
-        [Description("vllm, sglang and mlx: turn speculative decoding off. Cannot be combined with the other speculative arguments.")] bool speculativeOff = false,
+        [Description("vllm, sglang, mlx and llamacpp: folder of a draft model that is already on the node. llamacpp also needs draftFile.")] string? draftFolder = null,
+        [Description("llamacpp: the draft GGUF inside draftFolder.")] string? draftFile = null,
+        [Description("vllm, sglang, mlx and llamacpp: turn speculative decoding off. Cannot be combined with the other speculative arguments.")] bool speculativeOff = false,
         [Description("Start the model when a request names it while it is stopped, as in mirbad_deploy_model. Takes effect at once, without a restart.")] bool? startOnRequest = null,
         [Description("Stop the model after this many minutes without a request; 0 turns the idle stop off. Takes effect at once, without a restart.")] int? idleStopMinutes = null,
         [Description("Allow stopping this model, while it is idle, to make room for another model's start on request. Takes effect at once, without a restart.")] bool? stopToMakeRoom = null,
@@ -402,10 +410,10 @@ public sealed partial class MirbadMcpTools(
         if (servedName is not null && (string.IsNullOrWhiteSpace(servedName) || servedName.Length > 200))
             throw new McpException("servedName must be non-empty and at most 200 characters.");
         ValidateSettings(image, imageDigest, extraArgs, kvCacheDtype, speculativeMethod);
-        RefuseIgnoredSettings(before.Runtime, null, image, kvCacheDtype, enablePrefixCaching, speculativeMethod, speculativeTokens, draftFolder);
+        RefuseIgnoredSettings(before.Runtime, null, image, kvCacheDtype, enablePrefixCaching, speculativeMethod, speculativeTokens, draftFolder, draftFile);
         if (speculativeOff && (speculativeMethod is not null || speculativeTokens is not null || draftFolder is not null))
             throw new McpException("speculativeOff cannot be combined with speculativeMethod, speculativeTokens or draftFolder; no state was changed.");
-        if (speculativeOff && before.Runtime is RuntimeKind.LlamaCpp or RuntimeKind.Nim)
+        if (speculativeOff && before.Runtime is RuntimeKind.Nim)
             throw new McpException($"The {before.Runtime} runtime does not use speculativeOff; no state was changed.");
         // A new image or command would run with the model's secrets, and a caller here can't otherwise read them.
         if (before.Container?.SecretEnv is { Count: > 0 } && (image is not null || extraArgs is not null))
@@ -437,7 +445,7 @@ public sealed partial class MirbadMcpTools(
         };
         after = before.Runtime switch
         {
-            RuntimeKind.LlamaCpp => after with { LlamaCpp = UpdatedLlamaCpp(before, image, digest, extraArgs, kvCacheDtype) },
+            RuntimeKind.LlamaCpp => after with { LlamaCpp = UpdatedLlamaCpp(before, image, digest, extraArgs, kvCacheDtype, draftFolder, draftFile, speculativeOff) },
             RuntimeKind.Mlx => after with { Mlx = UpdatedMlx(before, extraArgs, kvCacheDtype, speculativeTokens, draftFolder, speculativeOff) },
             RuntimeKind.Sglang or RuntimeKind.Nim => after with
             {
@@ -496,7 +504,7 @@ public sealed partial class MirbadMcpTools(
         };
     }
 
-    private static LlamaCppSettings UpdatedLlamaCpp(ModelDefinition model, string? image, string? digest, IReadOnlyList<string>? extraArgs, string? kv)
+    private static LlamaCppSettings UpdatedLlamaCpp(ModelDefinition model, string? image, string? digest, IReadOnlyList<string>? extraArgs, string? kv, string? draftFolder, string? draftFile, bool speculativeOff)
     {
         LlamaCppSettings current = model.LlamaCpp ?? throw new McpException($"Model '{model.Id}' has no llama.cpp settings; fix it in the portal.");
         if (image is not null && current.Delivery == LaunchDelivery.Process)
@@ -508,6 +516,7 @@ public sealed partial class MirbadMcpTools(
             ExtraArgs = extraArgs ?? current.ExtraArgs,
             CacheTypeK = kv ?? current.CacheTypeK,
             CacheTypeV = kv ?? current.CacheTypeV,
+            DraftModelFile = speculativeOff ? null : draftFolder is null ? current.DraftModelFile : $"{draftFolder}/{draftFile}",
         };
     }
 
@@ -578,7 +587,7 @@ public sealed partial class MirbadMcpTools(
         nodeStatus.GetNode(nodeId)?.Capabilities ?? (await nodes.GetAsync(nodeId, ct).ConfigureAwait(false))?.LastCapabilities;
 
     // A runtime would ignore these without a word, and the caller would believe the setting took effect.
-    private static void RefuseIgnoredSettings(RuntimeKind runtime, string? modelFile, string? image, string? kv, bool? prefix, string? method, int? tokens, string? draft)
+    private static void RefuseIgnoredSettings(RuntimeKind runtime, string? modelFile, string? image, string? kv, bool? prefix, string? method, int? tokens, string? draft, string? draftFile)
     {
         var ignored = new (bool Given, bool Applies, string Name)[]
         {
@@ -588,10 +597,13 @@ public sealed partial class MirbadMcpTools(
             (prefix is not null, runtime == RuntimeKind.Vllm, "enablePrefixCaching"),
             (method is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Sglang, "speculativeMethod"),
             (tokens is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Sglang or RuntimeKind.Mlx, "speculativeTokens"),
-            (draft is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Sglang or RuntimeKind.Mlx, "draftFolder"),
+            (draft is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Sglang or RuntimeKind.Mlx or RuntimeKind.LlamaCpp, "draftFolder"),
+            (draftFile is not null, runtime == RuntimeKind.LlamaCpp, "draftFile"),
         }.Where(s => s.Given && !s.Applies).Select(s => s.Name).ToList();
         if (ignored.Count > 0)
             throw new McpException($"The {runtime} runtime does not use {string.Join(", ", ignored)}; no state was changed.");
+        if (runtime == RuntimeKind.LlamaCpp && (draft is null) != (draftFile is null))
+            throw new McpException("The LlamaCpp runtime needs draftFolder and draftFile together; no state was changed.");
     }
 
     private static LlamaCppSettings LlamaCppFor(string nodeId, NodeCapabilities? capabilities, string folder, string? modelFile, string? image, string? digest, string? kv)

@@ -288,6 +288,11 @@
             }
         </div>
         <div class="field field--wide">
+            <FieldHelp Label="Draft model (speculative decoding)" For="field-llama-draft" Help="@LlamaCppFieldHelp.DraftModel" />
+            <input type="text" class="form-control num" id="field-llama-draft" data-testid="field-llama-draft" spellcheck="false" placeholder="None"
+                   @bind="Form.DraftModelFile" @bind:after="ChangedAsync" />
+        </div>
+        <div class="field field--wide">
             <FieldHelp Label="Extra args (one flag per line)" For="field-llama-extra-args" Help="@LlamaCppFieldHelp.ExtraArgs" />
             <textarea class="form-control num" id="field-llama-extra-args" data-testid="field-llama-extra-args" rows="3" spellcheck="false"
                       aria-describedby="@(Refused.Count > 0 ? "field-llama-extra-args-hint field-llama-extra-args-error" : "field-llama-extra-args-hint")"

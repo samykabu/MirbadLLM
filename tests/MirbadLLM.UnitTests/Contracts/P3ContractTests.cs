@@ -407,6 +407,10 @@ public sealed class P3ContractTests
         Assert.True(LlamaCppFlags.IsFlag("--pooling=last", ["--pooling"]));
         Assert.False(LlamaCppFlags.IsFlag("last", ["--pooling"]));
         Assert.All(LlamaCppFlags.BuilderPathFlags, f => Assert.Contains(f, LlamaCppFlags.PathValued));
+        // The draft model has a setting; every spelling of its flag is refused, the method and depth flags are not.
+        Assert.Equal(
+            ["-md", "--model-draft=d.gguf", "--spec-draft-model", "--spec-draft-hf"],
+            LlamaCppFlags.RefusedExtraArgs(["-md", "d.gguf", "--model-draft=d.gguf", "--spec-draft-model", "d.gguf", "--spec-draft-hf", "a/b", "--spec-type", "draft-dflash", "--spec-draft-n-max", "7"]));
         Assert.Contains(ProcessArgvTokens.Port, LlamaCppFlags.AlwaysArgs);
         Assert.Equal(["--fit", "off"], LlamaCppFlags.AlwaysArgs.TakeLast(2));
         Assert.Equal(LogicalVolumes.ModelsToken, ProcessArgvTokens.Models);

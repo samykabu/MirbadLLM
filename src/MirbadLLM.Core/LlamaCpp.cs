@@ -113,7 +113,7 @@ public static class LlamaCppFlags
         ["--host", LoopbackHost, "--port", ProcessArgvTokens.Port, "--metrics", "--no-ui", "--cache-ram", "0", "--fit", "off"];
 
     /// <summary>Path-valued flags only the builder may emit (each value <c>{models}/…</c>).</summary>
-    public static IReadOnlyList<string> BuilderPathFlags { get; } = ["-m", "--model", "-mm", "--mmproj", "--chat-template-file"];
+    public static IReadOnlyList<string> BuilderPathFlags { get; } = ["-m", "--model", "-mm", "--mmproj", "--chat-template-file", "-md"];
 
     /// <summary>
     /// Every flag that takes a path, a URL or a download source. Refused in ExtraArgs; in argv only the
@@ -122,7 +122,8 @@ public static class LlamaCppFlags
     /// </summary>
     public static IReadOnlyList<string> PathValued { get; } =
     [
-        "-m", "--model", "-mm", "--mmproj", "--chat-template-file", "-md", "--model-draft", "-mv", "--model-vocoder",
+        "-m", "--model", "-mm", "--mmproj", "--chat-template-file", "-md", "--model-draft", "--spec-draft-model", "--spec-draft-hf",
+        "-mv", "--model-vocoder",
         "--lora", "--lora-scaled", "--control-vector", "--control-vector-scaled", "--grammar-file", "-jf", "--json-schema-file",
         "--slot-save-path", "--ssl-key-file", "--ssl-cert-file", "--log-file", "--path", "--api-key-file",
         "-mu", "--model-url", "-mmu", "--mmproj-url", "-hf", "-hfr", "--hf-repo", "-hff", "--hf-file", "-hfd", "-hfrd",
