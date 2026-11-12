@@ -133,6 +133,46 @@ public sealed class ModelTuneApplyTests : IDisposable
             d => Assert.True(cut.Find($"[data-testid=step-{d}]").HasAttribute("checked"), d.ToString()));
     }
 
+    [Fact]
+    public void CustomSearch_TicksEachValue_AndUntickingOneLeavesItOutOfItsStep()
+    {
+        var (ctx, _, _, _) = MakeContext(LlamaCppModel, MakeRun("run-1", MakeCandidate(0, CandidateOutcome.Accepted, LlamaCppModel)));
+        using var _ = ctx;
+        var cut = ctx.Render<ModelTune>(p => p.Add(x => x.Id, LlamaCppModel.Id));
+        cut.WaitForElement("[data-testid=tune-plan]", TimeSpan.FromSeconds(10));
+        string values = $"[data-testid^=value-{TuningDimension.Parallel}-]";
+
+        // A preset tries every value of its steps, so it offers none to untick.
+        Assert.Empty(cut.FindAll("[data-testid^=value-]"));
+
+        cut.ChangeAt("[data-testid=search-Custom]", true);
+
+        cut.WaitForAssertion(() => Assert.True(cut.FindAll(values).Count > 1), TimeSpan.FromSeconds(5));
+        Assert.All(cut.FindAll(values), v => Assert.True(v.HasAttribute("checked")));
+        Assert.Contains("steps and values ticked", cut.Find("[data-testid=search-description]").TextContent, StringComparison.Ordinal);
+        int offered = cut.FindAll(values).Count;
+        int all = int.Parse(cut.Find("[data-testid=tune-candidates] .num").TextContent, CultureInfo.InvariantCulture);
+        string first = cut.FindAll(values)[0].GetAttribute("data-testid")!;
+
+        cut.ChangeAt($"[data-testid='{first}']", false);
+
+        cut.WaitForAssertion(
+            () => Assert.Equal(all - 1, int.Parse(cut.Find("[data-testid=tune-candidates] .num").TextContent, CultureInfo.InvariantCulture)),
+            TimeSpan.FromSeconds(5));
+        // The unticked value stays on the page, so it can be ticked again.
+        Assert.Equal(offered, cut.FindAll(values).Count);
+        Assert.False(cut.Find($"[data-testid='{first}']").HasAttribute("checked"));
+        Assert.Equal(offered - 1, cut.FindAll(values).Count(v => v.HasAttribute("checked")));
+        Assert.True(cut.Find($"[data-testid=step-{TuningDimension.Parallel}]").HasAttribute("checked"));
+
+        // Back on a preset every value runs again.
+        cut.ChangeAt("[data-testid=search-Full]", true);
+        cut.WaitForAssertion(
+            () => Assert.Equal(all, int.Parse(cut.Find("[data-testid=tune-candidates] .num").TextContent, CultureInfo.InvariantCulture)),
+            TimeSpan.FromSeconds(5));
+        Assert.Empty(cut.FindAll("[data-testid^=value-]"));
+    }
+
     [Theory]
     [InlineData(RuntimeKind.Mlx)]
     [InlineData(RuntimeKind.Sglang)]

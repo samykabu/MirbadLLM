@@ -26,6 +26,9 @@ public static class TuningPlanner
     /// <summary>Pooling models: per-step token budgets.</summary>
     public static readonly IReadOnlyList<int> PoolingMaxNumBatchedTokensValues = [2048, 4096, 8192, 16384, 32768];
 
+    /// <summary>Skip reason of a step whose values a custom search all left out.</summary>
+    public const string NoValueSelected = "No value selected.";
+
     public const string PoolingNotApplicable = "Not applicable: pooling (embedding) models are tuned on max num seqs and max batched tokens only.";
 
     public static string StepTitle(TuningDimension dimension) => dimension switch
@@ -43,18 +46,20 @@ public static class TuningPlanner
     /// <param name="inspection">The checkpoint inspection (MTP layers, KV size); null when the folder can't be read.</param>
     /// <param name="dimensions">Steps to include; null = all four.</param>
     /// <param name="gguf">A llama.cpp model's GGUF summary (its candidates' memory checks); ignored for vLLM.</param>
+    /// <param name="excluded">Values a custom search leaves out of their step (<see cref="Without"/>); null = none.</param>
     public static TuningPlan Plan(
-        ModelDefinition baseline, ModelFolderInspection? inspection, IReadOnlyCollection<TuningDimension>? dimensions = null, GgufSummary? gguf = null)
+        ModelDefinition baseline, ModelFolderInspection? inspection, IReadOnlyCollection<TuningDimension>? dimensions = null, GgufSummary? gguf = null,
+        IReadOnlyCollection<TuningValueRef>? excluded = null)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         if (LlamaCppTuning.Applies(baseline))
         {
-            return LlamaCppTuning.Plan(baseline, gguf, dimensions);
+            return LlamaCppTuning.Plan(baseline, gguf, dimensions, excluded);
         }
 
         if (SmallRuntimeTuning.Applies(baseline))
         {
-            return SmallRuntimeTuning.Plan(baseline, inspection, dimensions);
+            return SmallRuntimeTuning.Plan(baseline, inspection, dimensions, excluded);
         }
 
         baseline = VllmArgsNormalizer.Apply(baseline);
@@ -63,6 +68,7 @@ public static class TuningPlanner
         var steps = PoolingDetection.Detect(baseline) == PoolingMode.None
             ? GenerationSteps(baseline, inspection, Included)
             : PoolingSteps(Included);
+        steps = Without(steps, excluded);
 
         // Preview: every step applied to the baseline, duplicates removed.
         var preview = new List<TuningCandidatePlan> { new("Baseline", "Baseline (saved settings)", baseline) };
@@ -82,6 +88,27 @@ public static class TuningPlanner
         }
 
         return new TuningPlan(steps, preview, max);
+    }
+
+    /// <summary>
+    /// The steps without the values a custom search leaves out. Such a step keeps its full list in
+    /// <see cref="TuningStepPlan.Offered"/>, and one left with no value does not run (<see cref="NoValueSelected"/>).
+    /// Every planner calls this before it builds its candidates, so the preview, the estimate and the run agree.
+    /// </summary>
+    internal static List<TuningStepPlan> Without(List<TuningStepPlan> steps, IReadOnlyCollection<TuningValueRef>? excluded)
+    {
+        if (excluded is null || excluded.Count == 0)
+        {
+            return steps;
+        }
+
+        return [.. steps.Select(step =>
+        {
+            var kept = step.Values.Where(v => !excluded.Contains(new TuningValueRef(step.Dimension, v.Label))).ToList();
+            return kept.Count == step.Values.Count
+                ? step
+                : step with { Values = kept, Offered = step.Values, SkipReason = step.SkipReason ?? (kept.Count == 0 ? NoValueSelected : null) };
+        })];
     }
 
     /// <summary>Pooling models decode nothing: only the concurrency and the token budget are varied.</summary>

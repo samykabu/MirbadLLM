@@ -190,7 +190,26 @@ else if (_model is not null)
                                                 }
                                             </span>
                                         }
-                                        <span class="num plan-step-values">@string.Join(", ", step.Values.Select(v => v.Label))</span>
+                                        @{ var offered = step.Offered ?? step.Values; }
+                                        @if (_customSearch && included && offered.Count > 0 && step.SkipReason is null or TuningPlanner.NoValueSelected)
+                                        {
+                                            @* Custom: each value is its own tick, so a step can try some of its values and leave the rest out. *@
+                                            <span class="plan-step-checks plan-step-values" role="group" aria-label="@($"{step.Title}: values to try")">
+                                                @foreach (var value in offered)
+                                                {
+                                                    var pick = new TuningValueRef(step.Dimension, value.Label);
+                                                    <label class="plan-step-check">
+                                                        <input type="checkbox" class="form-check-input" checked="@(!_excluded.Contains(pick))"
+                                                               data-testid="@($"value-{step.Dimension}-{value.Label}")" @onchange="() => ToggleValueAsync(pick)" />
+                                                        <span class="num">@value.Label</span>
+                                                    </label>
+                                                }
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span class="num plan-step-values">@string.Join(", ", offered.Select(v => v.Label))</span>
+                                        }
                                         @* A step whose "why" is its phase's own line (the refinement steps) does not repeat it. *@
                                         @if (step.Description is not null && step.Description != phaseText)
                                         {
@@ -400,6 +419,9 @@ else if (_model is not null)
     private TuningGoal _goal = TuningGoal.InteractiveChat;
     private readonly HashSet<TuningDimension> _steps = [.. SearchPlanner.Quick];
 
+    /// <summary>Values unticked in a custom search: their step runs without them.</summary>
+    private readonly HashSet<TuningValueRef> _excluded = [];
+
     private static readonly (string Key, string Label)[] VllmSearchOptions = [("Quick", "Quick"), ("Full", "Full"), ("Custom", "Custom")];
 
     /// <summary>The llama.cpp small tune has no Quick preset: its whole search is four steps (design-p3p4 §A.6).</summary>
@@ -435,12 +457,12 @@ else if (_model is not null)
     private string SearchDescription => (IsSmallRuntime ? (bool?)null : IsLlamaCpp, SearchScope) switch
     {
         (null, "Full") => "Full: every step below, one at a time from the saved settings. Each candidate restarts the model.",
-        (null, _) => "Custom: exactly the steps ticked below. Untick a step to leave that setting at its saved value; the candidate count and time update.",
+        (null, _) => "Custom: exactly the steps and values ticked below. Untick a step to leave that setting at its saved value, or a value to leave it out of its step; the candidate count and time update.",
         (true, "Full") => "Full: the whole small tune — parallel slots, flash attention, KV cache types and batch × micro-batch, one dimension at a time from the saved settings, at most 12 candidates.",
-        (true, _) => "Custom: exactly the steps ticked below. Untick a step to leave that dimension at its saved value; the candidate count and time update.",
+        (true, _) => "Custom: exactly the steps and values ticked below. Untick a step to leave that dimension at its saved value, or a value to leave it out of its step; the candidate count and time update.",
         (_, "Quick") => "Quick: the capability gates, max num seqs, and speculative decoding with FULL_AND_PIECEWISE graphs — usually 8–12 candidates.",
         (_, "Full") => "Full: every phase — KV cache × prefix caching, max num seqs, max batched tokens, speculative × CUDA graphs with PIECEWISE follow-ups, async scheduling and the refinement pass.",
-        _ => "Custom: exactly the steps ticked below. Tick or untick any step; the candidate count and time update.",
+        _ => "Custom: exactly the steps and values ticked below. Tick or untick any step, or a value inside a step; the follow-ups and the refinement pass still choose their own values. The candidate count and time update.",
     };
 
     /// <summary>Quick and Full tick their preset steps; Custom keeps the current ticks and makes them the plan.</summary>
@@ -449,6 +471,8 @@ else if (_model is not null)
         _customSearch = key == "Custom";
         if (!_customSearch)
         {
+            // A preset tries every value of its steps.
+            _excluded.Clear();
             _steps.Clear();
             _steps.UnionWith(key == "Full" ? AllSteps : SearchPlanner.Quick);
         }
@@ -851,7 +875,7 @@ else if (_model is not null)
 
         try
         {
-            _preview = await Jobs.PreviewTuningAsync(Id, _steps.ToList(), _goal);
+            _preview = await Jobs.PreviewTuningAsync(Id, _steps.ToList(), _goal, _excluded.ToList());
         }
         catch (Exception ex) when (ex is KeyNotFoundException or HttpRequestException or InvalidOperationException or DockerApiException)
         {
@@ -874,6 +898,16 @@ else if (_model is not null)
 
         // A hand-ticked step is a custom plan, even when it happens to match a preset again.
         _customSearch = true;
+        await RefreshPreviewAsync();
+    }
+
+    private async Task ToggleValueAsync(TuningValueRef value)
+    {
+        if (!_excluded.Remove(value))
+        {
+            _excluded.Add(value);
+        }
+
         await RefreshPreviewAsync();
     }
 
@@ -921,7 +955,7 @@ else if (_model is not null)
     {
         try
         {
-            _job = await Jobs.StartTuningAsync(Id, _goal, _steps.ToList());
+            _job = await Jobs.StartTuningAsync(Id, _goal, _steps.ToList(), _excluded.ToList());
         }
         catch (Exception ex) when (ex is InvalidOperationException or KeyNotFoundException)
         {

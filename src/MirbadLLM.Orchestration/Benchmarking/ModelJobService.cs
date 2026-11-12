@@ -335,8 +335,14 @@ public sealed class ModelJobService(
     /// What a tuning run would do. With a workload preset <paramref name="goal"/> the estimate includes the confirmation
     /// stage (top-2 + baseline re-measured with more repetitions).
     /// </summary>
+    public Task<TuningPreview> PreviewTuningAsync(
+        string modelId, IReadOnlyCollection<TuningDimension>? dimensions, TuningGoal? goal, CancellationToken ct = default) =>
+        PreviewTuningAsync(modelId, dimensions, goal, excluded: null, ct);
+
+    /// <summary>The preview of a custom search that leaves <paramref name="excluded"/> values out of their step (null = none).</summary>
     public async Task<TuningPreview> PreviewTuningAsync(
-        string modelId, IReadOnlyCollection<TuningDimension>? dimensions, TuningGoal? goal, CancellationToken ct = default)
+        string modelId, IReadOnlyCollection<TuningDimension>? dimensions, TuningGoal? goal,
+        IReadOnlyCollection<TuningValueRef>? excluded, CancellationToken ct = default)
     {
         var stored = await registry.GetAsync(modelId, ct).ConfigureAwait(false)
             ?? throw new KeyNotFoundException($"Unknown model '{modelId}'.");
@@ -347,10 +353,10 @@ public sealed class ModelJobService(
         goal = goal is { } asked ? EffectiveGoal(saved, asked) : null;
         if (goal is { } preset && WorkloadProfiles.IsPreset(preset))
         {
-            return await PreviewSearchAsync(saved, dimensions, preset, ct).ConfigureAwait(false);
+            return await PreviewSearchAsync(saved, dimensions, preset, excluded, ct).ConfigureAwait(false);
         }
 
-        var plan = TuningPlanner.Plan(saved, Inspect(saved), dimensions, InspectGguf(saved));
+        var plan = TuningPlanner.Plan(saved, Inspect(saved), dimensions, InspectGguf(saved), excluded);
         bool reuse = await BaselineIsRunningAsync(saved, ct).ConfigureAwait(false);
         var bench = await EstimateBenchmarkAsync(modelId, ct).ConfigureAwait(false);
         var perCandidate = EstimateStartup(modelId) + bench;
@@ -370,10 +376,11 @@ public sealed class ModelJobService(
     /// Workload-preset preview: the interaction-aware search plan (<see cref="SearchPlanner"/>) and an ETA from the
     /// expected candidate count (follow-ups and refinement included) and this model's measured durations.
     /// </summary>
-    private async Task<TuningPreview> PreviewSearchAsync(ModelDefinition saved, IReadOnlyCollection<TuningDimension>? dimensions, TuningGoal goal, CancellationToken ct)
+    private async Task<TuningPreview> PreviewSearchAsync(
+        ModelDefinition saved, IReadOnlyCollection<TuningDimension>? dimensions, TuningGoal goal, IReadOnlyCollection<TuningValueRef>? excluded, CancellationToken ct)
     {
         string node = NodeOf(saved);
-        var plan = SearchPlanner.Plan(saved, Inspect(saved), dimensions, folder => InspectFolder(node, folder), _options.MtpArchitectures.ToList(), InspectGguf(saved));
+        var plan = SearchPlanner.Plan(saved, Inspect(saved), dimensions, folder => InspectFolder(node, folder), _options.MtpArchitectures.ToList(), InspectGguf(saved), excluded);
         bool reuse = await BaselineIsRunningAsync(saved, ct).ConfigureAwait(false);
         var (startup, bench, basis) = await EstimateDurationsAsync(saved.Id, goal, ct).ConfigureAwait(false);
         int confirmations = plan.ExpectedCandidates > 1 ? Math.Min(3, plan.ExpectedCandidates) : 0;
@@ -469,8 +476,17 @@ public sealed class ModelJobService(
     /// <exception cref="JobConflictException">Another job holds the model's node, or the job limit is reached.</exception>
     /// <exception cref="ModelBusyException">Another ownership record (a move, a restore) holds the model.</exception>
     /// <exception cref="KeyNotFoundException">Unknown model.</exception>
+    public Task<JobSnapshot> StartTuningAsync(
+        string modelId, TuningGoal goal, IReadOnlyCollection<TuningDimension>? dimensions = null, CancellationToken ct = default) =>
+        StartTuningAsync(modelId, goal, dimensions, excluded: null, ct);
+
+    /// <summary>Starts a custom search that leaves <paramref name="excluded"/> values out of their step (null = none).</summary>
+    /// <exception cref="JobConflictException">Another job holds the model's node, or the job limit is reached.</exception>
+    /// <exception cref="ModelBusyException">Another ownership record (a move, a restore) holds the model.</exception>
+    /// <exception cref="KeyNotFoundException">Unknown model.</exception>
     public async Task<JobSnapshot> StartTuningAsync(
-        string modelId, TuningGoal goal, IReadOnlyCollection<TuningDimension>? dimensions = null, CancellationToken ct = default)
+        string modelId, TuningGoal goal, IReadOnlyCollection<TuningDimension>? dimensions,
+        IReadOnlyCollection<TuningValueRef>? excluded, CancellationToken ct = default)
     {
         var model = await registry.GetAsync(modelId, ct).ConfigureAwait(false)
             ?? throw new KeyNotFoundException($"Unknown model '{modelId}'.");
@@ -482,7 +498,7 @@ public sealed class ModelJobService(
         string nodeId = NodeOf(model);
         ThrowIfBusy(nodeId, JobKind.Tuning, modelId);
         goal = EffectiveGoal(model, goal);
-        var preview = await PreviewTuningAsync(modelId, dimensions, goal, ct).ConfigureAwait(false);
+        var preview = await PreviewTuningAsync(modelId, dimensions, goal, excluded, ct).ConfigureAwait(false);
         var job = await BeginAsync(JobKind.Tuning, model, nodeId, preview.Estimate, goal, ct).ConfigureAwait(false);
         try
         {

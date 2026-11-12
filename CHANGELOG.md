@@ -6,6 +6,7 @@ private development history.
 
 ## Unreleased
 
+- Tune: a Custom search ticks each value of a step, so a step can try some of its values and leave the rest out, for example max running requests 4 and 8 without 16 and 32. The candidate count and the time follow the ticks, and a step with nothing ticked does not run. `POST /api/models/{id}/tune` takes the same choice as `exclude`
 - llama.cpp models take a draft model for speculative decoding: **Draft model** in the editor, or `draftFolder` with `draftFile` over MCP, passes a draft GGUF such as a DFlash drafter as `-md`. The method and depth stay extra arguments (`--spec-type`, `--spec-draft-n-max`), and `--spec-draft-model` and `--spec-draft-hf` are now refused there like the other path flags
 - A new install starts with an empty model list. It used to carry one example definition, `ornith-9b-fp8`, whose checkpoint only the first deployment had
 - The master and agent from the compose files work on a PC with discrete GPUs: the agent looks at the GPUs and gives each card its own memory budget, where it used to count every machine as one pool. `MIRBADLLM_MEMORY_MODEL` pins `Unified` or `Discrete`, and `MIRBADLLM_NODE_ID` names the machine's own node before the first start (unset, it stays `dgx`)
