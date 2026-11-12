@@ -196,7 +196,7 @@ else
                             </td>
                             <td data-label="Requests" class="num col-num">
                                 @(router is null ? UiFormat.Missing : UiFormat.Whole(router.TotalRequests))
-                                @if (ErrorPercent(router) is > 5) { <small class="models-errors">@UiFormat.Percent(ErrorPercent(router)) failed</small> }
+                                @if (ErrorPercent(router) is > 5) { <small class="models-errors" title="@FailedTip(router!)" data-testid="@($"models-errors-{d.Id}")">@UiFormat.Percent(ErrorPercent(router)) failed</small> }
                             </td>
                             <td class="col-actions" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
                                 <span class="row-actions">
@@ -342,6 +342,12 @@ else
         if (_focusModel is { } id && _rowRefs.TryGetValue(id, out var element)) { _focusModel = null; await element.FocusAsync(preventScroll: true); }
     }
     private static double? ErrorPercent(RouterModelStats? stats) => stats is { TotalRequests: > 0 } ? 100.0 * stats.FailedRequests / stats.TotalRequests : null;
+
+    /// <summary>What the "failed" share counts, with the two numbers behind it (the router's own rule, ProxyHandler).</summary>
+    private static string FailedTip(RouterModelStats stats) =>
+        $"{UiFormat.Whole(stats.FailedRequests)} of {UiFormat.Whole(stats.TotalRequests)} requests failed since the controller last started. " +
+        "A request fails when the model's server answers with an error or can't be reached, or when the client disconnects before the answer ends. " +
+        "Shown above 5%.";
     private IReadOnlyList<double?> Trend(ModelDefinition model) => (_history?.GetModel(model.Id, TimeSpan.FromMinutes(3)) ?? [])
         .Select(s => s.HasRates ? (double?)(PoolingDetection.Detect(model) == PoolingMode.None ? s.Kpis.Load.GenerationTokensPerSecond : s.Kpis.Load.PromptTokensPerSecond) : null).ToList();
     private IReadOnlyList<LineChartSeries> DetailSeries(ModelDefinition model) => [new("Tokens", _colors.GetValueOrDefault(model.Id, "var(--ss-series-1)"), (_history?.GetModel(model.Id, TimeSpan.FromMinutes(3)) ?? [])

@@ -77,6 +77,31 @@ public sealed class ModelsPageTests
     }
 
     [Fact]
+    public void TheFailedShare_SaysOnHoverWhatItCounts_WithTheNumbersBehindIt()
+    {
+        var stats = new MirbadLLM.Router.RouterStats();
+        for (int i = 0; i < 14; i++)
+        {
+            stats.RequestStarted("busy");
+            stats.RequestCompleted("busy", failed: i < 2);
+        }
+
+        stats.RequestStarted("fine");
+        stats.RequestCompleted("fine", failed: false);
+        using var ctx = Context(new FakeModelRuntime(), models: [MakeModel("busy"), MakeModel("fine")]);
+        ctx.Services.AddSingleton<IRouterStats>(stats);
+
+        var cut = ctx.Render<Models>();
+
+        var failed = cut.Find("[data-testid=models-errors-busy]");
+        Assert.Contains("14.3", failed.TextContent, StringComparison.Ordinal);
+        string tip = failed.GetAttribute("title")!;
+        Assert.StartsWith("2 of 14 requests failed since the controller last started.", tip, StringComparison.Ordinal);
+        Assert.Contains("the client disconnects before the answer ends", tip, StringComparison.Ordinal);
+        Assert.Empty(cut.FindAll("[data-testid=models-errors-fine]")); // nothing failed, so no share and no tip
+    }
+
+    [Fact]
     public void OnDemandSettings_ShowOnTheRow_AndInTheDetails()
     {
         using var ctx = Context(new FakeModelRuntime(), models:
