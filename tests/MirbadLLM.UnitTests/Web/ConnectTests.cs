@@ -304,7 +304,7 @@ public sealed class ConnectTests
         Assert.NotNull(cut.Find("[data-testid=client-tabs-panel] [data-testid=curl-snippet]"));
     }
 
-    private static Bunit.BunitContext TwoNodeContext()
+    private static Bunit.BunitContext TwoNodeContext(bool offStartsOnRequest = false)
     {
         var ctx = new Bunit.BunitContext();
         ctx.JSInterop.Mode = JSRuntimeMode.Loose;
@@ -322,7 +322,7 @@ public sealed class ConnectTests
                 Id = "small", ServedName = "Small-Model", ModelPath = "s", Runtime = RuntimeKind.LlamaCpp,
                 LlamaCpp = new LlamaCppSettings { ModelFile = "s.gguf", ContextSize = 16_384 }, Placement = new ModelPlacement("pc"),
             },
-            new ModelDefinition { Id = "off", ServedName = "Off-Model", ModelPath = "o", Placement = new ModelPlacement("pc") },
+            new ModelDefinition { Id = "off", ServedName = "Off-Model", ModelPath = "o", Placement = new ModelPlacement("pc"), StartOnRequest = offStartsOnRequest },
         ]));
         ctx.Services.AddSingleton<INodeRegistry>(new ListOnlyNodeRegistry(
             new NodeRecord { Id = "dgx", Uid = "dgx-uid", Address = "https://127.0.0.1:1", Approved = true },
@@ -353,6 +353,49 @@ public sealed class ConnectTests
         Assert.Contains("\"name\": \"Big-Model (dgx · vLLM)\"", snippet, StringComparison.Ordinal);
         Assert.Contains("\"name\": \"Small-Model (Office PC · llama.cpp)\"", snippet, StringComparison.Ordinal);
         Assert.Contains("\"maxInputTokens\": 12288", snippet, StringComparison.Ordinal); // llama.cpp context 16,384 minus a quarter
+    }
+
+    [Fact]
+    public void ClientSettings_OfferAStoppedModelThatStartsOnRequest_AfterTheReadyOnes()
+    {
+        using var ctx = TwoNodeContext(offStartsOnRequest: true);
+        var cut = RenderConnect(ctx);
+
+        Assert.Contains("Off-Model", cut.Find("[data-testid=on-request-models]").TextContent, StringComparison.Ordinal);
+        var options = cut.Find("[data-testid=snippet-model-select]").QuerySelectorAll("option");
+        Assert.Equal(["Big-Model", "Small-Model", "Off-Model"], options.Select(o => o.GetAttribute("value")));
+        Assert.EndsWith("starts on request", options[2].TextContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("starts on request", options[0].TextContent, StringComparison.Ordinal);
+
+        // The first Ready model stays the default, and the VS Code entry lists all three.
+        Assert.Contains("Big-Model", cut.Find("#snippet-model-hint").TextContent, StringComparison.Ordinal);
+        string snippet = cut.Find("[data-testid=vscode-snippet]").TextContent;
+        Assert.Contains("\"id\": \"Big-Model\"", snippet, StringComparison.Ordinal);
+        Assert.Contains("\"id\": \"Off-Model\"", snippet, StringComparison.Ordinal);
+        Assert.Contains("\"name\": \"Off-Model (Office PC · vLLM)\"", snippet, StringComparison.Ordinal);
+
+        cut.Find("[data-testid=snippet-model-select]").Change("Off-Model");
+        cut.Find("[data-testid=client-tabs-tab-curl]").Click();
+        Assert.Contains("\"model\":\"Off-Model\"", cut.Find("[data-testid=curl-snippet]").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClientSettings_WithOnlyAModelThatStartsOnRequest_UseItInsteadOfThePlaceholder()
+    {
+        var ctx = new Bunit.BunitContext();
+        using var _ = ctx;
+        ctx.JSInterop.Mode = JSRuntimeMode.Loose;
+        ctx.Services.AddSingleton<IModelEndpointResolver>(new FakeModelEndpointResolver(
+            [new("off", "Off-Model", new Uri("http://ss-off:8000/"), ModelState.Stopped)]));
+        ctx.Services.AddSingleton<IModelRegistry>(new FakeModelRegistry(
+            [new ModelDefinition { Id = "off", ServedName = "Off-Model", ModelPath = "o", StartOnRequest = true }]));
+        ctx.Services.AddSingleton(Options.Create(new MirbadLLMOptions()));
+
+        var cut = RenderConnect(ctx);
+
+        Assert.Empty(cut.FindAll("[data-testid=snippet-model-placeholder]"));
+        Assert.Contains("\"id\": \"Off-Model\"", cut.Find("[data-testid=vscode-snippet]").TextContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("<served-name>", cut.Find("[data-testid=vscode-snippet]").TextContent, StringComparison.Ordinal);
     }
 
     [Fact]
