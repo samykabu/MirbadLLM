@@ -132,25 +132,25 @@
         <h2 id="snippets-title">Client settings</h2>
     </div>
     <div class="snippet-model" data-testid="snippet-model">
-        @if (_ready.Count > 0)
+        @if (_callable.Count > 0)
         {
             <label class="field-label" for="snippet-model-select">Model in the snippets</label>
             <select id="snippet-model-select" class="form-select" data-testid="snippet-model-select" aria-describedby="snippet-model-hint"
                     value="@_snippetModel" @onchange="OnSnippetModelChanged">
-                @foreach (var model in _ready)
+                @foreach (var model in _callable)
                 {
-                    <option value="@model.ServedName" selected="@(model.ServedName == _snippetModel)">@model.ServedName — @model.Where</option>
+                    <option value="@model.ServedName" selected="@(model.ServedName == _snippetModel)">@model.ServedName — @model.Where@(model.IsReady ? "" : " · starts on request")</option>
                 }
             </select>
             <span class="field-hint" id="snippet-model-hint">
                 Cline, Continue, Ollama and curl are filled in with <code>@ModelName</code>@(SnippetPlace is { } place ? $", served on {place.Where}" : "").
-                The VS Code entry lists every Ready model.
+                The VS Code entry lists every model in this list: the Ready ones and the ones that start when a request names them.
             </span>
         }
         else
         {
             <p class="field-hint connect-prose" data-testid="snippet-model-placeholder">
-                No model is Ready, so the snippets use the placeholder <code>&lt;served-name&gt;</code>. Replace it with a served name once a model is Ready.
+                No model is Ready or starts on request, so the snippets use the placeholder <code>&lt;served-name&gt;</code>. Replace it with a served name once a model can be called.
             </p>
         }
     </div>
@@ -232,7 +232,7 @@
                         </div>
                         <ol class="snippet-steps connect-prose">
                             <li>In VS Code, run <strong>Chat: Manage Language Models</strong>, choose <strong>Add Models</strong>, then <strong>Custom Endpoint</strong>.</li>
-                            <li>VS Code opens <code>chatLanguageModels.json</code>. Replace its new entry with the one below and save. It lists every Ready model, each named with the node and runtime that serve it.</li>
+                            <li>VS Code opens <code>chatLanguageModels.json</code>. Replace its new entry with the one below and save. It lists every Ready model and every model that starts on request, each named with the node and runtime that serve it.</li>
                             @if (_apiKeyConfigured)
                             {
                                 <li>When VS Code asks for <code>mirbadApiKey</code>, paste a key with the Inference scope from <a href="access/keys">API keys</a>. The file keeps only the reference, not the key.</li>
@@ -265,6 +265,9 @@
     private List<ModelPlace> _ready = [];
     private List<ModelPlace> _notReady = [];
     private List<ModelPlace> _onRequest = [];
+
+    /// <summary>What a client can name: the Ready models, then the stopped ones a request starts. The client settings offer these.</summary>
+    private List<ModelPlace> _callable = [];
     private string? _snippetModel;
     private IJSObjectReference? _module;
 
@@ -296,13 +299,14 @@
         // A stopped model that a request starts is callable: clients see it in /v1/models.
         _onRequest = places.Where(p => p.StartsOnRequest && p.State is ModelState.Stopped or ModelState.Failed).ToList();
         _notReady = places.Where(p => !p.IsReady && !_onRequest.Contains(p)).ToList();
+        _callable = [.. _ready, .. _onRequest];
         _colors = ModelColors.Assign(places.Select(p => p.ModelId));
 
-        // ?model= keeps the snippet model across a reload or a shared link; otherwise the first Ready model.
+        // ?model= keeps the snippet model across a reload or a shared link; otherwise the first callable model, a Ready one first.
         string? requested = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(new Uri(Nav.Uri).Query)
             .GetValueOrDefault("model").FirstOrDefault();
-        _snippetModel = _ready.FirstOrDefault(p => string.Equals(p.ServedName, requested, StringComparison.OrdinalIgnoreCase))?.ServedName
-            ?? _ready.FirstOrDefault()?.ServedName;
+        _snippetModel = _callable.FirstOrDefault(p => string.Equals(p.ServedName, requested, StringComparison.OrdinalIgnoreCase))?.ServedName
+            ?? _callable.FirstOrDefault()?.ServedName;
     }
 
     private static readonly IReadOnlyList<TabItem> ClientTabs =
@@ -322,12 +326,12 @@
 
     private string ModelName => _snippetModel ?? "<served-name>";
 
-    private ModelPlace? SnippetPlace => _ready.FirstOrDefault(p => p.ServedName == _snippetModel);
+    private ModelPlace? SnippetPlace => _callable.FirstOrDefault(p => p.ServedName == _snippetModel);
 
     private void OnSnippetModelChanged(ChangeEventArgs e)
     {
         string? value = e.Value?.ToString();
-        if (value is null || _ready.All(p => p.ServedName != value))
+        if (value is null || _callable.All(p => p.ServedName != value))
         {
             return;
         }
@@ -354,7 +358,7 @@
         + (SnippetPlace?.Thinks == true ? $"\nModel without thinking: {NoThinking.NameFor(ModelName)}" : "")
         + $"\nEnvironment: OLLAMA_HOST={_ollamaUrl}";
 
-    private string VsCodeText() => VsCodeSnippet.Build(_baseUrl, _ready, _apiKeyConfigured);
+    private string VsCodeText() => VsCodeSnippet.Build(_baseUrl, _callable, _apiKeyConfigured);
 
     private Task CopyVsCodeAsync() => CopyAsync(VsCodeText(), CopyTarget.VsCode);
 
