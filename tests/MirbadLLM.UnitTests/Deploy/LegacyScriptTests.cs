@@ -156,7 +156,8 @@ public sealed class LegacyScriptTests : IDisposable
             #!/usr/bin/env bash
             echo "$*" >> '{{{log}}}'
             case "$*" in
-              compose*"config --format json") echo '{"services":{"agent":{"environment":{"MIRBADLLM_AGENT_Agent__DownloadHelperImage":"vllm/vllm-openai:v0.34.0"} } } }' ;;
+              compose*"config --format json agent") printf '%s\n' '{"services":{"agent":{"environment":{' \
+                '  "MIRBADLLM_AGENT_Agent__DownloadHelperImage": "vllm/vllm-openai:v0.34.0"' '} } } }' ;;
               compose*) echo "compose MIRBADLLM_DATA=$MIRBADLLM_DATA MIRBADLLM_ADMIN_PASSWORD=${MIRBADLLM_ADMIN_PASSWORD:+set}" >> '{{{log}}}' ;;
               "image inspect"*) exit 1 ;;
               "inspect --type container spark-serve --format {{.Config.Image}}") echo spark-serve/controller:old ;;

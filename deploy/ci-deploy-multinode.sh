@@ -187,8 +187,9 @@ rename_rollback() {
 
 step "Checking the download helper image on the Docker host"
 if ! dry; then
-  if ! helper_image="$(compose "$master_tag" "$agent_tag" config --format json 2>/dev/null | python3 -c \
-    'import json, sys; print(json.load(sys.stdin)["services"]["agent"]["environment"]["MIRBADLLM_AGENT_Agent__DownloadHelperImage"])' 2>/dev/null)"; then
+  # Compose emits the resolved image as a JSON string; Docker image references need no JSON escapes.
+  if ! helper_image="$(compose "$master_tag" "$agent_tag" config --format json agent 2>/dev/null |
+    sed -nE 's/^[[:space:]]*"MIRBADLLM_AGENT_Agent__DownloadHelperImage"[[:space:]]*:[[:space:]]*"([^"\\]+)",?[[:space:]]*$/\1/p')" || [ -z "$helper_image" ]; then
     echo "::error::Could not resolve the download helper image from Compose."
     exit 1
   fi
