@@ -155,12 +155,12 @@ public sealed class P3ContractTests
         Assert.Equal(18244, records.Processes[0].Process.Pid);
         Assert.Equal("9c4e21b07a5d3f18", Assert.Single(records.Pending).ArgvDigest);
 
-        // Spike S1 (MN-203) values, folded in by MN-207 (D120): the pin by tag + commit, the R615 driver floor, and the
-        // per-file hashes of the server, its implementation DLL and the CUDA DLLs (not only the 9 KB launcher).
+        // The lock pins the tag, commit, driver floor and files that the launcher and CUDA build load.
         var lockFile = Read<LlamaCppLockFile>("LlamaCppLockFile.json");
-        Assert.Equal(("b11476", "988190680", "615.00"), (lockFile.Version, lockFile.Commit, lockFile.MinDriver));
+        Assert.Equal(("b12359", "b1b770d90", "620.00"), (lockFile.Version, lockFile.Commit, lockFile.MinDriver));
         Assert.Contains(lockFile.Files, f => f.Path == "llama-server-impl.dll");
         var manifest = Read<ExecutableManifest>("ExecutableManifest.json");
+        Assert.Equal((lockFile.Version, lockFile.Cuda), (manifest.Version, manifest.Cuda));
         Assert.Equal(lockFile.Files.Select(f => (f.Path, f.Sha256, f.Bytes)), manifest.Files.Select(f => (f.Path, f.Sha256, f.Bytes)));
     }
 

@@ -262,9 +262,9 @@ sudo install -d -o 1654 -g 1654 /srv/mirbadllm/data /srv/mirbadllm/backups   # 1
 sudo install -d /srv/mirbadllm/models /srv/mirbadllm/cache
 # In .env set at least:
 #   DOCKER_GID=<output of: stat -c %g /var/run/docker.sock>
-#   MIRBADLLM_VLLM_IMAGE=<a vLLM image available on this machine>
 #   MIRBADLLM_ADMIN_PASSWORD=<admin password for the UI>
 #   MIRBADLLM_NODE_ID=<a short name for this machine, for example tower>
+docker pull vllm/vllm-openai:v0.34.0  # or prepare the image you set as MIRBADLLM_VLLM_IMAGE
 docker compose -f compose.release.yaml up -d
 ```
 
@@ -281,6 +281,7 @@ in `deploy/.env`:
 ```bash
 git clone https://github.com/samykabu/MirbadLLM.git && cd MirbadLLM
 cp deploy/.env.example deploy/.env
+docker pull vllm/vllm-openai:v0.34.0
 docker compose -f deploy/compose.multinode.yaml --env-file deploy/.env up -d --build
 ```
 
@@ -384,7 +385,7 @@ The container deployment reads `deploy/.env`. The settings you are most likely t
 | Variable | Default | What it does |
 |---|---|---|
 | `DOCKER_GID` | none, required | Group id of `/var/run/docker.sock`, so the agent can start model containers |
-| `MIRBADLLM_VLLM_IMAGE` | a locally built image name | vLLM image for models that do not name their own; set it |
+| `MIRBADLLM_VLLM_IMAGE` | `vllm/vllm-openai:v0.34.0` | Default vLLM image and the bundled agent's download-helper image |
 | `MIRBADLLM_ADMIN_PASSWORD` | empty (login disabled) | Admin password for the UI and `/api` |
 | `MIRBADLLM_REQUIRE_API_KEY` | `false` | Require an API key on `/v1` even before the first key exists |
 | `MIRBADLLM_MEMORY_RESERVE_GIB` | `8` | Memory kept free on the node; admission refuses starts that would use it |

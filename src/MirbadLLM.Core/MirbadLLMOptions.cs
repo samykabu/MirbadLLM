@@ -6,7 +6,7 @@ public sealed class MirbadLLMOptions
     public const string SectionName = "MirbadLLM";
 
     /// <summary>Default vLLM image for models without their own.</summary>
-    public string VllmImage { get; set; } = "local/qwen38-vllm-dflash2:66e5414c6d75";
+    public string VllmImage { get; set; } = "vllm/vllm-openai:v0.34.0";
 
     /// <summary>
     /// The MTP architectures the vLLM image registers (e.g. <c>Qwen3_5MoeMTP</c>), for the tuning MTP gate. Empty =

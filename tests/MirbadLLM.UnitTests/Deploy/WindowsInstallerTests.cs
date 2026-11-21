@@ -19,7 +19,7 @@ namespace MirbadLLM.UnitTests.Deploy;
 /// review (MN-207, D120/D122) left them after spikes S1 and S4: the ACL step leaves every existing file readable by the
 /// service (F1), the script runs under Windows PowerShell 5.1 (F6), the firewall rule is service-bound, Private-only and
 /// scoped to the master (F4), the join token is never a parameter and is cleared in a <c>finally</c> (F5), and the lock
-/// file pins <c>b11476</c> with the measured SHA-256 of both assets and of every unpacked file (C3, C10). The static
+/// file pins <c>b12359</c> with the measured SHA-256 of both assets and of every unpacked file (C3, C10). The static
 /// checks run on every OS; the 5.1 parse and the ACL behaviour run on Windows with <c>powershell.exe</c> (skipped
 /// elsewhere with a reason). MN-216 (W12) extends it: the verbs, Automatic (Delayed Start) and no Docker, the single
 /// by-tag download, the Visual C++ runtime and driver checks, a lint pass standing in for PSScriptAnalyzer, the Pester
@@ -180,14 +180,14 @@ public sealed partial class WindowsInstallerTests
     // ---------------------------------------------------------------- C3/C10: the llama.cpp pin
 
     [Fact]
-    public void LockFile_PinsB11476_WithBothAssetsAndEveryUnpackedFile()
+    public void LockFile_PinsB12359_WithBothAssetsAndEveryUnpackedFile()
     {
         LlamaCppLockFile lockFile = JsonSerializer.Deserialize<LlamaCppLockFile>(
             File.ReadAllText(RepoFile("deploy", "agent", "windows", "llama-cpp.lock.json")), WireStrict)!;
 
-        Assert.Equal(("b11476", "13.4", "615.00", "988190680"), (lockFile.Version, lockFile.Cuda, lockFile.MinDriver, lockFile.Commit));
+        Assert.Equal(("b12359", "13.5", "620.00", "b1b770d90"), (lockFile.Version, lockFile.Cuda, lockFile.MinDriver, lockFile.Commit));
         Assert.Equal(
-            ["llama-b11476-bin-win-cuda-13.4-x64.zip", "cudart-llama-bin-win-cuda-13.4-x64.zip"],
+            ["llama-b12359-bin-win-cuda-13.5-x64.zip", "cudart-llama-bin-win-cuda-13.5-x64.zip"],
             lockFile.Assets.Select(a => a.Name));
         Assert.All(lockFile.Assets, a =>
         {
@@ -195,11 +195,11 @@ public sealed partial class WindowsInstallerTests
             Assert.Matches(Sha256Regex(), a.Sha256);
             Assert.True(a.Bytes > 0);
         });
-        Assert.Equal("0f947f51ece3b807a7f556dbdf45dc1a7f31aa6ea265657639007a33ef1ce5e0", lockFile.Assets[0].Sha256);
-        Assert.Equal("738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668", lockFile.Assets[1].Sha256);
+        Assert.Equal("1de9ca1ff408d6e348ea0007c6880ad2393311a02e7799bcde26dc16daef03dd", lockFile.Assets[0].Sha256);
+        Assert.Equal("c2bf4cc202bfbaaa7a0b75f5082457c3811326947bb216059b72839d844e9cba", lockFile.Assets[1].Sha256);
 
-        // Every unpacked file (55 at b11476), not just the 9 KB launcher: the server is llama-server-impl.dll (S1 / C3).
-        Assert.Equal(55, lockFile.Files.Count);
+        // Every unpacked file (56 at b12359), not just the 9 KB launcher: the server is llama-server-impl.dll (S1 / C3).
+        Assert.Equal(56, lockFile.Files.Count);
         Assert.Equal(lockFile.Files.Count, lockFile.Files.Select(f => f.Path).Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.All(lockFile.Files, f =>
         {
@@ -221,8 +221,8 @@ public sealed partial class WindowsInstallerTests
     [Fact]
     public void LockFile_PinsTheCpuAndVulkanBuildsOfTheSameRelease_WithEveryUnpackedFile()
     {
-        // The hashes and sizes below were computed from the release assets as downloaded on 2026-11-11 and equal the
-        // digests the GitHub API lists for tag b11476.
+        // The hashes and sizes below were computed from the release assets as downloaded on 2026-11-21 and equal the
+        // digests the GitHub API lists for tag b12359.
         LlamaCppLockFile lockFile = JsonSerializer.Deserialize<LlamaCppLockFile>(
             File.ReadAllText(RepoFile("deploy", "agent", "windows", "llama-cpp.lock.json")), WireStrict)!;
 
@@ -230,12 +230,12 @@ public sealed partial class WindowsInstallerTests
         var cpu = lockFile.Variants![0];
         var vulkan = lockFile.Variants[1];
         Assert.Equal(
-            ("llama-b11476-bin-win-cpu-x64.zip", "a23e548c6b3525c38bcfeceaff919786ae06741857043cb670279b70100e5483", 19441535L),
+            ("llama-b12359-bin-win-cpu-x64.zip", "837c1655e87df3b66989f4be33a792a1399c785bf259038dc75c900096683e69", 25097509L),
             (Assert.Single(cpu.Assets).Name, cpu.Assets[0].Sha256, cpu.Assets[0].Bytes));
         Assert.Equal(
-            ("llama-b11476-bin-win-vulkan-x64.zip", "5c71e7b749697da4a8d46e9ee55486845cbba27c9dfbecb4007f31ba6610d523", 33380424L),
+            ("llama-b12359-bin-win-vulkan-x64.zip", "e8d18c6e4210cca87e7307c2ea78363ac8d158e4e1397358ec96ab70b53a0d5e", 38090643L),
             (Assert.Single(vulkan.Assets).Name, vulkan.Assets[0].Sha256, vulkan.Assets[0].Bytes));
-        Assert.Equal((51, 52), (cpu.Files.Count, vulkan.Files.Count));
+        Assert.Equal((52, 53), (cpu.Files.Count, vulkan.Files.Count));
 
         foreach (var variant in lockFile.Variants)
         {
@@ -424,7 +424,7 @@ public sealed partial class WindowsInstallerTests
     {
         string root = Path.Combine(Path.GetTempPath(), "ss-mn216-config-" + Guid.NewGuid().ToString("N"));
         string config = Path.Combine(root, "agent.json");
-        string target = @"C:\Program Files\mirbadllm-agent\runtimes\llama.cpp\b11476";
+        string target = @"C:\Program Files\mirbadllm-agent\runtimes\llama.cpp\b12359";
         Directory.CreateDirectory(root);
         try
         {
@@ -448,9 +448,9 @@ public sealed partial class WindowsInstallerTests
             Assert.Equal(Path.Combine(root, "state"), options.StateDirectory);
             Assert.False(options.Docker.Enabled);
             ExecutableOptions executable = Assert.Single(options.Executables);
-            Assert.Equal(("llama-server", "b11476"), (executable.Name, executable.Default));
+            Assert.Equal(("llama-server", "b12359"), (executable.Name, executable.Default));
             ExecutableVersionOptions version = Assert.Single(executable.Versions);
-            Assert.Equal(("b11476", "13.4"), (version.Version, version.Cuda));
+            Assert.Equal(("b12359", "13.5"), (version.Version, version.Cuda));
             Assert.Equal(target + @"\llama-server.exe", version.Path);
             Assert.Equal(target + @"\manifest.json", version.Manifest);
         }
@@ -631,7 +631,7 @@ public sealed partial class WindowsInstallerTests
     [InlineData("install|-NodeId|win-1|-JoinToken|abc", "JoinToken")]
     [InlineData("deploy", "Verb")]
     [InlineData("install|-LlamaCpp|latest", "LlamaCppVersion")]
-    [InlineData("install|b11476", "needs -LlamaCpp")]
+    [InlineData("install|b12359", "needs -LlamaCpp")]
     [InlineData("rekey|-NodeId|win-1|-NodeUid|u-42", "rekey needs -EnrollUrl and -CaHash")]
     [InlineData("-ImportGguf|x.gguf", "needs -Folder")]
     [InlineData("upgrade|-LlamaCpp", "not with upgrade")]

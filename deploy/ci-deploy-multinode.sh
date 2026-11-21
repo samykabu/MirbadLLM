@@ -185,6 +185,20 @@ rename_rollback() {
   exit 1
 }
 
+step "Checking the download helper image on the Docker host"
+if ! dry; then
+  # Compose emits the resolved image as a JSON string; Docker image references need no JSON escapes.
+  if ! helper_image="$(compose "$master_tag" "$agent_tag" config --format json agent 2>/dev/null |
+    sed -nE 's/^[[:space:]]*"MIRBADLLM_AGENT_Agent__DownloadHelperImage"[[:space:]]*:[[:space:]]*"([^"\\]+)",?[[:space:]]*$/\1/p')" || [ -z "$helper_image" ]; then
+    echo "::error::Could not resolve the download helper image from Compose."
+    exit 1
+  fi
+  if ! docker image inspect "$helper_image" >/dev/null 2>&1 && ! docker pull "$helper_image" >/dev/null 2>&1; then
+    echo "::error::The download helper image is missing and could not be pulled. Prepare it on the Docker host before deploying."
+    exit 1
+  fi
+fi
+
 step "Building both images"
 compose "$master_tag" "$agent_tag" build --pull master agent
 

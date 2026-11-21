@@ -43,7 +43,7 @@ property.
 
 | Key | Default | What it does |
 |---|---|---|
-| `MirbadLLM:VllmImage` | a locally built image name | Default vLLM image (see `MIRBADLLM_VLLM_IMAGE`) |
+| `MirbadLLM:VllmImage` | `vllm/vllm-openai:v0.34.0` | Default vLLM image (see `MIRBADLLM_VLLM_IMAGE`) |
 | `MirbadLLM:MemoryReserveGiB` | `8` | Seed for each node's memory reserve on first boot |
 | `MirbadLLM:AdminPassword` | empty | Admin login password |
 | `MirbadLLM:RequireApiKey` | `false` | Require an API key on `/v1` from the start |
@@ -176,6 +176,11 @@ In the agent container, environment variables with the prefix `MIRBADLLM_AGENT_`
 from the node's page, such as the memory reserve and approved images. `Agent:EnableNim=true` opts a Linux/DGX agent
 into NIM capability reporting only when `ApprovedImages` also contains at least one pinned repository digest; NIM
 launches always require an explicit model image and matching approved digest.
+
+For container models, select `ghcr.io/ggml-org/llama.cpp:server-cuda-b12375` for NVIDIA llama.cpp or
+`lmsysorg/sglang:v0.5.23` for SGLang. Use the matching repository digest on nodes that require image approval.
+For NIM, choose the image tag for the model and GPU from the [NVIDIA support matrix](https://docs.nvidia.com/nim/large-language-models/latest/reference/support-matrix.html).
+An existing model with its own image or an existing per-node default keeps that selection until you edit it.
 
 ## Development settings
 

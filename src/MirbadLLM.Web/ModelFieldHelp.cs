@@ -228,7 +228,7 @@ public static class ModelFieldHelp
         What: "The Docker image to run this model's container from. Blank uses the deployment's default vLLM image.",
         Why: "Different images can carry different vLLM builds/model support (the nvcr vllm:26.01 image, for example, " +
              "lacks Qwen3_5 support, which is why Phase 0 used a locally built image instead).",
-        Example: "local/qwen38-vllm-dflash2:66e5414c6d75 — the default, and the only image Phase 0 tested Qwen3.5 on.");
+        Example: "vllm/vllm-openai:v0.34.0 is the default unless your deployment selects another image.");
 
     public static readonly FieldHelpText ExtraArgs = new(
         What: "Additional raw vLLM command-line arguments, one per line, appended after every other flag. Flags with a " +

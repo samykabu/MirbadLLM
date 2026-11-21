@@ -56,7 +56,7 @@ services:
       # Seeds the bootstrap node record's memory reserve on first boot (today's global reserve).
       MirbadLLM__MemoryReserveGiB: ${MIRBADLLM_MEMORY_RESERVE_GIB:-8}
       # The vLLM image of models without their own image. The agent's download helper uses the same image (below).
-      MirbadLLM__VllmImage: ${MIRBADLLM_VLLM_IMAGE:-local/qwen38-vllm-dflash2:66e5414c6d75}
+      MirbadLLM__VllmImage: ${MIRBADLLM_VLLM_IMAGE:-vllm/vllm-openai:v0.34.0}
       # Encrypts the API keys (and the CA, D9) in scheduled backups. Empty = scheduled backups carry no secrets.
       MirbadLLM__Backup__Passphrase: ${MIRBADLLM_BACKUP_PASSPHRASE:-}
       # Names the backup files; inside the container the machine name is a random container id.
@@ -117,7 +117,7 @@ services:
       # unified machine such as a DGX Spark whatever nvidia-smi reports.
       MIRBADLLM_AGENT_Agent__MemoryModel: ${MIRBADLLM_MEMORY_MODEL:-}
       # Equal to the master's MirbadLLM__VllmImage (W4 review MN-096): the download helper runs huggingface_hub from it.
-      MIRBADLLM_AGENT_Agent__DownloadHelperImage: ${MIRBADLLM_VLLM_IMAGE:-local/qwen38-vllm-dflash2:66e5414c6d75}
+      MIRBADLLM_AGENT_Agent__DownloadHelperImage: ${MIRBADLLM_VLLM_IMAGE:-vllm/vllm-openai:v0.34.0}
     healthcheck:
       # The listener opens only after enrollment, the Docker wait and reconciliation (Program.CreateAsync).
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9443"]

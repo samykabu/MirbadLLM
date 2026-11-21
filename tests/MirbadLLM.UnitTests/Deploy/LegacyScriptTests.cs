@@ -117,6 +117,7 @@ public sealed class LegacyScriptTests : IDisposable
 
         Assert.True(run.Exit == 0, run.Output + run.Error);
         string calls = File.ReadAllText(Path.Combine(_root, "docker.log"));
+        Assert.True(Index(calls, "pull vllm/vllm-openai:v0.34.0") < Index(calls, "stop -t 45 spark-serve-agent"));
         Assert.True(Index(calls, "stop -t 45 spark-serve-agent") < Index(calls, "stop -t 45 spark-serve\n"));
         Assert.True(Index(calls, "stop -t 45 spark-serve\n") < Index(calls, "volume create mirbadllm-agent-state"));
         Assert.Contains("-v spark-serve-agent-state:/from:ro -v mirbadllm-agent-state:/to", calls, StringComparison.Ordinal);
@@ -155,7 +156,10 @@ public sealed class LegacyScriptTests : IDisposable
             #!/usr/bin/env bash
             echo "$*" >> '{{{log}}}'
             case "$*" in
+              compose*"config --format json agent") printf '%s\n' '{"services":{"agent":{"environment":{' \
+                '  "MIRBADLLM_AGENT_Agent__DownloadHelperImage": "vllm/vllm-openai:v0.34.0"' '} } } }' ;;
               compose*) echo "compose MIRBADLLM_DATA=$MIRBADLLM_DATA MIRBADLLM_ADMIN_PASSWORD=${MIRBADLLM_ADMIN_PASSWORD:+set}" >> '{{{log}}}' ;;
+              "image inspect"*) exit 1 ;;
               "inspect --type container spark-serve --format {{.Config.Image}}") echo spark-serve/controller:old ;;
               "inspect --type container spark-serve-agent --format {{.Config.Image}}") echo spark-serve/agent:old ;;
               "inspect --type container spark-serve --format"*) echo master ;;

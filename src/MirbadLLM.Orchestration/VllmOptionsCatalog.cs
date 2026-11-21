@@ -22,9 +22,8 @@ public sealed record VllmCatalog(
     IReadOnlyList<string> Images);
 
 /// <summary>
-/// Fixed option lists sourced from the vLLM build actually running on the DGX Spark
-/// (<c>local/qwen38-vllm-dflash2:66e5414c6d75</c>, verified live per <c>docs/phase0-results.md</c>). The images come
-/// from the node's capability report (<see cref="Multinode.RemoteVllmCatalogService"/>).
+/// Fixed option lists based on the vLLM build used in Phase 0. The selected image can support additional options.
+/// Images come from the node's capability report (<see cref="Multinode.RemoteVllmCatalogService"/>).
 /// </summary>
 public static class VllmOptionsCatalog
 {

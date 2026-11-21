@@ -66,7 +66,7 @@ The log is not rotated; to empty it: `sudo sh -c ': > /Library/Logs/mirbadllm-ag
 `install` and `upgrade` also install the llama.cpp release pinned in `llama-cpp.lock.json` (next to the script and in
 the bundle; plan M5, Phase 2). The script downloads `llama-<tag>-bin-macos-arm64.tar.gz` from the release tag with
 `curl`, checks its size and SHA-256 against the lock file, and copies only `llama-server`, the dylibs it loads (under
-the names it loads them by, e.g. `libggml-metal.0.dylib`; Metal's shaders are built into that dylib) and `LICENSE`
+the names it loads them by, e.g. `libggml-metal.1.dylib`; Metal's shaders are built into that dylib) and `LICENSE`
 into:
 
 | What | Where |

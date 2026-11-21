@@ -403,7 +403,7 @@ check_host() {
             else
                 step "CPU-only node (--accelerator cpu)"
             fi
-            echo "    llama.cpp runs on the CPU from the image ghcr.io/ggml-org/llama.cpp:server, model containers get no GPU request,"
+            echo "    llama.cpp runs on the CPU from the image ghcr.io/ggml-org/llama.cpp:server-b12375, model containers get no GPU request,"
             echo "    and a model's budget counts against host RAM. vLLM and SGLang need an NVIDIA GPU and are not offered here."
             echo "    With an NVIDIA card: install its driver and the NVIDIA Container Toolkit, remove \"Accelerator\" from ${CONFIG}"
             echo "    and restart ${UNIT}."
