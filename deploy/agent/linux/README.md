@@ -85,10 +85,10 @@ An existing `agent.json` keeps its entry. After you add or remove a GPU, edit `"
 A CPU-only node runs llama.cpp and nothing else: vLLM and SGLang need an NVIDIA GPU, so the node does not list them
 and the master refuses to place such a model there. Three things differ from an NVIDIA node:
 
-- **The image.** Use the CPU image `ghcr.io/ggml-org/llama.cpp:server`, not `server-cuda`. A PC node only starts
+- **The image.** Use the CPU image `ghcr.io/ggml-org/llama.cpp:server-b12375`. A PC node only starts
   images you approved by digest, so read the digest of the tag you pulled
-  (`docker pull ghcr.io/ggml-org/llama.cpp:server`, then
-  `docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/ggml-org/llama.cpp:server`), add
+  (`docker pull ghcr.io/ggml-org/llama.cpp:server-b12375`, then
+  `docker inspect --format '{{index .RepoDigests 0}}' ghcr.io/ggml-org/llama.cpp:server-b12375`), add
   `ghcr.io/ggml-org/llama.cpp@sha256:<digest>` to `ApprovedImages` in `agent.json`, restart the agent, and set the
   node's **Default llama.cpp image** and **Approved llama.cpp image digest** on the master's Nodes page.
 - **Memory.** A model's whole budget is counted against host RAM, minus the node's memory reserve, and one model
@@ -112,7 +112,7 @@ the tests, and it is off unless you pass `--accelerator vulkan`. What it does:
 - **Admission.** Free VRAM is the driver's total minus the driver's used figure, which covers every process. When
   the used figure cannot be read, the GPU shows "—", the node is Degraded with the reason, and a start on that GPU is
   refused unless you force it.
-- **Containers.** Use the image `ghcr.io/ggml-org/llama.cpp:server-vulkan`, approved by digest as described above.
+- **Containers.** Use the image `ghcr.io/ggml-org/llama.cpp:server-vulkan-b12375`, approved by digest as described above.
   The agent maps the card's DRM render node (`/dev/dri/renderD*`) into the container; the NVIDIA runtime is not
   involved. A model gets one GPU: the agent cannot fix the order in which the container lists several cards, so it
   refuses a placement on two.

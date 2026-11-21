@@ -68,18 +68,19 @@ To build the images yourself, see [Build from source](#build-from-source).
    | Variable | Value |
    |---|---|
    | `DOCKER_GID` | the number printed above |
-   | `MIRBADLLM_VLLM_IMAGE` | your vLLM image, for example `vllm/vllm-openai:<tag>` |
    | `MIRBADLLM_ADMIN_PASSWORD` | a password for the UI |
    | `MIRBADLLM_BACKUP_PASSPHRASE` | a passphrase for encrypted backups (keep a copy elsewhere) |
    | `MIRBADLLM_NODE_ID` | a short name for this machine, for example `tower`: lower-case letters, digits and `-`. Set it before the first start, because a later change makes a different node. Left unset, the node is called `dgx` |
 
    `MIRBADLLM_VERSION` selects the release: `1.2.0` for that release, `1.2` for the newest 1.2.x. Left unset, it is
    `latest`, the newest release. The master and the agent always take the same value.
+   Set `MIRBADLLM_VLLM_IMAGE` if you use a different vLLM image from the default below.
    [configuration.md](configuration.md) lists every variable.
 
 4. Pull the images and start the master and the agent. Compose reads the `.env` next to the compose file.
 
    ```bash
+   docker pull vllm/vllm-openai:v0.34.0  # or prepare your configured image on this host
    docker compose -f compose.release.yaml up -d
    ```
 
@@ -105,6 +106,7 @@ To run code that is not released yet, or your own changes, build the two images 
 git clone https://github.com/samykabu/MirbadLLM.git
 cd MirbadLLM
 cp deploy/.env.example deploy/.env          # set the values of step 3
+docker pull vllm/vllm-openai:v0.34.0
 docker compose -f deploy/compose.multinode.yaml --env-file deploy/.env up -d --build
 ```
 

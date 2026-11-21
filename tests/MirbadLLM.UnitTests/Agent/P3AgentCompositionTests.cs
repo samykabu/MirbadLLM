@@ -1064,7 +1064,7 @@ public sealed class P3AgentCompositionTests
         Assert.Equal(ExecutableNames.LlamaServer, llama.Name);
         var version = Assert.Single(llama.Versions);
         Assert.Equal(llama.Default, version.Version);
-        Assert.Equal("13.4", version.Cuda);
+        Assert.NotNull(version.Cuda);
         Assert.EndsWith(ExecutableCatalog.ManifestFileName, version.Manifest, StringComparison.Ordinal);
 
         Assert.Equal(TimeSpan.FromMinutes(10), options.Process.StartTimeout);

@@ -92,7 +92,7 @@
     .\install-agent.ps1 upgrade -Bundle .\win-x64.zip -BundleSha256 <hex>
 
 .EXAMPLE
-    .\install-agent.ps1 -LlamaCpp b11476 -LlamaCppSource D:\downloads\llama.cpp
+    .\install-agent.ps1 -LlamaCpp b12359 -LlamaCppSource D:\downloads\llama.cpp
 #>
 [CmdletBinding()]
 param(

@@ -1,43 +1,43 @@
 {
   "schemaVersion": 1,
-  "version": "b11476",
-  "cuda": "13.4",
-  "minDriver": "615.00",
-  "commit": "988190680",
+  "version": "b12359",
+  "cuda": "13.5",
+  "minDriver": "620.00",
+  "commit": "b1b770d90",
   "assets": [
     {
-      "name": "llama-b11476-bin-win-cuda-13.4-x64.zip",
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11476/llama-b11476-bin-win-cuda-13.4-x64.zip",
-      "sha256": "0f947f51ece3b807a7f556dbdf45dc1a7f31aa6ea265657639007a33ef1ce5e0",
-      "bytes": 153139193
+      "name": "llama-b12359-bin-win-cuda-13.5-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12359/llama-b12359-bin-win-cuda-13.5-x64.zip",
+      "sha256": "1de9ca1ff408d6e348ea0007c6880ad2393311a02e7799bcde26dc16daef03dd",
+      "bytes": 179546112
     },
     {
-      "name": "cudart-llama-bin-win-cuda-13.4-x64.zip",
-      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11476/cudart-llama-bin-win-cuda-13.4-x64.zip",
-      "sha256": "738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668",
-      "bytes": 423535356
+      "name": "cudart-llama-bin-win-cuda-13.5-x64.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12359/cudart-llama-bin-win-cuda-13.5-x64.zip",
+      "sha256": "c2bf4cc202bfbaaa7a0b75f5082457c3811326947bb216059b72839d844e9cba",
+      "bytes": 426314199
     }
   ],
   "files": [
     {
       "path": "cudart64_13.dll",
-      "sha256": "05bfafcb97bd53b0089568a96e1e5bd6921637bd0853ff7f5342bd31a6a16890",
+      "sha256": "16ab35d8150b6105b7e49da264d360db4ece090157ad48d226c1dc7254136008",
       "bytes": 551024
     },
     {
       "path": "ggml-cuda.dll",
-      "sha256": "9bfc5beba3617a92da33807943cb8e2d6b4b140f044ca3765e30ba6c78086c75",
-      "bytes": 147822592
+      "sha256": "b83019f8d57e3d9415893edd75ce7269110f8c329480dde0d796c762bf97992e",
+      "bytes": 169354240
     },
     {
       "path": "llama-server-impl.dll",
-      "sha256": "9b1610036e7afb84ac48dac134c0e622d534af2ffe1456ac6095fef21c78b781",
-      "bytes": 9172992
+      "sha256": "c81c23738405831cacda737e64ce8f08870d4f44beb63e3aa9515b3ad2e4286e",
+      "bytes": 10343424
     },
     {
       "path": "llama-server.exe",
-      "sha256": "f78215d0ed0b62789f136f1dd576de8ceb968dabfb5c3ff2b22543fef0e09408",
-      "bytes": 9216
+      "sha256": "38c5affb81c9a8f88f5538c7d11bc445e13bc46a2c6eda05694b8b31a8d45995",
+      "bytes": 9728
     }
   ]
 }

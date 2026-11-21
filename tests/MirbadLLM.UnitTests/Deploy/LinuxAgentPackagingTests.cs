@@ -317,7 +317,7 @@ public sealed partial class LinuxAgentPackagingTests
 
         // A machine without an NVIDIA card is told what it becomes; nothing asks it for the NVIDIA driver or toolkit.
         Assert.Contains("this machine joins as a CPU-only node", cpu, StringComparison.Ordinal);
-        Assert.Contains("ghcr.io/ggml-org/llama.cpp:server,", cpu, StringComparison.Ordinal);
+        Assert.Contains("ghcr.io/ggml-org/llama.cpp:server-b12375,", cpu, StringComparison.Ordinal);
         Assert.DoesNotContain("warn ", cpu, StringComparison.Ordinal);
         Assert.DoesNotContain("die ", cpu, StringComparison.Ordinal);
 

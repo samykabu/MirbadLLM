@@ -8,7 +8,7 @@ PowerShell 5.1** window (the default shell) or in PowerShell 7. Docker Desktop i
 
 ## Before you start
 
-- For an NVIDIA GPU: a driver at or above the lock file's `minDriver` (`615.00` for `b11476`, CUDA 13.4). Check with
+- For an NVIDIA GPU: a driver at or above the lock file's `minDriver` (`620.00` for `b12359`, CUDA 13.5). Check with
   `nvidia-smi --query-gpu=driver_version --format=csv,noheader`. A PC without an NVIDIA driver needs nothing here: it
   gets the CPU build.
 - The **Microsoft Visual C++ 2015-2022 Redistributable (x64)**. The llama.cpp binaries import `msvcp140.dll`,
@@ -52,9 +52,9 @@ Running `install` again upgrades the binary in place and keeps `agent.json` and 
 ## llama.cpp
 
 ```powershell
-.\install-agent.ps1 -LlamaCpp                 # the version pinned in llama-cpp.lock.json (b11476)
-.\install-agent.ps1 -LlamaCpp b11476 -LlamaCppSource D:\downloads   # zips already downloaded
-.\install-agent.ps1 -RemoveLlamaCpp b11476
+.\install-agent.ps1 -LlamaCpp                 # the version pinned in llama-cpp.lock.json (b12359)
+.\install-agent.ps1 -LlamaCpp b12359 -LlamaCppSource D:\downloads   # zips already downloaded
+.\install-agent.ps1 -RemoveLlamaCpp b12359
 ```
 
 `-LlamaCpp` takes these steps:
@@ -68,7 +68,7 @@ Running `install` again upgrades the binary in place and keeps `agent.json` and 
 5. Requires **exactly** the lock file's files for that build (55 for CUDA, 51 for CPU, 52 for Vulkan): each one
    present with the right size and hash, none missing, none extra. A planted DLL would otherwise load from the
    application folder first.
-6. Moves the folder to `C:\Program Files\mirbadllm-agent\runtimes\llama.cpp\b11476\`, read-only for the account.
+6. Moves the folder to `C:\Program Files\mirbadllm-agent\runtimes\llama.cpp\b12359\`, read-only for the account.
 7. Writes `manifest.json` there and adds the `Agent:Executables` entry to `agent.json`.
 
 If the folder is already installed and verifies, it is kept as it is; if it fails verification, it is installed
@@ -78,7 +78,7 @@ default of other installed versions.
 
 ## Which llama.cpp build
 
-`llama-cpp.lock.json` pins three builds of the same release (`b11476`): the CUDA build at the top level, and the CPU
+`llama-cpp.lock.json` pins three builds of the same release (`b12359`): the CUDA build at the top level, and the CPU
 and Vulkan builds under `variants`. `-Accelerator` picks one, and the script writes the choice to `agent.json` as
 `Agent:Accelerator` (no entry for CUDA). The agent reports it, and the master places models by it.
 
@@ -91,12 +91,12 @@ and Vulkan builds under `variants`. `-Accelerator` picks one, and the script wri
 | `-Accelerator` | Asset | What the node does |
 |---|---|---|
 | `auto` (default) | | `cuda` when `nvidia-smi` reports a driver, otherwise `cpu`. It never picks `vulkan`. |
-| `cuda` | `llama-b11476-bin-win-cuda-13.4-x64.zip` and the CUDA runtime zip | As before: per-GPU admission from `nvidia-smi`. |
-| `cpu` | `llama-b11476-bin-win-cpu-x64.zip` | llama.cpp on the CPU; a model's budget counts against host RAM. |
-| `vulkan` | `llama-b11476-bin-win-vulkan-x64.zip` | llama.cpp through Vulkan, per-GPU admission. Experimental. |
+| `cuda` | `llama-b12359-bin-win-cuda-13.5-x64.zip` and the CUDA runtime zip | As before: per-GPU admission from `nvidia-smi`. |
+| `cpu` | `llama-b12359-bin-win-cpu-x64.zip` | llama.cpp on the CPU; a model's budget counts against host RAM. |
+| `vulkan` | `llama-b12359-bin-win-vulkan-x64.zip` | llama.cpp through Vulkan, per-GPU admission. Experimental. |
 
 A version folder holds one build. Running `-LlamaCpp` again with another accelerator replaces the build in
-`runtimes\llama.cpp\b11476\` and updates `agent.json`; stop the node's models first. Do this after you add or remove a
+`runtimes\llama.cpp\b12359\` and updates `agent.json`; stop the node's models first. Do this after you add or remove a
 GPU.
 
 ### CPU-only nodes

@@ -18,7 +18,7 @@ public sealed partial class DeployArtifactsTests
 {
     /// <summary>The entries of a bundle under its folder, as <c>install-agent.sh package</c> writes them.</summary>
     private static readonly string[] BundleLayout =
-        ["", "/BUILD-INFO", "/README.md", "/agent.linux.example.json", "/install-agent.sh", "/mirbadllm-agent", "/mirbadllm-agent.service"];
+        ["", "/BUILD-INFO", "/README.md", "/agent-update-helper.sh", "/agent.linux.example.json", "/install-agent.sh", "/mirbadllm-agent", "/mirbadllm-agent.service"];
 
     [Fact]
     public void MasterImage_HasAnAgentBundlesStage_OnTheBuildPlatform_FromTheOfficialSdk()
@@ -187,6 +187,7 @@ public sealed partial class DeployArtifactsTests
             foreach ((string rid, ushort machine) in new[] { ("linux-x64", (ushort)62), ("linux-arm64", (ushort)183) })
             {
                 string folder = $"mirbadllm-agent-testrev-{rid}";
+                string legacyFolder = $"spark-serve-agent-testrev-{rid}";
                 var entries = new Dictionary<string, byte[]>(StringComparer.Ordinal);
                 await using (FileStream file = File.OpenRead(Path.Combine(outDir, rid + ".tar.gz")))
                 await using (var gzip = new GZipStream(file, CompressionMode.Decompress))
@@ -194,6 +195,13 @@ public sealed partial class DeployArtifactsTests
                 {
                     while (await tar.GetNextEntryAsync(cancellationToken: ct) is { } entry)
                     {
+                        if (entry.Name == legacyFolder)
+                        {
+                            Assert.Equal(TarEntryType.SymbolicLink, entry.EntryType);
+                            Assert.Equal(folder, entry.LinkName);
+                            continue;
+                        }
+
                         byte[] head = new byte[64];
                         int read = entry.DataStream is { } data ? await data.ReadAtLeastAsync(head, head.Length, throwOnEndOfStream: false, ct) : 0;
                         entries[entry.Name.TrimEnd('/')] = head[..read];
@@ -214,9 +222,12 @@ public sealed partial class DeployArtifactsTests
             const string winFolder = "mirbadllm-agent-testrev-win-x64";
             using (ZipArchive zip = ZipFile.OpenRead(Path.Combine(outDir, AgentBundleCatalog.FileName(AgentBundleCatalog.WindowsRid))))
             {
+                const string legacyFolder = "spark-serve-agent-testrev-win-x64";
+                string[] legacyFiles = ["agent.windows.example.json", "install-agent.ps1", "llama-cpp.lock.json"];
                 string[] expected = [.. AgentBundleCatalog.WindowsRequiredFiles
                     .Concat(File.Exists(RepoFile("deploy", "agent", "windows", "README.md")) ? ["README.md"] : Array.Empty<string>())
-                    .Select(f => $"{winFolder}/{f}").Order(StringComparer.Ordinal)];
+                    .Select(f => $"{winFolder}/{f}")
+                    .Concat(legacyFiles.Select(f => $"{legacyFolder}/{f}")).Order(StringComparer.Ordinal)];
                 Assert.Equal(expected, zip.Entries.Where(e => e.Name.Length > 0).Select(e => e.FullName).Order(StringComparer.Ordinal));
                 byte[] exe = new byte[4096];
                 await using (Stream stream = zip.GetEntry($"{winFolder}/mirbadllm-agent.exe")!.Open())
@@ -231,10 +242,29 @@ public sealed partial class DeployArtifactsTests
                 using var buildInfo = new StreamReader(zip.GetEntry($"{winFolder}/BUILD-INFO")!.Open());
                 Assert.StartsWith("revision=testrev\nrid=win-x64\n", await buildInfo.ReadToEndAsync(ct), StringComparison.Ordinal);
                 using var lockFile = new StreamReader(zip.GetEntry($"{winFolder}/llama-cpp.lock.json")!.Open());
-                Assert.Equal(File.ReadAllText(RepoFile("deploy", "agent", "windows", "llama-cpp.lock.json")).ReplaceLineEndings("\n"), (await lockFile.ReadToEndAsync(ct)).ReplaceLineEndings("\n"));
+                using var legacyLockFile = new StreamReader(zip.GetEntry($"{legacyFolder}/llama-cpp.lock.json")!.Open());
+                string windowsPin = File.ReadAllText(RepoFile("deploy", "agent", "windows", "llama-cpp.lock.json")).ReplaceLineEndings("\n");
+                Assert.Equal(windowsPin, (await lockFile.ReadToEndAsync(ct)).ReplaceLineEndings("\n"));
+                Assert.Equal(windowsPin, (await legacyLockFile.ReadToEndAsync(ct)).ReplaceLineEndings("\n"));
             }
 
             Assert.Equal(winFolder, new AgentBundleCatalog(outDir, Microsoft.Extensions.Logging.Abstractions.NullLogger<AgentBundleCatalog>.Instance).Find(AgentBundleCatalog.WindowsRid)!.Folder);
+
+            await using FileStream macBundle = File.OpenRead(Path.Combine(outDir, "osx-arm64.tar.gz"));
+            await using var macGzip = new GZipStream(macBundle, CompressionMode.Decompress);
+            await using var macTar = new TarReader(macGzip);
+            string? macPin = null;
+            while (await macTar.GetNextEntryAsync(cancellationToken: ct) is { } entry)
+            {
+                if (entry.Name == "mirbadllm-agent-testrev-osx-arm64/llama-cpp.lock.json")
+                {
+                    using var lockFile = new StreamReader(entry.DataStream!, leaveOpen: true);
+                    macPin = (await lockFile.ReadToEndAsync(ct)).ReplaceLineEndings("\n");
+                    break;
+                }
+            }
+
+            Assert.Equal(File.ReadAllText(RepoFile("deploy", "agent", "macos", "llama-cpp.lock.json")).ReplaceLineEndings("\n"), macPin);
         }
         finally
         {

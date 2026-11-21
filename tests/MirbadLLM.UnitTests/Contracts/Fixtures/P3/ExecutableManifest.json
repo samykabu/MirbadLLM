@@ -1,32 +1,32 @@
 {
   "schemaVersion": 1,
   "name": "llama-server",
-  "version": "b11476",
-  "cuda": "13.4",
+  "version": "b12359",
+  "cuda": "13.5",
   "sources": [
-    "llama-b11476-bin-win-cuda-13.4-x64.zip",
-    "cudart-llama-bin-win-cuda-13.4-x64.zip"
+    "llama-b12359-bin-win-cuda-13.5-x64.zip",
+    "cudart-llama-bin-win-cuda-13.5-x64.zip"
   ],
   "files": [
     {
       "path": "cudart64_13.dll",
-      "sha256": "05bfafcb97bd53b0089568a96e1e5bd6921637bd0853ff7f5342bd31a6a16890",
+      "sha256": "16ab35d8150b6105b7e49da264d360db4ece090157ad48d226c1dc7254136008",
       "bytes": 551024
     },
     {
       "path": "ggml-cuda.dll",
-      "sha256": "9bfc5beba3617a92da33807943cb8e2d6b4b140f044ca3765e30ba6c78086c75",
-      "bytes": 147822592
+      "sha256": "b83019f8d57e3d9415893edd75ce7269110f8c329480dde0d796c762bf97992e",
+      "bytes": 169354240
     },
     {
       "path": "llama-server-impl.dll",
-      "sha256": "9b1610036e7afb84ac48dac134c0e622d534af2ffe1456ac6095fef21c78b781",
-      "bytes": 9172992
+      "sha256": "c81c23738405831cacda737e64ce8f08870d4f44beb63e3aa9515b3ad2e4286e",
+      "bytes": 10343424
     },
     {
       "path": "llama-server.exe",
-      "sha256": "f78215d0ed0b62789f136f1dd576de8ceb968dabfb5c3ff2b22543fef0e09408",
-      "bytes": 9216
+      "sha256": "38c5affb81c9a8f88f5538c7d11bc445e13bc46a2c6eda05694b8b31a8d45995",
+      "bytes": 9728
     }
   ]
 }
