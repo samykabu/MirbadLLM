@@ -193,7 +193,9 @@ internal static class OllamaApi
         }
 
         var definition = context.RequestServices.GetService<IModelRegistry>() is { } registry ? await registry.GetAsync(endpoint.ModelId, ct) : null;
-        return Results.Json(new ShowResponse(DetailsOf(definition), new JsonObject(), CapabilitiesOf(definition, noThinking)), Json);
+        int contextLength = definition is null ? 0 : ModelCapabilities.MaxModelLen(definition);
+        string? parameters = contextLength > 0 ? FormattableString.Invariant($"num_ctx {contextLength}") : null;
+        return Results.Json(new ShowResponse(DetailsOf(definition), new JsonObject(), CapabilitiesOf(definition, noThinking), parameters), Json);
     }
 
     /// <summary>
@@ -289,7 +291,8 @@ internal static class OllamaApi
     private sealed record ShowResponse(
         [property: JsonPropertyName("details")] ModelDetails Details,
         [property: JsonPropertyName("model_info")] JsonObject ModelInfo,
-        [property: JsonPropertyName("capabilities"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string[]? Capabilities);
+        [property: JsonPropertyName("capabilities"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string[]? Capabilities,
+        [property: JsonPropertyName("parameters"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Parameters);
 }
 
 /// <summary>
