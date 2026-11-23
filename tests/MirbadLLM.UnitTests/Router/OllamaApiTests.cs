@@ -745,6 +745,9 @@ public sealed class OllamaApiTests
         // A stopped model without the setting is still left out, and nothing stopped counts as loaded.
         Assert.DoesNotContain("stopped-model", tagged);
         Assert.DoesNotContain("cold-model", Names((await JsonAsync(ps)).GetProperty("models"), "name"));
+
+        using var show = await env.PostAsync("/api/show", """{"model":"cold-model"}""");
+        Assert.Equal("num_ctx 4096", (await JsonAsync(show)).GetProperty("parameters").GetString());
     }
 
     [Fact]
@@ -759,12 +762,15 @@ public sealed class OllamaApiTests
             Assert.Equal(["completion", "tools", "vision", "thinking"], body.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
             Assert.Equal("fp8", body.GetProperty("details").GetProperty("quantization_level").GetString());
             Assert.Equal(JsonValueKind.Object, body.GetProperty("model_info").ValueKind);
+            Assert.Equal("num_ctx 131072", body.GetProperty("parameters").GetString());
             Assert.False(body.TryGetProperty("modelfile", out _));
         }
 
         using (var response = await env.PostAsync("/api/show", """{"name":"chat-model-nothink"}"""))
         {
-            Assert.Equal(["completion", "tools", "vision"], (await JsonAsync(response)).GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+            var body = await JsonAsync(response);
+            Assert.Equal(["completion", "tools", "vision"], body.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+            Assert.Equal("num_ctx 131072", body.GetProperty("parameters").GetString());
         }
 
         // What "ollama show <name>" sends: the name in the older field, next to an empty "model".
@@ -775,7 +781,9 @@ public sealed class OllamaApiTests
 
         using (var response = await env.PostAsync("/api/show", """{"model":"embed-model"}"""))
         {
-            Assert.Equal(["embedding"], (await JsonAsync(response)).GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+            var body = await JsonAsync(response);
+            Assert.Equal(["embedding"], body.GetProperty("capabilities").EnumerateArray().Select(c => c.GetString()));
+            Assert.Equal("num_ctx 8192", body.GetProperty("parameters").GetString());
         }
 
         using var unknown = await env.PostAsync("/api/show", """{"model":"nobody"}""");
