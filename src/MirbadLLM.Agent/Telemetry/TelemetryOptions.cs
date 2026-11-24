@@ -24,8 +24,8 @@ public sealed class TelemetryOptions
     /// <summary>Hard cap on ring entries whatever the interval (15 min at 1 s = 900).</summary>
     public int RingCapacity { get; set; } = 1_000;
 
-    /// <summary>Samples per <c>/telemetry</c> page when the query has no <c>max</c> (15 min at 5 s).</summary>
-    public int DefaultPageSize { get; set; } = 180;
+    /// <summary>Samples per <c>/telemetry</c> page when the query has no <c>max</c> (15 min at 2 s).</summary>
+    public int DefaultPageSize { get; set; } = 450;
 
     /// <summary>Largest <c>max</c> a <c>/telemetry</c> query may ask for.</summary>
     public int MaxPageSize { get; set; } = 1_000;

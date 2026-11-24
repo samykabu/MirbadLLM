@@ -114,7 +114,7 @@ public interface IGpuProbe
     Task<GpuSnapshot?> GetAsync(CancellationToken ct = default);
 }
 
-/// <summary>Rolling in-memory history filled by a background sampler (default: every 5 s, kept 1 h).</summary>
+/// <summary>Rolling in-memory history filled by a background sampler (default: every 2 s, kept 1 h).</summary>
 public interface IMetricsHistory
 {
     IReadOnlyList<HostSample> GetHost(TimeSpan window);
@@ -128,4 +128,14 @@ public interface IMetricsHistory
 
     /// <summary>Most recent KPIs per model id (only models that were Ready at the last sample).</summary>
     IReadOnlyDictionary<string, ModelKpis> Latest();
+
+    /// <summary>
+    /// Raised on the writer's thread after a host or model sample is added, so a live view can update when new data
+    /// exists instead of on its own timer. A history that is never written to never raises it.
+    /// </summary>
+    event Action? SampleAdded
+    {
+        add { }
+        remove { }
+    }
 }

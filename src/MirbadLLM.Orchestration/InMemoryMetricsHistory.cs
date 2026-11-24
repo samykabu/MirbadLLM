@@ -44,6 +44,9 @@ public sealed class InMemoryMetricsHistory(
     /// </summary>
     public string DefaultNodeId { get; } = migration?.Value.EffectiveBootstrapNodeId ?? RegistryMigrationOptions.DefaultBootstrapNodeId;
 
+    /// <inheritdoc />
+    public event Action? SampleAdded;
+
     /// <summary>Adds a host sample of the <see cref="DefaultNodeId"/> (single-host composition).</summary>
     public void AddHost(HostSample sample) => AddHost(DefaultNodeId, sample);
 
@@ -59,6 +62,8 @@ public sealed class InMemoryMetricsHistory(
             TrimByAge(buffer.Samples, s => s.At);
             TrimByAge(buffer.Gaps, g => g.To);
         }
+
+        SampleAdded?.Invoke();
     }
 
     /// <summary>Records a gap in <paramref name="nodeId"/>'s host series (design §8.1: honest numbers, no interpolation).</summary>
@@ -86,6 +91,8 @@ public sealed class InMemoryMetricsHistory(
                 buffer.Latest = sample;
             }
         }
+
+        SampleAdded?.Invoke();
     }
 
     /// <summary>Drops all history for a model no longer in the registry.</summary>

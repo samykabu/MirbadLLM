@@ -110,8 +110,11 @@ public static partial class Protocol
     /// <summary>Telemetry ring length on the agent (design §8.1).</summary>
     public static readonly TimeSpan TelemetryRingWindow = TimeSpan.FromMinutes(15);
 
-    /// <summary>Default sampling interval on the agent and pull interval on the master (design §8.1).</summary>
-    public static readonly TimeSpan TelemetryInterval = TimeSpan.FromSeconds(5);
+    /// <summary>
+    /// Default sampling interval on the agent and pull interval on the master (design §8.1). 2 s since 1.1.3 (5 s before),
+    /// so throughput and GPU readings on the Overview are at most a couple of seconds old.
+    /// </summary>
+    public static readonly TimeSpan TelemetryInterval = TimeSpan.FromSeconds(2);
 
     /// <summary>Request body limit per proxied request (today's 64 MiB, design §7.2).</summary>
     public const long MaxProxyRequestBodyBytes = 64L * 1024 * 1024;

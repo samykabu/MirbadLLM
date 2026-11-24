@@ -37,7 +37,7 @@ public sealed class TelemetryCapabilityContributor(IGpuStartupInventory inventor
 /// <summary>
 /// Degraded reason <see cref="HealthReasonCodes.GpuProbeFailing"/> (design §3.5) from the last GPU read: reported while
 /// <c>nvidia-smi</c> exists but fails. A node without <c>nvidia-smi</c> is healthy. Reuses the sampler's last read
-/// (one every 5 s), so it is fast and never runs the probe itself unless no read happened yet.
+/// (one per sampling interval), so it is fast and never runs the probe itself unless no read happened yet.
 /// </summary>
 public sealed class GpuHealthContributor(IGpuTelemetryProbe probe) : IHealthContributor
 {

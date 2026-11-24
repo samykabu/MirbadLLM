@@ -10,7 +10,7 @@ using MirbadLLM.NodeRuntime.Abstractions;
 namespace MirbadLLM.Agent.Telemetry;
 
 /// <summary>
-/// The agent's 5-second sampler (design §8.1), the node-side half of the pre-P1 <c>MetricsSampler</c>: every
+/// The agent's sampler (every Protocol.TelemetryInterval, design §8.1), the node-side half of the pre-P1 <c>MetricsSampler</c>: every
 /// <see cref="TelemetryOptions.SampleInterval"/> it reads host memory, per-GPU telemetry, GPU processes with owners
 /// (hostd) and the <c>/metrics</c> of every Ready model, filtered to the families the master reads
 /// (<see cref="MetricFamilyFilter"/>), and appends one <see cref="NodeSample"/> to the ring. KPI math stays on the

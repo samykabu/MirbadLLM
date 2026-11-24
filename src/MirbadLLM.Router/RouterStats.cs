@@ -3,9 +3,17 @@ using MirbadLLM.Core;
 
 namespace MirbadLLM.Router;
 
-/// <summary>Thread-safe per-served-model request counters.</summary>
+/// <summary>Thread-safe per-served-model request counters, with the last hour of finished requests in 10 s buckets.</summary>
 public sealed class RouterStats(TimeProvider? time = null) : IRouterStats
 {
+    /// <summary>Width of one bucket of finished requests (<see cref="FinishedIn"/> is exact to this).</summary>
+    public static readonly TimeSpan BucketWidth = TimeSpan.FromSeconds(10);
+
+    /// <summary>The longest window <see cref="FinishedIn"/> answers for; a longer one is cut to this.</summary>
+    public static readonly TimeSpan Kept = TimeSpan.FromHours(1);
+
+    private static readonly int Buckets = (int)(Kept.Ticks / BucketWidth.Ticks);
+
     private readonly TimeProvider _time = time ?? TimeProvider.System;
     private readonly ConcurrentDictionary<string, Counters> _counters = new(StringComparer.OrdinalIgnoreCase);
 
@@ -32,6 +40,56 @@ public sealed class RouterStats(TimeProvider? time = null) : IRouterStats
         {
             Interlocked.Increment(ref counters.Failed);
         }
+
+        long bucket = _time.GetUtcNow().UtcTicks / BucketWidth.Ticks;
+        int slot = (int)(bucket % Buckets);
+        lock (counters.Gate)
+        {
+            if (counters.SlotBucket[slot] != bucket)
+            {
+                // The slot last held a bucket an hour or more ago: start it over.
+                counters.SlotBucket[slot] = bucket;
+                counters.SlotFinished[slot] = 0;
+                counters.SlotFailed[slot] = 0;
+            }
+
+            counters.SlotFinished[slot]++;
+            if (failed)
+            {
+                counters.SlotFailed[slot]++;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<RouterModelStats> FinishedIn(TimeSpan window)
+    {
+        long now = _time.GetUtcNow().UtcTicks / BucketWidth.Ticks;
+        // The current (partial) bucket plus enough whole ones to cover the window.
+        long count = Math.Clamp((long)Math.Ceiling(window.Ticks / (double)BucketWidth.Ticks), 1, Buckets);
+        var result = new List<RouterModelStats>();
+        foreach (var (name, counters) in _counters)
+        {
+            long finished = 0, failed = 0;
+            lock (counters.Gate)
+            {
+                for (int i = 0; i < Buckets; i++)
+                {
+                    if (counters.SlotBucket[i] > now - count && counters.SlotBucket[i] <= now)
+                    {
+                        finished += counters.SlotFinished[i];
+                        failed += counters.SlotFailed[i];
+                    }
+                }
+            }
+
+            if (finished > 0)
+            {
+                result.Add(new RouterModelStats(name, finished, failed, Volatile.Read(ref counters.InFlight)));
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -71,6 +129,10 @@ public sealed class RouterStats(TimeProvider? time = null) : IRouterStats
         public int InFlight;
         public int Waiting;
         public long LastRequestTicks;
+        public readonly Lock Gate = new();
+        public readonly long[] SlotBucket = new long[Buckets];
+        public readonly long[] SlotFinished = new long[Buckets];
+        public readonly long[] SlotFailed = new long[Buckets];
     }
 
     private sealed class WaitScope : IDisposable
