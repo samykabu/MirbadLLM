@@ -37,7 +37,7 @@ public sealed record TelemetryPage
 }
 
 /// <summary>
-/// One telemetry sample (design §8.1), taken every 5 s by the agent: host memory, per-GPU telemetry, GPU processes and
+/// One telemetry sample (design §8.1), taken every <see cref="Protocol.TelemetryInterval"/> by the agent: host memory, per-GPU telemetry, GPU processes and
 /// the filtered raw <c>/metrics</c> text of every Ready model. Parsing and KPI math stay on the master
 /// (<c>PrometheusText</c>, <c>ModelKpiCalculator</c>).
 /// </summary>

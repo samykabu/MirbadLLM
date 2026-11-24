@@ -825,7 +825,10 @@ else
         "rotation" => $"{alert.Text}: {row.RotationError}",
         "agent" => $"{alert.Text}. It speaks {Nodes.ProtocolText(row)}; this master speaks protocol {MirbadLLM.Agent.Contracts.Protocol.CurrentVersion}.",
         "build" => $"{alert.Text}. The agent is {ProductVersion.Display(row.AgentVersion)}, MirbadLLM is {ProductVersion.Display(ProductVersion.Controller)}. " +
-            "Use Update now in Agent update, or expand Update by hand for this node's commands.",
+            // Only point at Update now when this node can take it (an agent without the update helper can't).
+            (_admin?.AgentUpdateBlocker(_cache?.GetNode(row.Id)) is null
+                ? "Use Update now in Agent update, or expand Update by hand for this node's commands."
+                : "Update now isn't available for this node (Agent update says why), so expand Update by hand there for its commands."),
         _ => alert.Text,
     };
 

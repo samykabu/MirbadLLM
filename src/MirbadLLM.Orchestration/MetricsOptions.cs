@@ -6,8 +6,11 @@ namespace MirbadLLM.Orchestration;
 /// </summary>
 public sealed class MetricsOptions
 {
-    /// <summary>How often <see cref="Multinode.RemoteTelemetryCollector"/> pulls the nodes' host, GPU and per-model samples.</summary>
-    public int MetricsSampleIntervalSeconds { get; set; } = 5;
+    /// <summary>
+    /// How often <see cref="Multinode.RemoteTelemetryCollector"/> pulls the nodes' host, GPU and per-model samples. Matches
+    /// the agents' own sampling interval (<c>Protocol.TelemetryInterval</c>, 2 s): pulling faster than they sample finds nothing new.
+    /// </summary>
+    public int MetricsSampleIntervalSeconds { get; set; } = 2;
 
     /// <summary>How much sampled history <see cref="InMemoryMetricsHistory"/> keeps.</summary>
     public int MetricsRetentionMinutes { get; set; } = 60;

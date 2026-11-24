@@ -64,6 +64,14 @@ public interface IRouterStats
 
     /// <summary>When the model's last request started or finished; null when it had none since the controller started.</summary>
     DateTimeOffset? LastRequestAt(string servedName) => null;
+
+    /// <summary>
+    /// Requests that finished in the last <paramref name="window"/>, per served model with at least one:
+    /// <see cref="RouterModelStats.TotalRequests"/> counts the finished ones and <see cref="RouterModelStats.FailedRequests"/>
+    /// the failed among them; <see cref="RouterModelStats.InFlight"/> is the current count. Empty when the implementation
+    /// keeps no history.
+    /// </summary>
+    IReadOnlyList<RouterModelStats> FinishedIn(TimeSpan window) => [];
 }
 
 /// <summary>

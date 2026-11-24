@@ -145,7 +145,9 @@ public sealed class MonitoringTests
     {
         using var ctx = new Bunit.BunitContext();
         var model = new ModelDefinition { Id = "model-a", ServedName = "Model-A", ModelPath = "checkpoint" };
-        RegisterBaseFakes(ctx, new FakeModelRegistry([model]), new FakeRouterStats([new RouterModelStats("Model-A", 10, 2, 1)]));
+        // Since the controller started: 2 of 10 failed. In the selected window: 4 of 40.
+        var router = new FakeRouterStats([new RouterModelStats("Model-A", 10, 2, 1)], [new RouterModelStats("Model-A", 40, 4, 1)]);
+        RegisterBaseFakes(ctx, new FakeModelRegistry([model]), router);
 
         var kpis = MakeKpis();
         var history = new FakeMetricsHistory
@@ -162,15 +164,19 @@ public sealed class MonitoringTests
         Assert.Contains("10", req.TextContent, StringComparison.Ordinal);
         Assert.Contains("20% err", req.TextContent, StringComparison.Ordinal);
         Assert.NotNull(req.QuerySelector(".warn svg"));
+        // The pulse counts the window (default 15 min), not the controller's lifetime.
+        Assert.Equal(TimeSpan.FromMinutes(15), router.LastWindow);
         Assert.Contains("pulse-warn", cut.Find("[data-testid=pulse-errors]").GetAttribute("class"), StringComparison.Ordinal);
+        Assert.Contains("10%", cut.Find("[data-testid=pulse-errors]").TextContent, StringComparison.Ordinal);
+        Assert.StartsWith("4 of 40 requests that finished in the last 15 min failed.", cut.Find("[data-testid=pulse-errors-fact]").GetAttribute("title"), StringComparison.Ordinal);
         Assert.Equal("1", cut.Find("[data-testid=pulse-in-flight]").TextContent);
 
         cut.Find("[data-testid=model-row-open-model-a]").Click();
 
-        var router = cut.Find("[data-testid=kpi-router-model-a]");
-        Assert.Contains("10", router.TextContent);
-        Assert.Contains("2", router.TextContent);
-        Assert.Contains("20", router.TextContent);
+        var routerKpi = cut.Find("[data-testid=kpi-router-model-a]");
+        Assert.Contains("10", routerKpi.TextContent);
+        Assert.Contains("2", routerKpi.TextContent);
+        Assert.Contains("20", routerKpi.TextContent);
     }
 
     [Fact]
@@ -370,6 +376,11 @@ public sealed class MonitoringTests
         Assert.Equal("false", fold.GetAttribute("aria-expanded"));
         Assert.Empty(cut.FindAll("[data-testid=model-off-model-c]"));
         Assert.Equal("1/2", cut.Find("[data-testid=pulse-ready]").TextContent);
+        // Hovering 1/2 says what the two numbers are.
+        Assert.StartsWith("1 of 2 registered models is Ready and reporting metrics. The other one is stopped", cut.Find("[data-testid=pulse-ready-fact]").GetAttribute("title"), StringComparison.Ordinal);
+        // The rate is the last sample interval, not the chart window.
+        Assert.Equal("last 2 s", cut.Find("[data-testid=pulse-rate-window]").TextContent);
+        Assert.Contains("2 s apart", cut.Find("[data-testid=pulse-rate]").GetAttribute("title"), StringComparison.Ordinal);
 
         fold.Click();
 

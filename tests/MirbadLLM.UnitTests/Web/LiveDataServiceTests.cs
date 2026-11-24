@@ -179,4 +179,69 @@ public sealed class LiveDataServiceTests
         Assert.Equal("job-a", snapshot.JobOn("qwen")?.JobId);
         Assert.Null(snapshot.JobOn("m"));
     }
+
+    [Fact]
+    public async Task NewSamples_PublishFreshKpis_OncePerBatch_WithoutReloadingTheSources()
+    {
+        var runtime = new CountingRuntime();
+        var history = new MirbadLLM.Orchestration.InMemoryMetricsHistory(
+            Microsoft.Extensions.Options.Options.Create(new MirbadLLM.Orchestration.MetricsOptions()), TimeProvider.System);
+        var services = new ServiceCollection();
+        services.AddSingleton<IModelRegistry>(new FakeModelRegistry([new ModelDefinition { Id = "m", ServedName = "M", ModelPath = "m" }]));
+        services.AddSingleton<IModelRuntime>(runtime);
+        services.AddSingleton<IMetricsHistory>(history);
+        await using var provider = services.BuildServiceProvider();
+        await using var live = new LiveDataService(provider);
+        var ct = TestContext.Current.CancellationToken;
+
+        var pushed = new TaskCompletionSource<LiveSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var page = live.Subscribe(LiveNeeds.Models | LiveNeeds.Statuses, s =>
+        {
+            if (s.LatestKpis.ContainsKey("m"))
+            {
+                pushed.TrySetResult(s);
+            }
+
+            return Task.CompletedTask;
+        });
+        var loaded = await live.RefreshAsync(ct);
+        Assert.Empty(loaded.LatestKpis);
+
+        // One node's batch: three samples in quick succession.
+        var now = DateTimeOffset.UtcNow;
+        for (int i = 0; i < 3; i++)
+        {
+            history.AddModel("m", new ModelSample(now.AddMilliseconds(i), MirbadLLM.UnitTests.Benchmarking.Fakes.Results.Kpis(running: i)));
+        }
+
+        var snapshot = await pushed.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+
+        // The latest sample, one publish for the batch, and the models and states of the last load reused.
+        Assert.Equal(2, snapshot.LatestKpis["m"].Load.RunningRequests);
+        Assert.Equal(1, live.SamplePushes);
+        Assert.Equal(1, live.Fetches);
+        Assert.Equal(1, runtime.ListCalls);
+        Assert.Same(loaded.Models, snapshot.Models);
+        Assert.Same(snapshot, live.Current);
+    }
+
+    [Fact]
+    public async Task NewSamples_AreIgnored_OnceTheLastSubscriberLeft()
+    {
+        var history = new MirbadLLM.Orchestration.InMemoryMetricsHistory(
+            Microsoft.Extensions.Options.Options.Create(new MirbadLLM.Orchestration.MetricsOptions()), TimeProvider.System);
+        var services = new ServiceCollection();
+        services.AddSingleton<IMetricsHistory>(history);
+        await using var provider = services.BuildServiceProvider();
+        await using var live = new LiveDataService(provider);
+
+        var page = live.Subscribe(LiveNeeds.None, _ => Task.CompletedTask);
+        await live.RefreshAsync(TestContext.Current.CancellationToken);
+        page.Dispose();
+
+        history.AddModel("m", new ModelSample(DateTimeOffset.UtcNow, MirbadLLM.UnitTests.Benchmarking.Fakes.Results.Kpis(running: 1)));
+        await Task.Delay(LiveDataService.SampleSettle * 3, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, live.SamplePushes);
+    }
 }

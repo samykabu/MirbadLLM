@@ -120,13 +120,13 @@
                 </span>
             </div>
             <div class="pulse-lead">
-                <span class="pulse-cap" id="pulse-title">@PulseTitle</span>
-                <span class="pulse-big num"><span data-testid="pulse-total"><span @key="UiFormat.Number(_pulse.Total)" class="tick">@UiFormat.Number(_pulse.Total)</span></span><span class="pulse-unit"> tok/s</span></span>
+                <span class="pulse-cap"><span id="pulse-title">@PulseTitle</span> · <span data-testid="pulse-rate-window">last @FormatSeconds(_bucketWidth)</span></span>
+                <span class="pulse-big num" title="@RateTip" data-testid="pulse-rate"><span data-testid="pulse-total"><span @key="UiFormat.Number(_pulse.Total)" class="tick">@UiFormat.Number(_pulse.Total)</span></span><span class="pulse-unit"> tok/s</span></span>
                 <dl class="pulse-facts">
-                    <div><dt>Ready</dt><dd class="num" data-testid="pulse-ready">@_pulse.Ready</dd></div>
+                    <div title="@ReadyTip" data-testid="pulse-ready-fact"><dt>Ready</dt><dd class="num" data-testid="pulse-ready">@_pulse.Ready/@_pulse.Registered</dd></div>
                     <div><dt>Run · wait</dt><dd class="num" data-testid="pulse-run-wait">@UiFormat.Whole(_pulse.Running) · @UiFormat.Whole(_pulse.Waiting)</dd></div>
                     <div><dt>In flight</dt><dd class="num" data-testid="pulse-in-flight">@UiFormat.Whole(_pulse.InFlight)</dd></div>
-                    <div>
+                    <div title="@ErrorsTip" data-testid="pulse-errors-fact">
                         <dt>Errors</dt>
                         <dd class="num @(_pulse.ErrorPercent > ModelTable.ErrorWarnPercent ? "pulse-warn" : null)" data-testid="pulse-errors">
                             @if (_pulse.ErrorPercent > ModelTable.ErrorWarnPercent)
@@ -257,7 +257,7 @@
     public const string ModelQueryKey = "model";
 
     public const string GpuHelp =
-        "Whole-GPU utilization from nvidia-smi, sampled every 5 seconds. The GB10 reports no per-process GPU utilization, " +
+        "Whole-GPU utilization from nvidia-smi, sampled every 2 seconds. The GB10 reports no per-process GPU utilization, " +
         "so it can't be split per model; Generation throughput shows which model is doing the work.";
 
     public const string MemoryHelp =
@@ -270,7 +270,7 @@
 
     public const string ThroughputHelp =
         "Generated tokens per second per model, stacked, so the top edge is the total; each model keeps the colour of its " +
-        "row in the leaderboard. From each model's counters (the difference between two 5-second scrapes). Embedding and " +
+        "row in the leaderboard. From each model's counters (the difference between two scrapes, 2 seconds apart). Embedding and " +
         "reranking models generate none, so they are left out here; the leaderboard shows their input (prompt) tokens per second, " +
         "marked \"in\". A gap means the model wasn't Ready, or it is the first sample after a start.";
 
@@ -285,7 +285,7 @@
         "total minus used as nvidia-smi reports it.";
 
     public const string GpuDiscreteHelp =
-        "Utilization of each GPU from nvidia-smi, sampled every 5 seconds, one line per GPU. It is whole-GPU utilization, " +
+        "Utilization of each GPU from nvidia-smi, sampled every 2 seconds, one line per GPU. It is whole-GPU utilization, " +
         "not split per model; Generation throughput shows which model is doing the work.";
 
     public const string HostRamHelp =
@@ -297,7 +297,7 @@
     private sealed record Row(ModelDefinition Definition, ModelStatus Status);
 
     /// <summary>The Signal panel's facts for the scope.</summary>
-    private sealed record Pulse(double? Total, string Ready, double Running, double Waiting, double? InFlight, double? ErrorPercent);
+    private sealed record Pulse(double? Total, int Ready, int Registered, double Running, double Waiting, double? InFlight, double? ErrorPercent, long Finished, long Failed);
 
     private const LiveNeeds Needs = LiveNeeds.Models | LiveNeeds.Statuses | LiveNeeds.Memory;
 
@@ -385,7 +385,7 @@
     // Signal, leaderboard, readout, history.
     private SignalChart.Payload _signal = SignalChart.Empty(2);
     private string _signalEnd = "now";
-    private Pulse _pulse = new(null, UiFormat.Missing, 0, 0, null, null);
+    private Pulse _pulse = new(null, 0, 0, 0, 0, null, null, 0, 0);
     private List<ModelTable.Row> _tableRows = [];
     private List<ModelTable.Off> _off = [];
     private ModelTable? _table;
@@ -1016,14 +1016,41 @@
     {
         var generation = _latestKpis.Where(kv => !_poolingIds.Contains(kv.Key)).Select(kv => kv.Value.Load.GenerationTokensPerSecond).ToList();
         var routers = _latestKpis.Keys.Select(RouterFor).OfType<RouterModelStats>().ToList();
+        // Errors count only requests that finished inside the selected window, not since the controller started.
+        var finishedByServed = RouterStats.FinishedIn(_window)
+            .GroupBy(r => r.ServedName, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
+        var finished = _latestKpis.Keys.Select(id => finishedByServed.GetValueOrDefault(ServedNameFor(id))).OfType<RouterModelStats>().ToList();
         return new Pulse(
             generation.Count == 0 ? null : generation.Where(v => UiFormat.HasValue(v)).Sum(),
-            $"{_latestKpis.Count}/{registered}",
+            _latestKpis.Count,
+            registered,
             _latestKpis.Values.Select(k => k.Load.RunningRequests).Where(v => UiFormat.HasValue(v)).Sum(),
             _latestKpis.Values.Select(k => k.Load.WaitingRequests).Where(v => UiFormat.HasValue(v)).Sum(),
             routers.Count == 0 ? null : routers.Sum(r => r.InFlight),
-            ErrorPercent(routers));
+            ErrorPercent(finished),
+            finished.Sum(r => r.TotalRequests),
+            finished.Sum(r => r.FailedRequests));
     }
+
+    private string RateTip =>
+        $"Generated tokens per second, added up over the Ready models{OnScope}. Each model's rate is the change in its token " +
+        $"counter between its last two scrapes, {FormatSeconds(_bucketWidth)} apart, so the number moves with every new sample " +
+        $"and is not an average over the {FormatWindow(_window)} chart.";
+
+    private string ReadyTip =>
+        $"{_pulse.Ready} of {_pulse.Registered} registered models{OnScope} {(_pulse.Ready == 1 ? "is" : "are")} Ready and reporting metrics. " +
+        (_pulse.Registered > _pulse.Ready
+            ? (_pulse.Registered - _pulse.Ready == 1 ? "The other one is" : $"The other {_pulse.Registered - _pulse.Ready} are") +
+              " stopped, starting or failed; the leaderboard lists them under \"not running\"."
+            : "Every registered model is Ready.");
+
+    private string ErrorsTip => _pulse.Finished == 0
+        ? $"No requests to the Ready models{OnScope} finished through the router in the last {FormatWindow(_window)}."
+        : $"{UiFormat.Whole(_pulse.Failed)} of {UiFormat.Whole(_pulse.Finished)} requests that finished in the last {FormatWindow(_window)} failed. " +
+          "A request fails when the model's server answers with an error or can't be reached, or when the client disconnects before the answer ends.";
+
+    private static string FormatSeconds(TimeSpan interval) => $"{(int)interval.TotalSeconds} s";
 
     /// <summary>Failed share of the router's requests, in percent; null without requests.</summary>
     private static double? ErrorPercent(IReadOnlyList<RouterModelStats> stats)

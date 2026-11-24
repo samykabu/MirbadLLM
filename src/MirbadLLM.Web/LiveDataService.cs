@@ -56,6 +56,9 @@ public sealed record LiveSnapshot(
 /// every tick it publishes the clock to subscribers that render elapsed timers. The timer runs only while
 /// someone is subscribed. Replaces the independent 5 s timers the status bar, Dashboard, Services and
 /// Monitoring used to run side by side.
+/// <para>Between reloads, a new metrics sample (<see cref="IMetricsHistory.SampleAdded"/>) publishes the last snapshot
+/// again with the history's latest KPIs and host sample, <see cref="SampleSettle"/> after the first sample of a batch,
+/// so throughput and the charts move when the data does rather than up to a refresh later.</para>
 /// </summary>
 public sealed class LiveDataService : IAsyncDisposable
 {
@@ -63,6 +66,9 @@ public sealed class LiveDataService : IAsyncDisposable
     public static readonly TimeSpan ClockInterval = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan FreshFor = TimeSpan.FromSeconds(1);
     private const int TicksPerRefresh = 5;
+
+    /// <summary>How long a new sample waits for the rest of its batch (one node's host and model samples) before it is published.</summary>
+    public static readonly TimeSpan SampleSettle = TimeSpan.FromMilliseconds(250);
 
     private readonly IServiceProvider _services;
     private readonly TimeProvider _time;
@@ -72,6 +78,8 @@ public sealed class LiveDataService : IAsyncDisposable
     private CancellationTokenSource? _cts;
     private Task? _loop;
     private bool _disposed;
+    private IMetricsHistory? _history;
+    private int _samplePending;
 
     public LiveDataService(IServiceProvider services, TimeProvider? time = null)
     {
@@ -87,6 +95,9 @@ public sealed class LiveDataService : IAsyncDisposable
 
     /// <summary>How many loads actually hit the sources (tests: coalescing).</summary>
     public int Fetches { get; private set; }
+
+    /// <summary>How many times new samples were published between reloads (tests: one per batch).</summary>
+    public int SamplePushes { get; private set; }
 
     public bool IsRunning
     {
@@ -143,6 +154,11 @@ public sealed class LiveDataService : IAsyncDisposable
                 // renderer (subscribers marshal their own updates with InvokeAsync).
                 var token = _cts.Token;
                 _loop = Task.Run(() => RunAsync(token), CancellationToken.None);
+                _history = _services.GetService<IMetricsHistory>();
+                if (_history is not null)
+                {
+                    _history.SampleAdded += OnSampleAdded;
+                }
             }
         }
 
@@ -234,6 +250,74 @@ public sealed class LiveDataService : IAsyncDisposable
         {
             // Last subscriber left, or the circuit closed.
         }
+    }
+
+    /// <summary>On the history writer's thread: schedules one publish for the batch this sample starts.</summary>
+    private void OnSampleAdded()
+    {
+        if (Interlocked.Exchange(ref _samplePending, 1) == 1)
+        {
+            return; // A publish is already waiting; it reads this sample too.
+        }
+
+        CancellationToken token;
+        lock (_gate)
+        {
+            if (_cts is null)
+            {
+                Volatile.Write(ref _samplePending, 0);
+                return;
+            }
+
+            token = _cts.Token;
+        }
+
+        _ = Task.Run(() => PublishSamplesAsync(token), CancellationToken.None);
+    }
+
+    private async Task PublishSamplesAsync(CancellationToken ct)
+    {
+        LiveSnapshot snapshot;
+        try
+        {
+            await Task.Delay(SampleSettle, _time, ct).ConfigureAwait(false);
+            // From here a new sample schedules the next publish.
+            Volatile.Write(ref _samplePending, 0);
+            await _fetchGate.WaitAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            Volatile.Write(ref _samplePending, 0);
+            return;
+        }
+        catch (ObjectDisposedException)
+        {
+            return; // Disposed while waiting.
+        }
+
+        try
+        {
+            // Before the first load there is nothing to update; the load reads the history itself.
+            if (Current is not { } current || _history is not { } history)
+            {
+                return;
+            }
+
+            var host = history.GetHost(TimeSpan.FromMinutes(1));
+            snapshot = current with
+            {
+                LatestKpis = history.Latest(),
+                LatestHost = host is { Count: > 0 } ? host[^1] : current.LatestHost,
+            };
+            Current = snapshot;
+            SamplePushes++;
+        }
+        finally
+        {
+            _fetchGate.Release();
+        }
+
+        await PublishAsync(snapshot).ConfigureAwait(false);
     }
 
     private async Task<LiveSnapshot> FetchAsync(LiveNeeds needs, CancellationToken ct)
@@ -351,11 +435,22 @@ public sealed class LiveDataService : IAsyncDisposable
                 stop = _cts;
                 _cts = null;
                 _loop = null;
+                DetachHistory();
             }
         }
 
         // Not disposed here: the loop may still be registering on its token; cancelling is enough.
         stop?.Cancel();
+    }
+
+    /// <summary>Must hold <see cref="_gate"/>.</summary>
+    private void DetachHistory()
+    {
+        if (_history is not null)
+        {
+            _history.SampleAdded -= OnSampleAdded;
+            _history = null;
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -371,6 +466,7 @@ public sealed class LiveDataService : IAsyncDisposable
 
             _disposed = true;
             _subscriptions.Clear();
+            DetachHistory();
             loop = _loop;
             cts = _cts;
             _loop = null;

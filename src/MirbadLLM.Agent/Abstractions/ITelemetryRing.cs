@@ -4,7 +4,7 @@ namespace MirbadLLM.Agent.Abstractions;
 
 /// <summary>
 /// The agent's telemetry ring (design §8.1), implemented in <c>MirbadLLM.Agent.Telemetry</c> (MN-018) and filled by its
-/// 5-second sampler.
+/// sampler (every <c>Protocol.TelemetryInterval</c>).
 /// <para>Invariants: samples are numbered <c>(bootId, seq)</c> with a per-boot monotonic seq; the ring keeps 15 minutes
 /// (<see cref="Protocol.TelemetryRingWindow"/>); a read with another boot returns the oldest samples of the current boot
 /// with <see cref="TelemetryPage.Gap"/> = true; a read whose cursor was evicted returns the oldest kept samples with

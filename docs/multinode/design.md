@@ -1340,13 +1340,13 @@ it. This matches what a client sees today when vLLM dies mid-stream.
 
 ### 8.1 Collection
 
-- Each agent samples every 5 s (`MetricsSampleIntervalSeconds`, sent by the master on connect): host memory, per-GPU
+- Each agent samples every 2 s (`Protocol.TelemetryInterval`; 5 s before 1.1.3): host memory, per-GPU
   telemetry (utilization, power, temperature, clocks, memory on discrete GPUs), GPU processes with owners (hostd on
   Linux; `nvidia-smi --query-compute-apps` + process-to-model mapping on Windows), and a scrape of every Ready model's
   `/metrics`, filtered to the metric families `ModelKpiCalculator` and `BenchmarkSuite` use (`vllm:*` today,
   `llamacpp:*` for llama.cpp with `--metrics`).
 - The agent keeps a 15-minute ring buffer of samples numbered `(bootId, seq)`. The master pulls
-  `GET /telemetry?bootId=&afterSeq=` every 5 s. The cursor is boot-aware: a different `bootId` means the master starts
+  `GET /telemetry?bootId=&afterSeq=` every `MetricsSampleIntervalSeconds` (2 s by default). The cursor is boot-aware: a different `bootId` means the master starts
   from the oldest sample of the new boot and records a gap for the time the agent was down.
 - **After a network partition** shorter than 15 minutes (agent alive), the master back-fills the gap with real samples.
   **After agent downtime**, nothing was sampled: the gap stays a gap (Product principle 2: honest numbers, no

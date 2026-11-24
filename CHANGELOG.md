@@ -6,6 +6,9 @@ private development history.
 
 ## Unreleased
 
+- Agents sample every 2 seconds instead of 5, and the master pulls at the same pace, so the Overview's generation rate, chart and GPU strip are at most a couple of seconds old. The page now updates as soon as a sample arrives, where it used to wait for its own 5-second refresh, which could leave the number up to 10 seconds behind
+- Overview: the Signal panel's Errors count only requests that finished in the selected window (5, 15 or 60 min), where they used to count everything since the controller started, and hovering them gives the two numbers behind the share. Hovering Ready explains the count, for example "1 of 7 registered models is Ready", and the generation rate says it covers the last sample interval (5 s by default), not the chart window
+- Nodes: an agent from another build that has no update helper yet is no longer told to use Update now, which it can't; the alert points to Update by hand instead
 - Tune: a Custom search ticks each value of a step, so a step can try some of its values and leave the rest out, for example max running requests 4 and 8 without 16 and 32. The candidate count and the time follow the ticks, and a step with nothing ticked does not run. `POST /api/models/{id}/tune` takes the same choice as `exclude`
 - llama.cpp models take a draft model for speculative decoding: **Draft model** in the editor, or `draftFolder` with `draftFile` over MCP, passes a draft GGUF such as a DFlash drafter as `-md`. The method and depth stay extra arguments (`--spec-type`, `--spec-draft-n-max`), and `--spec-draft-model` and `--spec-draft-hf` are now refused there like the other path flags
 - A new install starts with an empty model list. It used to carry one example definition, `ornith-9b-fp8`, whose checkpoint only the first deployment had
