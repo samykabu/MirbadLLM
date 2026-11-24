@@ -522,7 +522,9 @@ public sealed partial class NodeStatusCache : INodeStatusCache
     /// <exception cref="KeyNotFoundException">The cache or the client factory does not know the node.</exception>
     /// <exception cref="AgentUnreachableException">The agent could not be reached.</exception>
     /// <exception cref="AgentException">The agent answered an error.</exception>
-    public async Task<NodeSyncResult> SynchronizeAsync(string nodeId, CancellationToken ct = default)
+    public Task<NodeSyncResult> SynchronizeAsync(string nodeId, CancellationToken ct = default) => SynchronizeAsync(nodeId, restarts: 0, ct);
+
+    private async Task<NodeSyncResult> SynchronizeAsync(string nodeId, int restarts, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrEmpty(nodeId);
         NodeEntry entry;
@@ -612,6 +614,14 @@ public sealed partial class NodeStatusCache : INodeStatusCache
         _clients.SetNegotiatedProtocol(nodeId, selected!.Value);
         NodeCapabilities capabilities = await client.GetCapabilitiesAsync(ct).ConfigureAwait(false);
         StatusSnapshot snapshot = await client.GetStatusAsync(ct).ConfigureAwait(false);
+        if (!string.Equals(snapshot.BootId, info.BootId, StringComparison.Ordinal) && restarts == 0)
+        {
+            // The agent restarted between /info and /status (a deploy replaces it seconds after the master). Start over,
+            // so the version, protocol and master triple come from the boot the snapshot and the event stream belong to.
+            NodeStatusCacheLog.RestartedDuringSync(_logger, nodeId, info.BootId, snapshot.BootId);
+            return await SynchronizeAsync(nodeId, restarts + 1, ct).ConfigureAwait(false);
+        }
+
         now = _time.GetUtcNow();
         lock (_gate)
         {
@@ -1386,5 +1396,8 @@ public sealed partial class NodeStatusCache : INodeStatusCache
 
         [LoggerMessage(Level = LogLevel.Information, Message = "Node {NodeId}: agent boot changed from {OldBoot} to {NewBoot}; snapshot applied.")]
         public static partial void NewBoot(ILogger logger, string nodeId, string oldBoot, string newBoot);
+
+        [LoggerMessage(Level = LogLevel.Information, Message = "Node {NodeId}: the agent restarted during synchronization (boot {InfoBoot} answered /info, {StatusBoot} answered /status); synchronizing again.")]
+        public static partial void RestartedDuringSync(ILogger logger, string nodeId, string infoBoot, string statusBoot);
     }
 }

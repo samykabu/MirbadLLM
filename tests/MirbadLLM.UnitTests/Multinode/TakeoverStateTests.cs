@@ -23,6 +23,29 @@ public sealed class TakeoverStateTests
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     [Fact]
+    public async Task AnAgentRestartedBetweenInfoAndStatusIsSynchronizedAgainSoItsVersionIsTheNewBoots()
+    {
+        // A deploy restarts the master first and the agent seconds later: the first /info can come from the old agent and
+        // /status from the new one. The node then showed the old build until the master restarted.
+        var (cache, _, agent, _) = Create(markedEpoch: null);
+        agent.AfterInfo = () =>
+        {
+            agent.AfterInfo = null;
+            agent.BootId = "new-boot";
+            agent.Version = "1.0.0+new";
+        };
+
+        var sync = await cache.SynchronizeAsync(Node, Ct);
+
+        Assert.Equal(NodeSyncStatus.Synchronized, sync.Status);
+        Assert.Equal("new-boot", sync.BootId);
+        Assert.Equal(2, agent.InfoCalls);
+        var live = cache.GetNode(Node)!;
+        Assert.Equal("1.0.0+new", live.AgentVersion);
+        Assert.Equal("new-boot", live.BootId);
+    }
+
+    [Fact]
     public async Task AContinuationThatRaisedTheEpochShowsPendingTakeoverNotNeedsContinuationUntilTheNextInfo()
     {
         var (cache, identity, agent, _) = Create(markedEpoch: 10);
@@ -295,20 +318,32 @@ public sealed class TakeoverStateTests
 
         public TaskCompletionSource InfoStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        /// <summary>The boot /info and /status report; a test changes it to restart the agent.</summary>
+        public string BootId { get; set; } = "agent-boot";
+
+        public string Version { get; set; } = "1.0.0";
+
+        /// <summary>Runs after each /info answer is built (a restart right after it).</summary>
+        public Action? AfterInfo { get; set; }
+
+        public int InfoCalls { get; private set; }
+
         public async Task<InfoResponse> InfoAsync()
         {
+            InfoCalls++;
             var info = new InfoResponse
             {
                 NodeId = Node,
                 NodeUid = ReportedUid,
-                AgentVersion = "1.0.0",
+                AgentVersion = Version,
                 Protocol = new ProtocolRange(Protocol.MinVersion, Protocol.CurrentVersion),
-                BootId = "agent-boot",
+                BootId = BootId,
                 StartedAt = _clock.Now,
                 Time = _clock.Now,
                 AcceptedMaster = AcceptedEpoch is { } epoch ? new MasterTriple("old-master", epoch, "old-boot") : null,
             };
             InfoStarted.TrySetResult();
+            AfterInfo?.Invoke();
             if (HoldInfo is { } hold)
             {
                 await hold;
@@ -329,7 +364,7 @@ public sealed class TakeoverStateTests
 
         public StatusSnapshot Status() => new()
         {
-            BootId = "agent-boot",
+            BootId = BootId,
             Seq = 1,
             Time = _clock.Now,
             Health = new NodeHealth(),
