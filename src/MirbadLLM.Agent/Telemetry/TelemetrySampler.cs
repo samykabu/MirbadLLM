@@ -351,12 +351,15 @@ public sealed partial class TelemetrySampler(
                 return null;
             }
 
-            if (state.ValueKind == JsonValueKind.False)
+            // llama.cpp adds a finished request's n_decoded to tokens_predicted_total only when the slot is reset for
+            // the next request, and zeroes n_decoded at that same moment. An idle slot's n_decoded is therefore not
+            // counted yet, so it belongs in the sum; skipping it made the rate dip at completion and spike at reuse.
+            if (state.ValueKind == JsonValueKind.False && !slot.TryGetProperty("next_token", out _))
             {
-                continue;
+                continue; // Never used: no task, nothing decoded.
             }
 
-            if (state.ValueKind != JsonValueKind.True ||
+            if (state.ValueKind is not (JsonValueKind.True or JsonValueKind.False) ||
                 !slot.TryGetProperty("id_task", out var task) || task.ValueKind != JsonValueKind.Number ||
                 !task.TryGetInt64(out long id) || id < 0 || !tasks.Add(id) ||
                 !slot.TryGetProperty("next_token", out var next) || next.ValueKind != JsonValueKind.Array ||

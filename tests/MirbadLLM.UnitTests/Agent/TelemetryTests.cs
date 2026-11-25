@@ -550,13 +550,42 @@ public sealed class TelemetryTests
         }) { Observe = request => paths.Add((request.RequestUri!.Port, request.RequestUri.AbsolutePath, request.Headers.Authorization?.Parameter)) };
         var (sampler, _) = Sampler(driver, handler);
         var sample = await sampler.SampleOnceAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(400, sample!.Models.Single(model => model.ModelId == "process").LlamaDecodedTokens);
+        Assert.Equal(450, sample!.Models.Single(model => model.ModelId == "process").LlamaDecodedTokens);
         Assert.Null(sample.Models.Single(model => model.ModelId == "container").LlamaDecodedTokens);
         Assert.All(paths.Where(path => path.Port == 8101), path => Assert.Equal("local-key", path.Key));
         Assert.All(paths.Where(path => path.Port == 8102), path => Assert.Null(path.Key));
         Assert.DoesNotContain(paths, path => path.Port == 8103);
         Assert.Equal(2, paths.Count(path => path.Path == "/slots"));
         Assert.Equal(4, paths.Count(path => path.Path == "/metrics"));
+    }
+
+    [Fact]
+    public async Task Sampler_LlamaCompositeHoldsSteadyAcrossCompletionAndSlotReuse()
+    {
+        // One slot: decoding (counter 1000, n_decoded 300), finished (counter still 1000, n_decoded 500, idle),
+        // then reused by the next request (reset moves the 500 into the counter and zeroes n_decoded).
+        var states = new[]
+        {
+            (Counter: 1000, Slots: """[{"id":0,"is_processing":true,"id_task":4,"next_token":[{"n_decoded":300}]}]"""),
+            (Counter: 1000, Slots: """[{"id":0,"is_processing":false,"id_task":4,"next_token":[{"n_decoded":500}]}]"""),
+            (Counter: 1500, Slots: """[{"id":0,"is_processing":true,"id_task":5,"next_token":[{"n_decoded":0}]}]"""),
+        };
+        int step = 0;
+        var driver = new FakeDriver().Add("llama", ModelState.Ready, 8101, RuntimeKind.LlamaCpp);
+        using var handler = new FakeHttp((Uri uri, CancellationToken _) => Task.FromResult(uri.AbsolutePath == "/slots"
+            ? Ok(states[step].Slots)
+            : Ok($"llamacpp:tokens_predicted_total {states[step].Counter}")));
+        var (sampler, _) = Sampler(driver, handler);
+
+        var composites = new List<long?>();
+        for (step = 0; step < states.Length; step++)
+        {
+            var sample = await sampler.SampleOnceAsync(TestContext.Current.CancellationToken);
+            composites.Add(sample!.Models.Single().LlamaDecodedTokens);
+        }
+
+        // 1300 while decoding, 1500 once finished, and still 1500 after the reset: no dip and no spike.
+        Assert.Equal([1300, 1500, 1500], composites);
     }
 
     [Fact]
