@@ -699,6 +699,39 @@ public sealed class ModelEditorLlamaCppTests
         Assert.Equal("builtin:chatml", LlamaCppForm.From(stored with { ChatTemplate = "builtin:chatml" }, "f").ToSettings("f", LaunchDelivery.Process, 2).ChatTemplate);
     }
 
+    [Fact]
+    public void Form_KeepsAProjectorFromAnotherFolder_OnAnUnrelatedSave()
+    {
+        // The model's GGUF and its projector are two sources in sibling folders. The edit page does not show the
+        // projector, so a save that changed something else joined it to the model folder: "IQ3/Vision/mmproj.gguf",
+        // which the agent refused at the next start.
+        var stored = new LlamaCppSettings
+        {
+            ModelFile = "Inkling-IQ3/Inkling-IQ3_XXS.gguf", ProjectorFile = "Inkling-Vision/mmproj-Q8_0.gguf", ContextSize = 4096,
+        };
+
+        var form = LlamaCppForm.From(stored, "Inkling-IQ3");
+        form.ContextSize = 8192;
+        var back = form.ToSettings("Inkling-IQ3", LaunchDelivery.Process, gpuCount: 1);
+
+        Assert.Equal("Inkling-Vision/mmproj-Q8_0.gguf", back.ProjectorFile);
+        Assert.Equal("Inkling-IQ3/Inkling-IQ3_XXS.gguf", back.ModelFile);
+        Assert.Equal(8192, back.ContextSize);
+    }
+
+    [Fact]
+    public void Form_JoinsAChangedFile_ToTheModelFolder()
+    {
+        var form = LlamaCppForm.From(new LlamaCppSettings { ModelFile = "f/a.gguf", ProjectorFile = "other/mmproj.gguf" }, "f");
+        form.File = "b.gguf";
+        form.ProjectorFile = "mmproj-F16.gguf";
+        var back = form.ToSettings("f", LaunchDelivery.Process, gpuCount: 1);
+
+        Assert.Equal("f/b.gguf", back.ModelFile);
+        Assert.Equal("f/mmproj-F16.gguf", back.ProjectorFile);
+        Assert.Equal("g/a.gguf", LlamaCppForm.From(new LlamaCppSettings { ModelFile = "f/a.gguf" }, "f").ToSettings("g", LaunchDelivery.Process, 1).ModelFile);
+    }
+
     [Theory]
     [InlineData("-sm row", new[] { "-sm", "row" })]
     [InlineData("  --seed   42 \n\n-c=4096\r\n", new[] { "--seed", "42", "-c=4096" })]
