@@ -17,10 +17,13 @@ namespace MirbadLLM.NodeRuntime.Gguf;
 /// Every malformed or out-of-bound header is a <see cref="GgufFormatException"/>, and one read allocates a few KiB plus the
 /// stream buffer, far below <see cref="GgufLimits.MaxAllocationBytes"/>.</para>
 /// <para>Rules taken from ggml's <c>gguf.cpp</c>: magic <c>GGUF</c>, version 2 or 3 (little-endian; a big-endian file shows
-/// up as a huge version and is refused), no nested arrays, no duplicate kept keys, every tensor type known with
-/// <c>ne[0]</c> a multiple of its block size, tensor offsets aligned to <c>general.alignment</c> (default 32, a power of
-/// two) and contiguous. Tensor bytes are <c>ggml_nbytes</c> summed from the table (what llama.cpp reports as the model
-/// size), not file sizes.</para>
+/// up as a huge version and is refused), no nested arrays, no duplicate kept keys, a known tensor type has <c>ne[0]</c> a
+/// multiple of its block size, tensor offsets aligned to <c>general.alignment</c> (default 32, a power of two) and
+/// contiguous. Tensor bytes are <c>ggml_nbytes</c> summed from the table (what llama.cpp reports as the model size), not
+/// file sizes.</para>
+/// <para>A tensor type missing from <see cref="GgmlTypes"/> (a newer ggml) is not an error: all metadata precedes the
+/// tensor table, so the summary is complete; the tensor's bytes are the gap to the next tensor's offset (to the end of the
+/// file for the last one) and the summary carries a warning.</para>
 /// <para>Split parts: the part named by the caller must be the first (<c>split.no = 0</c>); parts 2..N are found next to
 /// it, must be plain files (a link is refused: the caller confined only the first part), must carry the same
 /// <c>split.count</c> and their own <c>split.no</c>, and the tensors of all parts must add up to the first part's
@@ -294,6 +297,12 @@ public sealed partial class GgufReader : IGgufReader
         long tensorBytes = 0;
         long parameters = 0;
         long expectedOffset = 0;
+
+        // A tensor type this reader does not know (a ggml newer than its table) is not fatal: the metadata above is
+        // complete, and the tensor's size is the distance to the next tensor's offset (or to the end of the data).
+        long? unknownOffset = null;
+        long unknownTensors = 0;
+        SortedSet<uint>? unknownTypes = null;
         Span<long> dims = stackalloc long[GgufLimits.MaxTensorDimensions];
         for (long i = 0; i < tensorCount; i++)
         {
@@ -320,29 +329,53 @@ public sealed partial class GgufReader : IGgufReader
             }
 
             uint typeId = reader.ReadUInt32();
-            if (!GgmlTypes.TryGet(typeId, out var ggmlType))
-            {
-                throw new GgufFormatException(string.Create(CultureInfo.InvariantCulture,
-                    $"Tensor {i} has the unknown ggml type {typeId}."));
-            }
-
-            if (dims[0] % ggmlType.BlockSize != 0)
+            bool known = GgmlTypes.TryGet(typeId, out var ggmlType);
+            if (known && dims[0] % ggmlType.BlockSize != 0)
             {
                 throw new GgufFormatException(string.Create(CultureInfo.InvariantCulture,
                     $"Tensor {i}: its first dimension {dims[0]} is not a multiple of the {ggmlType.Name} block size {ggmlType.BlockSize}."));
             }
 
             ulong offset = reader.ReadUInt64();
+            if (unknownOffset is { } from)
+            {
+                // The previous tensor's size is unknown: this offset closes it, so it must be aligned and not before it.
+                if (offset > long.MaxValue || (long)offset < from || (long)offset % alignment != 0)
+                {
+                    throw new GgufFormatException(string.Create(CultureInfo.InvariantCulture,
+                        $"Tensor {i} has data offset {offset}, expected an aligned offset from {from} (offsets must be aligned and contiguous)."));
+                }
+
+                tensorBytes = checked(tensorBytes + ((long)offset - from));
+                expectedOffset = (long)offset;
+                unknownOffset = null;
+            }
+
             if (offset != (ulong)expectedOffset)
             {
                 throw new GgufFormatException(string.Create(CultureInfo.InvariantCulture,
                     $"Tensor {i} has data offset {offset}, expected {expectedOffset} (offsets must be aligned and contiguous)."));
             }
 
+            parameters = checked(parameters + elements);
+            if (!known)
+            {
+                unknownOffset = expectedOffset;
+                unknownTensors++;
+                (unknownTypes ??= []).Add(typeId);
+                continue;
+            }
+
             long nbytes = checked(elements / ggmlType.BlockSize * ggmlType.TypeSize);
             tensorBytes = checked(tensorBytes + nbytes);
-            parameters = checked(parameters + elements);
             expectedOffset = checked(Pad(checked(expectedOffset + nbytes), alignment));
+        }
+
+        long dataOffset = Pad(reader.Position, alignment);
+        if (unknownOffset is { } last)
+        {
+            // The last tensor's type is unknown: it runs to the end of the file (0 for a header-only copy).
+            tensorBytes = checked(tensorBytes + Math.Max(0, reader.Length - dataOffset - last));
         }
 
         return new GgufHeader
@@ -356,8 +389,10 @@ public sealed partial class GgufReader : IGgufReader
             TensorCount = tensorCount,
             TensorBytes = tensorBytes,
             ParameterCount = parameters,
-            DataOffset = Pad(reader.Position, alignment),
+            DataOffset = dataOffset,
             FileBytes = reader.Length,
+            UnknownTensorCount = unknownTensors,
+            UnknownTensorTypes = unknownTypes is null ? [] : [.. unknownTypes],
         };
     }
 
@@ -804,9 +839,18 @@ internal sealed record GgufHeader
 
     /// <summary><c>split.tensors.count</c> when present.</summary>
     public required long? SplitTensorCount { get; init; }
+
+    /// <summary>Tensors whose ggml type is not in <see cref="GgmlTypes"/> (sized from the offsets).</summary>
+    public long UnknownTensorCount { get; init; }
+
+    /// <summary>The unknown ggml type ids, ascending.</summary>
+    public IReadOnlyList<uint> UnknownTensorTypes { get; init; } = [];
 }
 
-/// <summary>ggml tensor types: block size and bytes per block (<c>ggml_type_traits</c> at llama.cpp <c>b11476</c>).</summary>
+/// <summary>
+/// ggml tensor types: block size and bytes per block (<c>type_traits</c> in <c>ggml/src/ggml.c</c>; 0..39 at llama.cpp
+/// <c>b11476</c>, 40..43 at <c>5220a2d404</c>, sizes from the <c>block_*</c> structs in <c>ggml-common.h</c>).
+/// </summary>
 internal static class GgmlTypes
 {
     private static readonly Dictionary<uint, GgmlType> Types = new()
@@ -843,6 +887,10 @@ internal static class GgmlTypes
         [34] = new("TQ1_0", 256, 54),
         [35] = new("TQ2_0", 256, 66),
         [39] = new("MXFP4", 32, 17),
+        [40] = new("NVFP4", 64, 36),   // QK_NVFP4 64; 4 UE4M3 sub-block scales + 32 bytes of E2M1 pairs
+        [41] = new("Q1_0", 128, 18),   // QK1_0 128; fp16 d + 16 bytes of 1-bit quants
+        [42] = new("Q2_0", 64, 18),    // QK2_0 64; fp16 d + 16 bytes of 2-bit quants
+        [43] = new("F8_E4M3", 1, 1),   // ggml_fp8_e4m3_t { uint8_t bits; }
     };
 
     public static bool TryGet(uint id, out GgmlType type) => Types.TryGetValue(id, out type!);

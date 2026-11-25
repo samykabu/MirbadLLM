@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MirbadLLM.Agent.Contracts;
 
 /// <summary>
@@ -114,4 +116,11 @@ public sealed record GgufSummary
 
     /// <summary>Size of all parts on disk.</summary>
     public required long FileBytes { get; init; }
+
+    /// <summary>
+    /// What the reader could not check but did not refuse, e.g. tensors of a ggml type newer than its table (their bytes
+    /// are taken from the tensor offsets); null when there is nothing to report. Omitted from the JSON when null.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? Warnings { get; init; }
 }

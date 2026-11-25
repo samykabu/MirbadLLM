@@ -333,7 +333,7 @@ public sealed class GgufReaderTests : IDisposable
         "string-past-end", "array-too-long", "array-past-end", "nested-array", "unknown-kv-type", "unknown-array-type",
         "bool-byte", "duplicate-kept-key", "duplicate-architecture", "architecture-not-string", "architecture-too-long",
         "architecture-not-utf8", "no-architecture", "no-block-count", "block-count-zero", "block-count-string",
-        "block-count-u64-huge", "dims-zero", "dims-too-many", "dim-huge", "dims-overflow", "unknown-tensor-type",
+        "block-count-u64-huge", "dims-zero", "dims-too-many", "dim-huge", "dims-overflow",
         "block-size-mismatch", "offset-misaligned", "offset-gap", "alignment-not-power-of-two", "split-count-huge",
         "embedding-length-negative",
     ];
@@ -375,6 +375,84 @@ public sealed class GgufReaderTests : IDisposable
         w.Str("llama.block_count").U32(4).U32(3);
         var summary = Parse(w.ToArray());
         Assert.False(summary.CausalAttention);
+    }
+
+    // ---------------------------------------------------------------- tensor types
+
+    [Theory]
+    [InlineData(40u, 64UL, 144L)] // NVFP4: 4 blocks of 64 x 36 B
+    [InlineData(41u, 128UL, 72L)] // Q1_0: 4 blocks of 128 x 18 B
+    [InlineData(42u, 64UL, 72L)] // Q2_0: 4 blocks of 64 x 18 B
+    [InlineData(43u, 16UL, 64L)] // F8_E4M3: 1 B per element
+    public void NewGgmlTypes_AreSizedFromUpstreamTypeTraits(uint type, ulong firstDim, long bytes)
+    {
+        // Values from ggml/src/ggml.c type_traits and ggml-common.h block_* structs (llama.cpp 5220a2d404). A following
+        // F16 tensor must start right after the padded size, so a wrong size fails the offset check, not just the total.
+        long padded = (bytes + 31) / 32 * 32;
+        var w = MetadataHeader(tensors: 2);
+        w.Str("a.weight").U32(2).U64(firstDim).U64(4).U32(type).U64(0);
+        w.Str("b.weight").U32(1).U64(16).U32(1).U64(padded);
+        var summary = Parse(w.Pad(32).ToArray());
+        Assert.Equal(bytes + 32, summary.TensorBytes);
+        Assert.Null(summary.Warnings);
+    }
+
+    [Fact]
+    public void UnknownTensorType_KeepsTheMetadata_AndSizesTheTensorFromTheNextOffset()
+    {
+        var w = MetadataHeader(tensors: 2);
+        w.Str("a.weight").U32(2).U64(64).U64(64).U32(99).U64(0); // a type newer than the table
+        w.Str("b.weight").U32(2).U64(64).U64(64).U32(1).U64(4096); // F16 after 4096 B
+        var summary = Parse(w.Pad(32).ToArray());
+
+        Assert.Equal(8192, summary.ContextLength);
+        Assert.True(summary.HasChatTemplate);
+        Assert.Equal(2 * 64 * 64, summary.ParameterCount);
+        Assert.Equal(4096 + (64 * 64 * 2), summary.TensorBytes);
+        string warning = Assert.Single(summary.Warnings!);
+        Assert.Contains("1 tensor(s) use ggml type 99", warning, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnknownTensorType_Last_RunsToTheEndOfTheFile()
+    {
+        var w = MetadataHeader(tensors: 2);
+        w.Str("a.weight").U32(2).U64(64).U64(64).U32(1).U64(0); // F16, 8192 B
+        w.Str("b.weight").U32(1).U64(100).U32(77).U64(8192);
+        w.Pad(32).Raw(new byte[8192 + 1000]);
+        var summary = Parse(w.ToArray());
+        Assert.Equal(8192 + 1000, summary.TensorBytes);
+        Assert.Contains("type 77", Assert.Single(summary.Warnings!), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Summary_WithoutWarnings_OmitsThemFromTheJson()
+    {
+        // A file of known types has no warnings, and the wire JSON leaves the field out (golden fixtures stay unchanged).
+        var json = JsonSerializer.SerializeToElement(Qwen3Embedding, AgentJson.Options);
+        Assert.False(json.TryGetProperty("warnings", out _));
+    }
+
+    [Theory]
+    [InlineData(4000UL)] // before the unknown tensor's own offset
+    [InlineData(4100UL)] // not aligned
+    public void UnknownTensorType_FollowedByABadOffset_IsAFormatException(ulong nextOffset)
+    {
+        var w = MetadataHeader(tensors: 3);
+        w.Str("a.weight").U32(1).U64(2048).U32(1).U64(0); // F16, 4096 B
+        w.Str("b.weight").U32(1).U64(64).U32(99).U64(4096);
+        w.Str("c.weight").U32(1).U64(64).U32(1).U64(nextOffset);
+        Assert.Throws<GgufFormatException>(() => Parse(w.Pad(32).ToArray()));
+    }
+
+    private static Writer MetadataHeader(ulong tensors)
+    {
+        var w = Writer.Header(tensors, kvs: 4);
+        w.Str("general.architecture").U32(8).Str("llama");
+        w.Str("llama.block_count").U32(4).U32(2);
+        w.Str("llama.context_length").U32(4).U32(8192);
+        w.Str("tokenizer.chat_template").U32(8).Str("{{ messages }}");
+        return w;
     }
 
     [Theory]
@@ -569,7 +647,7 @@ public sealed class GgufReaderTests : IDisposable
 
         if (kind is not ("dims-zero" or "dims-too-many"))
         {
-            w.U32(kind switch { "unknown-tensor-type" => 31u, "block-size-mismatch" => 8u, _ => 1u }); // 8 = Q8_0 needs ne0 % 32 == 0
+            w.U32(kind switch { "block-size-mismatch" => 8u, _ => 1u }); // 8 = Q8_0 needs ne0 % 32 == 0
             w.U64(kind switch { "offset-misaligned" => 7u, "offset-gap" => 64u, _ => 0u });
         }
 
