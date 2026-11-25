@@ -45,7 +45,7 @@ public sealed partial class MirbadMcpTools(
     public const string PlanningGuide =
         "Planning a model deployment. " +
         "(1) Call mirbad_list_node_runtimes first: a node only runs the runtimes it reports, and a node with discrete GPUs needs gpuIndices. " +
-        "(2) Settings depend on the runtime, and mirbad_deploy_model refuses one the runtime would ignore: kvCacheDtype works on vllm, llamacpp and mlx; enablePrefixCaching on vllm; " +
+        "(2) Settings depend on the runtime, and mirbad_deploy_model refuses one the runtime would ignore: contextSize (tokens per request) and parallelSlots are for llamacpp; kvCacheDtype works on vllm, llamacpp and mlx; enablePrefixCaching on vllm; " +
         "speculative decoding on vllm, sglang, mlx and llamacpp, never on nim; sglang needs speculativeMethod, an algorithm such as DFLASH, EAGLE3, STANDALONE or NGRAM; " +
         "llamacpp takes only a draft GGUF, draftFolder with draftFile, and reads the method from that file. " +
         "(3) A deploy only proves the settings are valid. " + UnprovenSpeculativeNote + " " +
@@ -256,6 +256,8 @@ public sealed partial class MirbadMcpTools(
         [Description("Start the model when a request names it while it is stopped; the request waits for the start. Suits llamacpp and mlx; vllm, sglang and nim take minutes to start, so a waiting client may time out.")] bool? startOnRequest = null,
         [Description("Stop the model after this many minutes without a request, at least 1. Omit to never stop it for being idle.")] int? idleStopMinutes = null,
         [Description("Allow stopping this model, while it is idle, to free memory for another model's start on request on the same node.")] bool? stopToMakeRoom = null,
+        [Description("llamacpp: context tokens per request (per slot). Defaults to 32768.")] int? contextSize = null,
+        [Description("llamacpp: simultaneous request slots. Defaults to 4. The total context allocation is contextSize multiplied by parallelSlots.")] int? parallelSlots = null,
         CancellationToken ct = default)
     {
         RequireOperator();
@@ -277,7 +279,7 @@ public sealed partial class MirbadMcpTools(
         if (draftRepoId is not null && (draftFolder is null || !RepoIdRegex().IsMatch(draftRepoId)))
             throw new McpException("draftRepoId must be a Hugging Face owner/repository identifier and needs draftFolder.");
         ValidateSettings(image, imageDigest, extraArgs, kvCacheDtype, speculativeMethod);
-        RefuseIgnoredSettings(runtime, modelFile, image, kvCacheDtype, enablePrefixCaching, speculativeMethod, speculativeTokens, draftFolder, draftFile);
+        RefuseIgnoredSettings(runtime, modelFile, image, kvCacheDtype, enablePrefixCaching, speculativeMethod, speculativeTokens, draftFolder, draftFile, contextSize, parallelSlots);
         if (await models.GetAsync(modelId, ct).ConfigureAwait(false) is not null)
             throw new McpException($"Model '{modelId}' already exists; choose another id.");
 
@@ -311,11 +313,11 @@ public sealed partial class MirbadMcpTools(
             RuntimeKind.LlamaCpp => model with
             {
                 Runtime = runtime,
-                LlamaCpp = LlamaCppFor(selected.NodeId, capabilities, folder, modelFile, image, digest, kvCacheDtype) with
+                LlamaCpp = WithLlamaCppSizing(LlamaCppFor(selected.NodeId, capabilities, folder, modelFile, image, digest, kvCacheDtype) with
                 {
                     ExtraArgs = extraArgs ?? [],
                     DraftModelFile = draftFolder is null ? null : $"{draftFolder}/{draftFile}",
-                },
+                }, contextSize, parallelSlots),
             },
             RuntimeKind.Mlx => model with
             {
@@ -402,6 +404,8 @@ public sealed partial class MirbadMcpTools(
         [Description("Start the model when a request names it while it is stopped, as in mirbad_deploy_model. Takes effect at once, without a restart.")] bool? startOnRequest = null,
         [Description("Stop the model after this many minutes without a request; 0 turns the idle stop off. Takes effect at once, without a restart.")] int? idleStopMinutes = null,
         [Description("Allow stopping this model, while it is idle, to make room for another model's start on request. Takes effect at once, without a restart.")] bool? stopToMakeRoom = null,
+        [Description("llamacpp: context tokens per request (per slot). Omit to keep the saved value.")] int? contextSize = null,
+        [Description("llamacpp: simultaneous request slots. Omit to keep the saved value. The total context allocation is contextSize multiplied by parallelSlots.")] int? parallelSlots = null,
         CancellationToken ct = default)
     {
         RequireOperator();
@@ -410,7 +414,7 @@ public sealed partial class MirbadMcpTools(
         if (servedName is not null && (string.IsNullOrWhiteSpace(servedName) || servedName.Length > 200))
             throw new McpException("servedName must be non-empty and at most 200 characters.");
         ValidateSettings(image, imageDigest, extraArgs, kvCacheDtype, speculativeMethod);
-        RefuseIgnoredSettings(before.Runtime, null, image, kvCacheDtype, enablePrefixCaching, speculativeMethod, speculativeTokens, draftFolder, draftFile);
+        RefuseIgnoredSettings(before.Runtime, null, image, kvCacheDtype, enablePrefixCaching, speculativeMethod, speculativeTokens, draftFolder, draftFile, contextSize, parallelSlots);
         if (speculativeOff && (speculativeMethod is not null || speculativeTokens is not null || draftFolder is not null))
             throw new McpException("speculativeOff cannot be combined with speculativeMethod, speculativeTokens or draftFolder; no state was changed.");
         if (speculativeOff && before.Runtime is RuntimeKind.Nim)
@@ -445,7 +449,12 @@ public sealed partial class MirbadMcpTools(
         };
         after = before.Runtime switch
         {
-            RuntimeKind.LlamaCpp => after with { LlamaCpp = UpdatedLlamaCpp(before, image, digest, extraArgs, kvCacheDtype, draftFolder, draftFile, speculativeOff) },
+            RuntimeKind.LlamaCpp => after with
+            {
+                LlamaCpp = WithLlamaCppSizing(
+                    UpdatedLlamaCpp(before, image, digest, extraArgs, kvCacheDtype, draftFolder, draftFile, speculativeOff),
+                    contextSize, parallelSlots),
+            },
             RuntimeKind.Mlx => after with { Mlx = UpdatedMlx(before, extraArgs, kvCacheDtype, speculativeTokens, draftFolder, speculativeOff) },
             RuntimeKind.Sglang or RuntimeKind.Nim => after with
             {
@@ -520,6 +529,12 @@ public sealed partial class MirbadMcpTools(
         };
     }
 
+    private static LlamaCppSettings WithLlamaCppSizing(LlamaCppSettings settings, int? contextSize, int? parallelSlots) => settings with
+    {
+        ContextSize = contextSize ?? settings.ContextSize,
+        Parallel = parallelSlots ?? settings.Parallel,
+    };
+
     private static MlxSettings UpdatedMlx(ModelDefinition model, IReadOnlyList<string>? extraArgs, string? kv, int? tokens, string? draft, bool speculativeOff)
     {
         MlxSettings current = model.Mlx ?? throw new McpException($"Model '{model.Id}' has no MLX settings; fix it in the portal.");
@@ -587,7 +602,7 @@ public sealed partial class MirbadMcpTools(
         nodeStatus.GetNode(nodeId)?.Capabilities ?? (await nodes.GetAsync(nodeId, ct).ConfigureAwait(false))?.LastCapabilities;
 
     // A runtime would ignore these without a word, and the caller would believe the setting took effect.
-    private static void RefuseIgnoredSettings(RuntimeKind runtime, string? modelFile, string? image, string? kv, bool? prefix, string? method, int? tokens, string? draft, string? draftFile)
+    private static void RefuseIgnoredSettings(RuntimeKind runtime, string? modelFile, string? image, string? kv, bool? prefix, string? method, int? tokens, string? draft, string? draftFile, int? contextSize, int? parallelSlots)
     {
         var ignored = new (bool Given, bool Applies, string Name)[]
         {
@@ -599,6 +614,8 @@ public sealed partial class MirbadMcpTools(
             (tokens is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Sglang or RuntimeKind.Mlx, "speculativeTokens"),
             (draft is not null, runtime is RuntimeKind.Vllm or RuntimeKind.Sglang or RuntimeKind.Mlx or RuntimeKind.LlamaCpp, "draftFolder"),
             (draftFile is not null, runtime == RuntimeKind.LlamaCpp, "draftFile"),
+            (contextSize is not null, runtime == RuntimeKind.LlamaCpp, "contextSize"),
+            (parallelSlots is not null, runtime == RuntimeKind.LlamaCpp, "parallelSlots"),
         }.Where(s => s.Given && !s.Applies).Select(s => s.Name).ToList();
         if (ignored.Count > 0)
             throw new McpException($"The {runtime} runtime does not use {string.Join(", ", ignored)}; no state was changed.");
