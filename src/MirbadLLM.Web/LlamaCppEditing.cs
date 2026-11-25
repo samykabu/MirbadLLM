@@ -144,8 +144,8 @@ public sealed class LlamaCppForm
         string root = (folder ?? "").Trim().Trim('/');
         return (Baseline ?? new LlamaCppSettings { ModelFile = "" }) with
         {
-            ModelFile = Join(root, File),
-            ProjectorFile = string.IsNullOrWhiteSpace(ProjectorFile) ? null : Join(root, ProjectorFile),
+            ModelFile = Unchanged(Baseline?.ModelFile, File, root) ?? Join(root, File),
+            ProjectorFile = string.IsNullOrWhiteSpace(ProjectorFile) ? null : Unchanged(Baseline?.ProjectorFile, ProjectorFile, root) ?? Join(root, ProjectorFile),
             DraftModelFile = Blank(DraftModelFile),
             ContextSize = ContextSize,
             Parallel = Parallel,
@@ -219,6 +219,15 @@ public sealed class LlamaCppForm
         string prefix = (folder ?? "").Trim().Trim('/') + "/";
         return prefix.Length > 1 && path.StartsWith(prefix, StringComparison.Ordinal) ? path[prefix.Length..] : path;
     }
+
+    /// <summary>
+    /// The stored path when the form still shows what <see cref="From"/> made of it, else null. A file in another folder
+    /// (a projector downloaded as its own source next to the model's folder) is shown as stored, so joining it to the
+    /// model folder on save would point at a file that isn't there; keeping the stored path makes an unrelated save
+    /// lossless.
+    /// </summary>
+    private static string? Unchanged(string? stored, string shown, string folder) =>
+        stored is not null && string.Equals(Relative(stored, folder), (shown ?? "").Trim(), StringComparison.Ordinal) ? stored : null;
 
     private static string Join(string folder, string file)
     {
