@@ -1,0 +1,14 @@
+{
+  "moveId": "move-01",
+  "role": "export",
+  "sourceUid": "source-uid",
+  "targetUid": "target-uid",
+  "modelId": "example",
+  "placementGeneration": 3,
+  "folder": "checkpoint",
+  "manifestId": null,
+  "manifest": null,
+  "operationId": "op-070",
+  "issuedAt": "2026-10-03T14:00:00+00:00",
+  "expiresAt": "2026-10-04T14:00:00+00:00"
+}

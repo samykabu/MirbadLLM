@@ -43,7 +43,6 @@ public sealed class AgentDownloadService(
 {
     private readonly AgentStorageOptions _options = options.Value;
     private readonly ConcurrentDictionary<string, TrackedDownload> _active = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _folderLocks = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<NodeDownloadStatus> _recent = new();
 
     // Every monitor still running, independent of _active: a monitor that finishes removes its download from _active
@@ -72,10 +71,15 @@ public sealed class AgentDownloadService(
         }
 
         string folder = request.Folder;
-        var gate = _folderLocks.GetOrAdd(folder, _ => new SemaphoreSlim(1, 1));
+        var gate = paths.Gate(folder);
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            if (paths.TransferReserved(folder))
+            {
+                throw StorageErrors.Create(ErrorCodes.FolderConflict, "A checkpoint transfer reserves this folder.");
+            }
+
             var location = paths.Locate(folder);
             if (location.IsLink)
             {
@@ -106,14 +110,27 @@ public sealed class AgentDownloadService(
                 throw StorageErrors.InvalidRequest(ex.Message);
             }
 
-            var download = new DownloadRequest(request.RepoId, request.Revision, request.Token, folder, patterns) { Hub = origin };
+            if (request.RequireVerified && (!ContentDigest.IsHex(request.Revision, 40) || hubClients is null))
+            {
+                throw StorageErrors.InvalidRequest("A verified checkpoint download requires an immutable Hub revision.");
+            }
+
+            var download = new DownloadRequest(request.RepoId, request.Revision, request.Token, folder, patterns)
+            {
+                Hub = origin, RequireVerified = request.RequireVerified,
+            };
             HubAcquisition? acquisition = null;
-            if (hubClients is not null && (downloader is HuggingFaceDownloader || !origin.IsOfficial))
+            if (hubClients is not null && (request.RequireVerified || downloader is HuggingFaceDownloader || !origin.IsOfficial))
             {
                 string? pinned = MatchingPin(location, download, patterns);
                 try
                 {
                     acquisition = await HubAcquisition.PrepareAsync(hubClients, download, patterns, pinned, ct).ConfigureAwait(false);
+                    if (request.RequireVerified && acquisition.Snapshot.Files.Any(file => HuggingFacePatterns.MatchesAny(file.Path, patterns) &&
+                        file.LfsSha256 is null && file.BlobSha1 is null))
+                    {
+                        throw new DownloadRefusedException("A selected Hub file lacks a verifiable digest.");
+                    }
                 }
                 catch (Exception ex) when (ex is HuggingFaceApiException or DownloadRefusedException)
                 {
@@ -488,7 +505,7 @@ public sealed class AgentDownloadService(
 
         long total = matched.Sum(f => f.Bytes);
         long present = location.Exists && location.ResolvedPath is { } existing ? ModelRootPaths.SizeOf(existing) : 0;
-        bool stagedHelper = downloader is HuggingFaceDownloader && acquisition is { Origin.IsOfficial: false };
+        bool stagedHelper = downloader is HuggingFaceDownloader && (request.RequireVerified || acquisition is { Origin.IsOfficial: false });
         if (stagedHelper || !location.Exists && downloader is NativeDownloadService)
         {
             // The native downloader resumes into {folder}.partial (MN-213): its bytes are already on the disk (MN-219).

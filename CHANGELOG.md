@@ -6,6 +6,9 @@ private development history.
 
 ## Unreleased
 
+- Model moves can copy checkpoint folders over their existing agent connections, including locally added models and their draft or projector folders. The target verifies the files before the source stops, and the dialog shows the route and acknowledged bytes for each folder
+- The Hugging Face mirror starts serving a size-matching local file while it hashes that file in the background. Consumers verify the bytes before using them, and later requests for a file that failed verification use the official Hub
+
 - llama.cpp shows generation throughput while requests are decoding on process and container runtimes. When the server does not expose usable slot data, the rate updates as requests complete
 - Nodes can download public Hugging Face checkpoints through a configured HTTPS mirror. The optional master listener verifies its local files against the pinned official snapshot and forwards misses to the Hub at the same commit
 

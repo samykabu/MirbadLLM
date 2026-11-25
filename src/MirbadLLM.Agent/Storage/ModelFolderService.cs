@@ -80,7 +80,7 @@ public sealed class ModelFolderService(
                 Folder = folder,
                 SizeBytes = ModelRootPaths.SizeOf(content),
                 HasConfig = hasConfig,
-                Partial = folder.EndsWith(".partial", StringComparison.Ordinal) || running.Contains(folder),
+                Partial = folder.EndsWith(".partial", StringComparison.Ordinal) || running.Contains(folder) || paths.ImportReserved(folder),
                 WeightsGiB = inspection?.WeightsGiB,
                 Architecture = inspection?.Architecture,
                 DetectedFormat = inspection?.DetectedFormat,
@@ -125,6 +125,26 @@ public sealed class ModelFolderService(
     /// completes. An I/O failure mid-delete ends the operation Failed (stage <c>deleting</c>).
     /// </summary>
     public async Task<OperationStatus> DeleteAsync(string folder, FolderDeleteRequest request, OperationStatus accepted, MasterTriple master, CancellationToken ct = default)
+    {
+        if (ModelRootPaths.NameError(folder) is { } issue)
+        {
+            throw StorageErrors.InvalidRequest(issue);
+        }
+
+        var gate = paths.Gate(folder);
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            return await DeleteReservedAsync(folder, request, accepted, master, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<OperationStatus> DeleteReservedAsync(string folder, FolderDeleteRequest request, OperationStatus accepted,
+        MasterTriple master, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(accepted);
@@ -183,6 +203,11 @@ public sealed class ModelFolderService(
 
     private async Task EnsureNotInUseAsync(string folder, CancellationToken ct)
     {
+        if (paths.TransferReserved(folder))
+        {
+            throw StorageErrors.Create(ErrorCodes.FolderConflict, "A checkpoint transfer reserves this folder.");
+        }
+
         foreach (var driver in _drivers)
         {
             if (await driver.IsFolderInUseAsync(folder, ct).ConfigureAwait(false))

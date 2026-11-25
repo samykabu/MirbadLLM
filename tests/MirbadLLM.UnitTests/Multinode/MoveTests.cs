@@ -6,10 +6,12 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Core;
+using MirbadLLM.NodeRuntime.Downloads.Native;
 using MirbadLLM.Orchestration;
 using MirbadLLM.Orchestration.Multinode;
 using MirbadLLM.Orchestration.Nodes;
@@ -890,6 +892,8 @@ internal sealed class MoveCluster : IAsyncDisposable
         };
         var exit = new ExitMaster(DataDir, Ca, settings, builder => builder.ConfigureTestServices(services =>
         {
+            // These fake-agent fixtures exercise the legacy download protocol without reaching the public Hub.
+            services.RemoveAll<HuggingFaceHubClient>();
             // A 3 s Offline rule (heartbeats every 300 ms) instead of 15 s, so source-offline tests stay short.
             services.AddSingleton(sp => new NodeStatusCache(
                 sp.GetRequiredService<IAgentClientFactory>(),

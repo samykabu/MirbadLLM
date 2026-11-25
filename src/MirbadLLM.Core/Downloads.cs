@@ -41,6 +41,8 @@ public sealed record DownloadRequest(
     [JsonIgnore]
     public HubOrigin? Hub { get; init; }
 
+    public bool RequireVerified { get; init; }
+
     /// <summary>Never prints the Hugging Face token (W9 review MN-132, design §10.4).</summary>
     public override string ToString() =>
         $"DownloadRequest {{ RepoId = {RepoId}, Revision = {Revision}, Token = {(Token is null ? "null" : "***")}, Folder = {Folder} }}";

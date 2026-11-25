@@ -139,7 +139,13 @@ public static partial class Protocol
         ["v1/*", "health", "metrics", "tokenize", "detokenize", "version", "pooling", "score", "rerank", "classify"];
 
     /// <summary>Field names whose values are secrets: replaced by <see cref="RedactedValue"/> before hashing or storing a payload (design §4.4 item 1, §10.4).</summary>
-    public static IReadOnlyList<string> SecretFieldNames { get; } = ["token", "password"];
+    public static IReadOnlyList<string> SecretFieldNames { get; } = ["token", "password", "grant"];
+
+    /// <summary>Scoped move lease sent exclusively on the authenticated agent channel.</summary>
+    public const string TransferGrantHeader = "MirbadLLM-Transfer-Grant";
+
+    /// <summary>Maximum length of one checkpoint transfer range.</summary>
+    public const int MoveRangeBytes = 8 * 1024 * 1024;
 
     /// <summary>What a secret value is replaced with in stored payloads (design §10.4).</summary>
     public const string RedactedValue = "***";
@@ -417,6 +423,11 @@ public static class AgentFeatures
 
     /// <summary>Optional Hub endpoint selection on download-capable agents.</summary>
     public static IReadOnlyList<string> HubDownloads { get; } = [DownloadsHfEndpoint];
+
+    /// <summary>Confined checkpoint folder transfers through the master.</summary>
+    public const string MoveTransfer = "storage.move-transfer-v1";
+
+    public static IReadOnlyList<string> CheckpointTransfers { get; } = [MoveTransfer];
 }
 
 /// <summary>Logical volumes and fixed mount targets a launch spec may use (design §10.3).</summary>

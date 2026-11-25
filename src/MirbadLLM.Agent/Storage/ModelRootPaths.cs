@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using MirbadLLM.Agent.Contracts;
+using System.Collections.Concurrent;
 
 namespace MirbadLLM.Agent.Storage;
 
@@ -23,6 +24,20 @@ public sealed record FolderLocation(string Folder, string Path, bool Exists, boo
 /// </summary>
 public sealed partial class ModelRootPaths
 {
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _folderGates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (string Id, MoveTransferRole Role)> _transfers = new(StringComparer.OrdinalIgnoreCase);
+
+    internal SemaphoreSlim Gate(string folder) => _folderGates.GetOrAdd(folder.Normalize(), static _ => new SemaphoreSlim(1));
+
+    internal bool TransferReserved(string folder) => _transfers.ContainsKey(folder.Normalize());
+
+    internal bool ImportReserved(string folder) => _transfers.TryGetValue(folder.Normalize(), out var transfer) && transfer.Role == MoveTransferRole.Import;
+    internal bool ReserveTransfer(string folder, string id, MoveTransferRole role) =>
+        _transfers.TryAdd(folder.Normalize(), (id, role)) || _transfers.GetValueOrDefault(folder.Normalize()).Id == id;
+
+    internal void ReleaseTransfer(string folder, string id, MoveTransferRole role) =>
+        _transfers.TryRemove(new KeyValuePair<string, (string, MoveTransferRole)>(folder.Normalize(), (id, role)));
+
     private static readonly char[] ForbiddenNameChars =
         [.. System.IO.Path.GetInvalidFileNameChars(), '/', '\\', ':', '*', '?', '"', '<', '>', '|'];
 

@@ -53,6 +53,11 @@ public sealed class StorageCapabilities(
         }
 
         var features = current.Features.ToList();
+        if (_options.EnableMoveTransfers && !features.Contains(AgentFeatures.MoveTransfer, StringComparer.Ordinal))
+        {
+            features.Add(AgentFeatures.MoveTransfer);
+        }
+
         if (!features.Contains(AgentFeatures.DownloadsHfEndpoint, StringComparer.Ordinal))
         {
             features.Add(AgentFeatures.DownloadsHfEndpoint);

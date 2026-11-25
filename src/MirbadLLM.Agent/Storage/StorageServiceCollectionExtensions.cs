@@ -35,6 +35,7 @@ public static class StorageServiceCollectionExtensions
         services.TryAddSingleton<IDiskSpaceProbe, DriveInfoDiskSpaceProbe>();
         services.TryAddSingleton<ModelRootPaths>();
         services.TryAddSingleton<StorageOperations>();
+        services.TryAddSingleton<MoveTransferService>();
         services.TryAddSingleton<AgentDownloadService>();
         services.TryAddSingleton<IAgentDownloads>(sp => sp.GetRequiredService<AgentDownloadService>());
         services.TryAddSingleton<AgentImageService>();

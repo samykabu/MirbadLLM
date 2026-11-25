@@ -269,7 +269,11 @@ public sealed class RemoteModelFolders
             return false;
         }
 
-        IEnumerable<string?> paths =
+        return CheckpointPaths(model).Any(p => string.Equals(TopFolder(p), folder, StringComparison.Ordinal))
+            || model.ExtraArgs.Any(a => MentionsModelsPath(a, folder));
+    }
+
+    internal static IEnumerable<string?> CheckpointPaths(ModelDefinition model) =>
         [
             model.ModelPath,
             .. model.Sources.Select(s => s.Folder),
@@ -278,9 +282,6 @@ public sealed class RemoteModelFolders
             model.LlamaCpp?.ProjectorFile,
             model.LlamaCpp?.DraftModelFile,
         ];
-        return paths.Any(p => string.Equals(TopFolder(p), folder, StringComparison.Ordinal))
-            || model.ExtraArgs.Any(a => MentionsModelsPath(a, folder));
-    }
 
     /// <summary>The top-level folder of a path relative to the models root (<c>/models/</c> prefix allowed); null when none.</summary>
     public static string? TopFolder(string? path)

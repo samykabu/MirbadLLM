@@ -420,6 +420,7 @@ public sealed class PlacementEditorTests
         {
             Assert.Equal("current", cut.Find($"[data-testid=move-step-{MoveStages.Downloading}]").GetAttribute("data-state"));
             Assert.Contains("m1-ckpt", cut.Find("[data-testid=move-downloads]").TextContent, StringComparison.Ordinal);
+            Assert.Contains("via Hugging Face", cut.Find("[data-testid=move-download-m1-ckpt]").TextContent, StringComparison.Ordinal);
         }, Wait);
         Assert.NotNull(cut.Find("[data-testid=move-cancel]"));
 
@@ -461,7 +462,7 @@ public sealed class PlacementEditorTests
         cut.ChangeAt("[data-testid=move-token]", (await SaveTokenAsync(cluster, token)).Id);
         cut.ClickAt("[data-testid=move-confirm]");
 
-        cut.WaitForAssertion(() => Assert.StartsWith("manual can't be moved: Model 'manual' has no Hugging Face sources",
+        cut.WaitForAssertion(() => Assert.Contains("requires an approved placed source and move transfer support",
             cut.Find("[data-testid=move-dialog-error]").TextContent.Trim(), StringComparison.Ordinal), Wait);
         Assert.Equal("setup", cut.Find("[data-testid=move-dialog]").GetAttribute("data-phase"));
         // Sent once (MN-132): a refused move never renders the token's value, and the pick is reset.

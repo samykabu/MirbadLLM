@@ -128,7 +128,8 @@ public sealed partial class HuggingFaceDownloader(
         for path, digest in expected.items():
             if digest:
                 hub.hf_hub_download(repo_id, filename=path, revision=revision, endpoint=endpoint,
-                    local_dir=local_dir, token=False, force_download=(mode == "direct"))
+                    local_dir=local_dir, token=(os.environ.get("HF_TOKEN") or False) if mode == "direct" else False,
+                    force_download=(mode == "direct"))
         """;
 
     private readonly MirbadLLMOptions _options = options.Value;
@@ -170,9 +171,9 @@ public sealed partial class HuggingFaceDownloader(
 
         _finished.TryRemove(folder, out _);
 
-        if (acquisition is { Origin.IsOfficial: false } lan)
+        if (acquisition is { } verified && (request.RequireVerified || !verified.Origin.IsOfficial))
         {
-            return await StartVerifiedAsync(folder, request.Revision, patterns, lan, ct).ConfigureAwait(false);
+            return await StartVerifiedAsync(folder, request.Revision, patterns, verified, request.Token, ct).ConfigureAwait(false);
         }
 
         var files = acquisition?.Snapshot.Files.Select(f => new RepoFile(f.Path, f.Size)).ToList()
@@ -394,7 +395,7 @@ public sealed partial class HuggingFaceDownloader(
     }
 
     private async Task<DownloadStatus> StartVerifiedAsync(string folder, string? revision, IReadOnlyList<string> patterns,
-        HubAcquisition acquisition, CancellationToken ct)
+        HubAcquisition acquisition, string? token, CancellationToken ct)
     {
         if (folder.EndsWith(PartialSuffix, StringComparison.OrdinalIgnoreCase))
         {
@@ -441,12 +442,13 @@ public sealed partial class HuggingFaceDownloader(
 
         Directory.CreateDirectory(stage);
         manifest.Write(stage);
-        await LaunchVerifiedHelperAsync(folder, manifest, acquisition.Mirror, ct).ConfigureAwait(false);
+        await LaunchVerifiedHelperAsync(folder, manifest, acquisition.Mirror, ct, token).ConfigureAwait(false);
         return new DownloadStatus(folder, manifest.RepoId, manifest.CommitSha, DownloadState.Queued,
             manifest.PresentBytes(stage, includeReusedFiles: manifest.MergeIntoExisting), manifest.TotalBytes, null, null);
     }
 
-    private async Task LaunchVerifiedHelperAsync(string folder, DownloadManifest manifest, HubOrigin? mirror, CancellationToken ct)
+    private async Task LaunchVerifiedHelperAsync(string folder, DownloadManifest manifest, HubOrigin? mirror, CancellationToken ct,
+        string? token = null)
     {
         await docker.EnsureNetworkAsync(_options.DockerNetwork, ct).ConfigureAwait(false);
         var endpoint = mirror?.Endpoint ?? HubOrigin.OfficialEndpoint;
@@ -467,6 +469,10 @@ public sealed partial class HuggingFaceDownloader(
             "HF_HUB_DISABLE_XET=1",
             "HF_HUB_DISABLE_IMPLICIT_TOKEN=1",
         };
+        if (mirror is null && !string.IsNullOrEmpty(token))
+        {
+            env.Add($"HF_TOKEN={token}");
+        }
         if (helperUser is not null)
         {
             env.Add($"HOME={DownloadHelperUser.HelperHome}");

@@ -295,19 +295,20 @@ public sealed class P3ContractTests
         Assert.Equal(["runtime.mlx.process", "services.launchd"], AgentFeatures.MacOS);
         Assert.Equal(all.Order(StringComparer.Ordinal), AgentFeatures.P1.Concat(AgentFeatures.P2).Concat(AgentFeatures.P3)
             .Concat(AgentFeatures.RuntimeExpansion).Concat(AgentFeatures.MacOS).Concat(AgentFeatures.Updates)
-            .Concat(AgentFeatures.HubDownloads).Order(StringComparer.Ordinal));
+            .Concat(AgentFeatures.HubDownloads).Concat(AgentFeatures.CheckpointTransfers).Order(StringComparer.Ordinal));
         Assert.Equal(
             ["admission.gpu-budgets", "downloads.hf-native", "downloads.ollama", "gguf.inspect", "runtime.llamacpp.process", "services.scm"],
             AgentFeatures.P3Reported.Order(StringComparer.Ordinal));
     }
 
     [Fact]
-    public void Protocol_StaysVersionOne_AndTheCatalogueGainsOnlyTheGatedGgufRoute()
+    public void Protocol_StaysVersionOne_AndNewRoutesAreFeatureGated()
     {
         Assert.Equal(1, Protocol.MinVersion);
         Assert.Equal(1, Protocol.CurrentVersion);
         // The gated agent update (docs/multinode/agent-updates.md) is the 52nd.
-        Assert.Equal(52, AgentRoutes.All.Count);
+        Assert.Equal(60, AgentRoutes.All.Count);
+        Assert.Equal(8, AgentRoutes.All.Count(route => route.Feature == AgentFeatures.MoveTransfer));
         Assert.Equal(AgentFeatures.AgentUpdate, AgentRoutes.AgentUpdate.Feature);
         var route = AgentRoutes.GgufInspect;
         Assert.Contains(route, AgentRoutes.All);

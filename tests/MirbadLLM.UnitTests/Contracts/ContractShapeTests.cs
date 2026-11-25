@@ -153,10 +153,11 @@ public sealed partial class ContractShapeTests
     }
 
     [Fact]
-    public void Routes_OnlyInfoAndEnrollSkipTheProtocolHeader_AndOnlyTheProxyUsesTheDataChannel()
+    public void Routes_OnlyInfoAndEnrollSkipProtocolHeader_DataChannelCarriesProxyAndTransferData()
     {
         Assert.Equal(["Info", "Enroll"], AllRoutes().Where(r => !r.RequiresProtocolHeader).Select(r => r.Name));
-        Assert.Equal(["Proxy"], AllRoutes().Where(r => r.Channel == AgentChannel.Data).Select(r => r.Name));
+        Assert.Equal(["MoveTransferManifest", "MoveTransferRead", "MoveTransferWrite", "Proxy"],
+            AllRoutes().Where(r => r.Channel == AgentChannel.Data).Select(r => r.Name).Order(StringComparer.Ordinal));
         Assert.All(AllRoutes(), r => Assert.NotNull(AgentCallPolicies.For(r.CallClass)));
     }
 
@@ -499,10 +500,11 @@ public sealed partial class ContractShapeTests
             new BackupMountTestRequest { Settings = new BackupMountSettings { Password = "hf_secret_value" } }.ToString(),
             new JoinTokenIssue("hf_secret_value", new JoinTokenRecord { Sha256 = "h", NodeId = "dgx", ExpiresAt = DateTimeOffset.UnixEpoch }).ToString(),
             new BackupSecrets([]) { Pki = new BackupPkiSecrets { CaKeyPem = "hf_secret_value" } }.ToString(),
+            new MoveTransferLease("hf_secret_value", DateTimeOffset.UnixEpoch).ToString(),
         ];
 
         Assert.All(texts, t => Assert.DoesNotContain("hf_secret_value", t, StringComparison.Ordinal));
-        Assert.Equal(["token", "password"], Protocol.SecretFieldNames);
+        Assert.Equal(["token", "password", "grant"], Protocol.SecretFieldNames);
     }
 
     [Fact]

@@ -24,14 +24,26 @@ public sealed class HubMirrorEndpoints : IDisposable
     private readonly MemoryCache _digests = new(new MemoryCacheOptions { SizeLimit = 2048 });
     private readonly SemaphoreSlim[] _authorizationGates = Enumerable.Range(0, 32).Select(_ => new SemaphoreSlim(1)).ToArray();
     private readonly SemaphoreSlim[] _listingGates = Enumerable.Range(0, 16).Select(_ => new SemaphoreSlim(1)).ToArray();
-    private readonly SemaphoreSlim[] _digestGates = Enumerable.Range(0, 32).Select(_ => new SemaphoreSlim(1)).ToArray();
+    private readonly Lock _digestLock = new();
+    private readonly Dictionary<DigestKey, Task> _pendingDigests = [];
+    private readonly SemaphoreSlim _hashSlots = new(2);
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly Func<ContentDigest, Stream, CancellationToken, Task<bool>> _hash;
+    private bool _disposed;
 
     public HubMirrorEndpoints(HubMirrorCatalog catalog, HubHttpClients clients, TimeProvider time)
+        : this(catalog, clients, time, static (digest, file, ct) => digest.MatchesAsync(file, ct))
+    {
+    }
+
+    internal HubMirrorEndpoints(HubMirrorCatalog catalog, HubHttpClients clients, TimeProvider time,
+        Func<ContentDigest, Stream, CancellationToken, Task<bool>> hash)
     {
         _catalog = catalog;
         _transport = clients.OfficialTransport();
         _hub = new HuggingFaceHubClient(_transport, clients.Official.BaseAddress ?? HubOrigin.OfficialEndpoint);
         _time = time;
+        _hash = hash;
     }
 
     public static IApplicationBuilder UseHubMirrorListener(IApplicationBuilder app) =>
@@ -138,8 +150,7 @@ public sealed class HubMirrorEndpoints : IDisposable
             {
                 string relative = $"{folder}/{path}";
                 await using var candidate = ConfinedModelFile.Open(_catalog.Root, relative);
-                if (candidate is null ||
-                    !await HasDigestAsync(candidate, Path.Combine(_catalog.Root, relative), file.Size, digest, ct).ConfigureAwait(false))
+                if (candidate is null || !CanServeLocal(candidate, relative, file.Size, digest))
                 {
                     continue;
                 }
@@ -271,39 +282,80 @@ public sealed class HubMirrorEndpoints : IDisposable
         }
     }
 
-    private async Task<bool> HasDigestAsync(FileStream candidate, string path, long size, ContentDigest digest, CancellationToken ct)
+    private bool CanServeLocal(FileStream candidate, string relative, long size, ContentDigest digest)
     {
         if (ConfinedModelFile.Identify(candidate.SafeFileHandle) is not { } before || before.Size != size)
         {
             return false;
         }
 
-        var key = (path, before, digest.Algorithm, digest.ExpectedHex);
-        var gate = Gate(_digestGates, key);
-        await gate.WaitAsync(ct).ConfigureAwait(false);
-        try
+        var key = new DigestKey(Path.Combine(_catalog.Root, relative), before, digest.Algorithm, digest.ExpectedHex);
+        lock (_digestLock)
         {
-            if (ConfinedModelFile.Identify(candidate.SafeFileHandle) != before)
+            if (_disposed)
             {
                 return false;
             }
 
-            if (!_digests.TryGetValue(key, out bool valid))
+            if (_digests.TryGetValue(key, out bool valid))
             {
-                valid = await digest.MatchesAsync(candidate, ct).ConfigureAwait(false);
-                if (ConfinedModelFile.Identify(candidate.SafeFileHandle) != before)
-                {
-                    return false;
-                }
-
-                _digests.Set(key, valid, new MemoryCacheEntryOptions().SetSize(1));
+                return valid;
             }
 
-            return valid;
+            if (_pendingDigests.Count < 32 && !_pendingDigests.ContainsKey(key))
+            {
+                _pendingDigests.Add(key, Task.Run(() => CheckDigestAsync(key, relative, digest)));
+            }
+
+            // The independent receiver verifies the official digest before publishing the download.
+            return true;
+        }
+    }
+
+    private async Task CheckDigestAsync(DigestKey key, string relative, ContentDigest digest)
+    {
+        var ct = _shutdown.Token;
+        try
+        {
+            await _hashSlots.WaitAsync(ct).ConfigureAwait(false);
+            try
+            {
+                using var file = ConfinedModelFile.Open(_catalog.Root, relative);
+                if (file is null || ConfinedModelFile.Identify(file.SafeFileHandle) != key.Identity)
+                {
+                    return;
+                }
+
+                bool valid = await _hash(digest, file, ct).ConfigureAwait(false);
+                if (ConfinedModelFile.Identify(file.SafeFileHandle) == key.Identity)
+                {
+                    _digests.Set(key, valid, new MemoryCacheEntryOptions().SetSize(1));
+                }
+            }
+            finally
+            {
+                _hashSlots.Release();
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException ||
+                                          exception is OperationCanceledException && ct.IsCancellationRequested)
+        {
+            // A failed read has no digest verdict. A later request can try again.
         }
         finally
         {
-            gate.Release();
+            lock (_digestLock)
+            {
+                _pendingDigests.Remove(key);
+            }
+        }
+    }
+
+    internal Task PendingDigestChecks()
+    {
+        lock (_digestLock)
+        {
+            return Task.WhenAll(_pendingDigests.Values);
         }
     }
 
@@ -421,10 +473,24 @@ public sealed class HubMirrorEndpoints : IDisposable
 
     public void Dispose()
     {
+        lock (_digestLock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+        }
+
+        _shutdown.Cancel();
+        PendingDigestChecks().GetAwaiter().GetResult();
+        _shutdown.Dispose();
+        _hashSlots.Dispose();
         _authorizations.Dispose();
         _listings.Dispose();
         _digests.Dispose();
-        foreach (var gate in _authorizationGates.Concat(_listingGates).Concat(_digestGates))
+        foreach (var gate in _authorizationGates.Concat(_listingGates))
         {
             gate.Dispose();
         }
@@ -433,6 +499,8 @@ public sealed class HubMirrorEndpoints : IDisposable
     private sealed record MirrorRoute(string Repo, string? Revision, string? Path);
     private sealed record Authorization(HttpStatusCode Status, HubFile? File, string? UpstreamETag, DateTimeOffset Expires);
     private sealed record Listing(HttpStatusCode Status, IReadOnlyDictionary<string, HubFile>? Files, DateTimeOffset Expires);
+    private readonly record struct DigestKey(string Path, ConfinedModelFile.Identity Identity,
+        System.Security.Cryptography.HashAlgorithmName Algorithm, string ExpectedDigest);
     private readonly record struct ByteRange(long Start, long Length)
     {
         public long End => Start + Length - 1;

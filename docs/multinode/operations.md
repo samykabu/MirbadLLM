@@ -14,6 +14,10 @@ P2 guide describes what the code now does. Read the plan for the development/dep
 
 ## 1. Architecture overview
 
+For the current optional read-only Hugging Face listener, see the [LAN mirror configuration](../configuration.md#hugging-face-lan-mirror).
+For checkpoint moves, see the [move procedure](operations-p2.md#62-move). Copies use the existing
+master-to-agent mTLS connections and require no inbound connections between agents.
+
 mirbadllm splits into a **master** and one **agent per node**. All clients talk to the master; the master never
 touches a host directly (no Docker socket, no `/models`, no hostd socket, no GPU devices). On the DGX the master and its
 agent run as two containers from one compose file (`deploy/compose.multinode.yaml`).

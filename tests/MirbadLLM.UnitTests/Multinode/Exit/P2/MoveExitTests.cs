@@ -2,18 +2,26 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MirbadLLM.Agent.Contracts;
+using MirbadLLM.Agent.Storage;
 using MirbadLLM.Core;
 using MirbadLLM.NodeRuntime;
+using MirbadLLM.NodeRuntime.Downloads.Native;
 using MirbadLLM.Orchestration.Benchmarking;
 using MirbadLLM.Orchestration.Multinode;
+using MirbadLLM.Pki;
 using MirbadLLM.UnitTests.Agent;
+using MirbadLLM.UnitTests.Downloads;
 using MirbadLLM.UnitTests.Multinode.Contract;
 using MirbadLLM.UnitTests.Multinode.P1Exit;
 using static MirbadLLM.UnitTests.Multinode.P2Exit.P2Env;
+using static MirbadLLM.UnitTests.Downloads.NativeDownloaderTests;
 
 namespace MirbadLLM.UnitTests.Multinode.P2Exit;
 
@@ -31,6 +39,113 @@ public sealed partial class MoveExitTests
 {
     private const string Folder = "m1-ckpt";
 
+    [Fact]
+    public async Task PublicHubMoveUsesTheSamePinForMirrorAndOfficialBytes()
+    {
+        const string repo = "org/loose";
+        const string sha = "1111111111111111111111111111111111111111";
+        using var ca = CertificateAuthority.Create();
+        using var leaf = ca.IssueEnrollServerCertificate(["127.0.0.1"]);
+        using var cert = leaf.CreateTlsCertificate();
+        await using var official = await FakeHub.StartAsync(cert);
+        await using var mirror = await FakeHub.StartAsync(cert);
+        using var officialHttp = HubMirrorTests.OpenFake(official.BaseUri, ca);
+        var hubs = new HubHttpClients(officialHttp, () => [ca.Certificate.ExportCertificatePem()]);
+        var config = FakeFile.Small("config.json", "{\"model_type\":\"llama\"}");
+        var upstream = FakeFile.Large("model.safetensors", 1024, 197);
+        var missingAtMirror = new FakeFile(upstream.Path, upstream.Content, lfs: true) { StatusOverride = 404 };
+        official.AddRepo(repo).Commit(sha, config, upstream);
+        mirror.AddRepo(repo).Commit(sha, config, missingAtMirror);
+        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions
+        {
+            Models = [Movable("loose", Folder) with { Placement = null }],
+            Services = services => services.AddSingleton(hubs),
+            Settings = new Dictionary<string, string?> { ["MirbadLLM:HuggingFace:Endpoint"] = mirror.BaseUri.AbsoluteUri },
+        });
+        var pc = await fleet.JoinAsync("pc", PcGpus, start: false);
+        var previous = pc.Node.ExtraServices;
+        pc.Node.ExtraServices = services =>
+        {
+            previous?.Invoke(services);
+            services.AddSingleton(hubs);
+            services.AddSingleton<IHuggingFaceDownloader>(sp => new NativeDownloadService(officialHttp,
+                sp.GetRequiredService<ModelRootPaths>(), sp.GetRequiredService<IDiskSpaceProbe>(),
+                sp.GetRequiredService<IOptions<AgentStorageOptions>>(), sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<ILogger<NativeDownloadService>>(), hubClients: hubs));
+        };
+        await pc.StartAsync();
+        await fleet.Master.WaitForNodeAsync("pc", node => node.State == NodeState.Online, "pc Online");
+        await MoveAsync(fleet.Master, "loose", new { targetNodeId = "pc", gpuUuids = new[] { PcGpus[0] } });
+        var view = await WaitForMoveEndAsync(fleet.Master, "loose");
+        Assert.Null(ErrorOf(view));
+        Assert.Equal(MoveStages.Done, view.GetProperty("record").GetProperty("stage").GetString());
+        var work = Assert.Single(view.GetProperty("record").GetProperty("move").GetProperty("folders").EnumerateArray());
+        Assert.Equal("mirror", work.GetProperty("route").GetString());
+        Assert.Equal(sha, work.GetProperty("pinnedRevision").GetString());
+        Assert.Equal(config.Content.Length, mirror.FileRequests(config.Path).Sum(request => request.BodyBytes));
+        Assert.Empty(official.FileRequests(config.Path));
+        Assert.Equal(upstream.Content.Length, official.FileRequests(upstream.Path).Sum(request => request.BodyBytes));
+        Assert.Equal(0, mirror.FileRequests(upstream.Path).Sum(request => request.BodyBytes));
+        Assert.All(mirror.FileRequests(upstream.Path).Concat(official.FileRequests(upstream.Path)),
+            request => Assert.Equal($"/{repo}/resolve/{sha}/{upstream.Path}", request.Path));
+        Assert.Equal(upstream.Content, await File.ReadAllBytesAsync(Path.Combine(pc.Node.ModelsRoot, Folder, upstream.Path), Ct));
+    }
+
+    [Fact]
+    public async Task ALocalCheckpointResumesAfterTargetRestartWithTheSameManifestAndHashes()
+    {
+        const string draft = "draft-ckpt";
+        var model = Movable("m1", Folder) with { Sources = [], ExtraArgs = [$"--speculative-model=/models/{draft}/model.safetensors"] };
+        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions
+        {
+            Models = [model],
+            Settings = new Dictionary<string, string?> { ["MirbadLLM:Moves:MaxTransferMiBPerSecond"] = "4" },
+        });
+        SeedCheckpoint(fleet.Dgx, Folder);
+        SeedCheckpoint(fleet.Dgx, draft);
+        byte[] data = new byte[11 * 1024 * 1024];
+        Random.Shared.NextBytes(data);
+        string relative = Path.Combine(Folder, "model.safetensors");
+        await File.WriteAllBytesAsync(Path.Combine(fleet.Dgx.Node.ModelsRoot, relative), data, Ct);
+        var pc = await JoinPcAsync(fleet);
+        var master = fleet.Master;
+        await MoveAsync(master, "m1", new { targetNodeId = "pc", gpuUuids = new[] { PcGpus[0] } });
+
+        string? import = null;
+        string? manifest = null;
+        await ExitEnv.UntilAsync(async () =>
+        {
+            var current = await master.Get<IOwnershipStore>().GetForModelAsync("m1", Ct);
+            var work = current?.Move?.Folders?.FirstOrDefault(item => item.Folder == Folder);
+            if (work is { BytesDownloaded: >= 8 * 1024 * 1024 } && work.BytesDownloaded < work.TotalBytes)
+            {
+                import = work.ImportId;
+                manifest = work.ManifestId;
+                return true;
+            }
+
+            return false;
+        }, "the target acknowledged the first weight range");
+        Assert.NotNull(import);
+        Assert.NotNull(manifest);
+        await pc.StopAsync();
+        await pc.StartAsync();
+        var view = await WaitForMoveEndAsync(master, "m1");
+        Assert.Null(ErrorOf(view));
+        Assert.Equal(MoveStages.Done, view.GetProperty("record").GetProperty("stage").GetString());
+        var folders = view.GetProperty("record").GetProperty("move").GetProperty("folders").EnumerateArray().ToArray();
+        Assert.Equal(2, folders.Length);
+        Assert.Equal(import, folders[0].GetProperty("importId").GetString());
+        Assert.Equal(manifest, folders[0].GetProperty("manifestId").GetString());
+        Assert.Equal("source", folders[0].GetProperty("route").GetString());
+        Assert.Equal(SHA256.HashData(data), SHA256.HashData(await File.ReadAllBytesAsync(Path.Combine(pc.Node.ModelsRoot, relative), Ct)));
+        Assert.Equal(data, await File.ReadAllBytesAsync(Path.Combine(fleet.Dgx.Node.ModelsRoot, relative), Ct));
+        Assert.Equal(await File.ReadAllBytesAsync(Path.Combine(fleet.Dgx.Node.ModelsRoot, draft, "config.json"), Ct),
+            await File.ReadAllBytesAsync(Path.Combine(pc.Node.ModelsRoot, draft, "config.json"), Ct));
+        Assert.Equal(0, await CountAsync(master, "pc", OperationKinds.Download, Folder));
+        Assert.Equal("pc", (await master.Models.GetAsync("m1", Ct))!.Placement!.NodeId);
+    }
+
     // ================================================================ 1. unified -> discrete, with the download
 
     /// <summary>
@@ -42,7 +157,7 @@ public sealed partial class MoveExitTests
     [Fact]
     public async Task ARunningModelMovesFromTheDgxToOnePcGpuWithItsCheckpointDownloadedThere()
     {
-        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { Models = [Movable("m1", Folder)] });
+        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { LegacyMoves = true, Models = [Movable("m1", Folder)] });
         SeedCheckpoint(fleet.Dgx, Folder);
         var hub = new RecordingHub();
         var pc = await JoinPcAsync(fleet, hub);
@@ -121,7 +236,7 @@ public sealed partial class MoveExitTests
     [Fact]
     public async Task AMasterRestartDuringTheDownloadResumesTheMoveAndFinishesItOnce()
     {
-        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { Models = [Movable("m1", Folder)] });
+        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { LegacyMoves = true, Models = [Movable("m1", Folder)] });
         SeedCheckpoint(fleet.Dgx, Folder);
         var hub = new RecordingHub();
         var pc = await JoinPcAsync(fleet, hub);
@@ -169,7 +284,7 @@ public sealed partial class MoveExitTests
     [Fact]
     public async Task AnOfflineSourcePausesTheMoveAndAfterAForceCommitTheSweepStopsTheStaleInstanceWhenItReturns()
     {
-        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { Models = [Movable("m1", Folder)] });
+        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { LegacyMoves = true, Models = [Movable("m1", Folder)] });
         SeedCheckpoint(fleet.Dgx, Folder);
         var pc = await JoinPcAsync(fleet);
         var master = fleet.Master;
@@ -250,7 +365,7 @@ public sealed partial class MoveExitTests
     [Fact]
     public async Task TheStaleInstanceSweepStopsNothingOnASingleDgxAndStartsOnceASecondNodeIsApproved()
     {
-        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { Models = [Movable("loose", Folder) with { Placement = null }] });
+        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { LegacyMoves = true, Models = [Movable("loose", Folder) with { Placement = null }] });
         SeedCheckpoint(fleet.Dgx, Folder);
         var master = fleet.Master;
         Assert.Null((await master.Models.GetAsync("loose", Ct))!.Placement);
@@ -286,7 +401,7 @@ public sealed partial class MoveExitTests
     public async Task UnplaceStopsTheModelAndClearsThePlacementIsRefusedWhileHeldAndTheGenerationRestarts()
     {
         var model = Movable("m1", Folder) with { Placement = new ModelPlacement("dgx", Generation: 5) };
-        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { Models = [model] });
+        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { LegacyMoves = true, Models = [model] });
         SeedCheckpoint(fleet.Dgx, Folder);
         await JoinPcAsync(fleet);
         var master = fleet.Master;
@@ -345,7 +460,7 @@ public sealed partial class MoveExitTests
     public async Task AGatedRepoMovesWithTheHfTokenWhichIsStoredNowhereAndIsGoneAfterAMasterRestart()
     {
         const string token = "hf_p2ExitMoveTokenSecret0123456789";
-        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { Models = [Movable("m1", Folder)] });
+        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { LegacyMoves = true, Models = [Movable("m1", Folder)] });
         SeedCheckpoint(fleet.Dgx, Folder);
         var hub = new RecordingHub { RequiredToken = token };
         var pc = await JoinPcAsync(fleet, hub);
@@ -433,7 +548,7 @@ public sealed partial class MoveExitTests
     [Fact]
     public async Task ATargetStartRefusedAfterTheCommitEndsTheMoveDoneWithTheReason()
     {
-        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { Models = [Movable("m1", Folder, budgetGiB: 15.9)] });
+        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { LegacyMoves = true, Models = [Movable("m1", Folder, budgetGiB: 15.9)] });
         SeedCheckpoint(fleet.Dgx, Folder);
         var pc = await JoinPcAsync(fleet);
         var master = fleet.Master;
@@ -469,6 +584,7 @@ public sealed partial class MoveExitTests
     {
         await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions
         {
+            LegacyMoves = true,
             Models = [Movable("m1", Folder), Model("other", "pc", [PcGpus[1]])],
         });
         SeedCheckpoint(fleet.Dgx, Folder);
@@ -504,6 +620,7 @@ public sealed partial class MoveExitTests
     {
         await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions
         {
+            LegacyMoves = true,
             Models = [Movable("m1", Folder), Model("other", "pc", [PcGpus[1]])],
             Settings = new Dictionary<string, string?> { ["MirbadLLM:Moves:StartTargetTimeout"] = "00:00:03" },
         });
@@ -538,7 +655,7 @@ public sealed partial class MoveExitTests
     [Fact]
     public async Task AHeldModelRefusesManualStartStopAndRestartNamingTheHolderAndNothingReachesTheNode()
     {
-        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { Models = [Movable("m1", Folder), Model("m2", "dgx")] });
+        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions { LegacyMoves = true, Models = [Movable("m1", Folder), Model("m2", "dgx")] });
         SeedCheckpoint(fleet.Dgx, Folder);
         var pc = await JoinPcAsync(fleet);
         var master = fleet.Master;

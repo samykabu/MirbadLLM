@@ -232,6 +232,24 @@ public sealed class AgentContractClient : IDisposable
         return SendAndDisposeRequestAsync(request, ct, HttpCompletionOption.ResponseHeadersRead);
     }
 
+    internal async Task<HttpResponseMessage> SendTransferDataAsync(AgentRoute route, string[] path, string grant,
+        System.Net.Http.Headers.RangeHeaderValue? range = null, string? etag = null, HttpContent? content = null,
+        CancellationToken ct = default)
+    {
+        using var request = Build(route, path, null, null, null, null);
+        request.Headers.TryAddWithoutValidation(Protocol.MasterHeader, Master.ToHeaderValue());
+        request.Headers.TryAddWithoutValidation(Protocol.RequestTimeHeader, DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+        request.Headers.TryAddWithoutValidation(Protocol.TransferGrantHeader, grant);
+        request.Headers.Range = range;
+        if (etag is not null)
+        {
+            request.Headers.IfMatch.Add(new System.Net.Http.Headers.EntityTagHeaderValue(etag));
+        }
+
+        request.Content = content;
+        return await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+    }
+
     /// <inheritdoc/>
     public void Dispose()
     {
@@ -2394,6 +2412,7 @@ public abstract class AgentContractSuite : IAsyncLifetime
         "folder" => "contract-sample",
         "operationId" => "contract-sample-op",
         "rotationId" => "rot-sample",
+        "index" => "0",
         "name" => AgentContractSeed.Service,
         "path" => "health",
         _ => "sample",
@@ -2416,6 +2435,13 @@ public abstract class AgentContractSuite : IAsyncLifetime
             var t when t == typeof(FolderDeleteRequest) => new FolderDeleteRequest { OperationId = id, IssuedAt = now, ExpiresAt = expires, Confirm = "contract-sample" },
             var t when t == typeof(DownloadStartRequest) => new DownloadStartRequest { OperationId = id, IssuedAt = now, ExpiresAt = expires, RepoId = AgentContractSeed.DownloadRepo, Folder = "contract-sample" },
             var t when t == typeof(DownloadCancelRequest) => new DownloadCancelRequest { OperationId = id, IssuedAt = now, ExpiresAt = expires },
+            var t when t == typeof(MoveTransferActionRequest) => new MoveTransferActionRequest { OperationId = id, IssuedAt = now, ExpiresAt = expires },
+            var t when t == typeof(MoveTransferOpenRequest) => new MoveTransferOpenRequest
+            {
+                OperationId = id, IssuedAt = now, ExpiresAt = expires, MoveId = "move-sample", ModelId = "contract-a",
+                Role = MoveTransferRole.Export, SourceUid = "source-uid", TargetUid = "target-uid",
+                Folder = "contract-sample", PlacementGeneration = 1,
+            },
             var t when t == typeof(OperationCancelRequest) => new OperationCancelRequest { OperationId = id, IssuedAt = now, ExpiresAt = expires },
             var t when t == typeof(HostServiceActionRequest) => new HostServiceActionRequest { OperationId = id, IssuedAt = now, ExpiresAt = expires },
             var t when t == typeof(HostServiceAutostartRequest) => new HostServiceAutostartRequest { OperationId = id, IssuedAt = now, ExpiresAt = expires, Enabled = true },

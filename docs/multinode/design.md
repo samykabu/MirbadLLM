@@ -48,7 +48,7 @@ now (plain HTTP `:8080` stays available on the DGX during the transition) and is
 - Running the master as more than one replica.
 - Tensor/pipeline parallelism **across** nodes (one model always runs on one node).
 - Agent self-update. Agents are updated by CI (DGX) or by hand/scripts (other machines).
-- Moving checkpoints between nodes by copying. A model that moves is re-downloaded on the new node (section 6.4).
+- Checkpoint acquisition for moves originally used re-download only. The [LAN model sharing design](lan-model-sharing.md#2-route-2--move-a-checkpoint-over-mtls) extends section 6.4 with verified, move-scoped copies.
 - Deploying the master to Kubernetes in phases 1–4. We only keep it possible; P5 does the packaging.
 
 ### Glossary
@@ -1045,7 +1045,8 @@ These are estimates; Monitoring shows measured host and GPU usage next to them.
 - Checkpoints live on the node that runs them, under the agent's `models` root. The master has no models mount.
 - Downloads are started by the master on the target node, one at a time per node by default (disk and WAN bandwidth),
   in parallel across nodes.
-- **Moving a model = re-download on the target node from its `Sources`** (decided). Every model added through the
+- **Original move acquisition used re-download on the target node from its `Sources`.** The
+  [LAN model sharing design](lan-model-sharing.md) adds per-folder target verification and copy. Every model added through the
   editor records its Hugging Face sources (restore relies on that already); node-to-node copy would need agent-to-agent
   trust and a transfer protocol for 20–200 GB folders. The move runs as an ownership record (6.7). The old folder stays
   and is listed as "not used by any model"; removing it is the explicit `delete` folder operation.

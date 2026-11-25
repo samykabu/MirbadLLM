@@ -1,0 +1,11 @@
+{
+  "transferId": "29b91bf46ef8fd3a4492ef73ea479160",
+  "operationId": "op-072",
+  "role": "import",
+  "phase": "ready",
+  "bytesDownloaded": 5,
+  "totalBytes": 11,
+  "fileIndex": 0,
+  "nextOffset": 5,
+  "error": null
+}

@@ -48,4 +48,6 @@ public sealed class AgentStorageOptions
 
     /// <summary>How many finished downloads <c>GET /downloads</c> keeps listing (in memory, per agent boot).</summary>
     public int RecentDownloadsKept { get; set; } = 50;
+
+    internal bool EnableMoveTransfers { get; set; } = true;
 }

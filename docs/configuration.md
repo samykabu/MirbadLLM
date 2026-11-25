@@ -204,8 +204,13 @@ Use an absolute HTTPS origin with no credentials, query, fragment or path prefix
 advertising `downloads.hf-endpoint` accept the fenced fleet setting per operation.
 An older agent uses the official Hub. A node override works with an older master.
 Token-bearing jobs go directly to the official Hub. The mirror authorizes anonymous
-public files for up to five minutes and compares local bytes against the official
-digest. Consumers pin the official commit and verify files before completion.
+public files for up to five minutes. A size-matching local file can be served
+while a bounded background worker verifies its digest. A failed verdict sends
+later requests for that file identity to the Hub. Consumers pin the official
+commit, verify files before completion, and retry suspect mirror bytes at the
+official origin.
+
+### Enable the mirror listener
 
 Add `models.lan` to `MirbadLLM:Enrollment:ListenerAddresses` alongside any existing
 enrollment names. Configure LAN DNS and the Docker network so the master, agents and
@@ -235,3 +240,11 @@ Docker agents need `Agent:CacheRoot` and `Agent:CacheHostPath` to refer to the s
 cache mount from the agent and daemon. A fleet mirror helper reads a per-job public
 CA bundle through a read-only bind. Let active downloads finish before removing
 the endpoint, listener, or models mount.
+
+## Model move bandwidth
+
+| Key | Default | Behaviour |
+|---|---|---|
+| `MirbadLLM:Moves:MaxTransferMiBPerSecond` | `64` | Positive integer. Per-node checkpoint relay budget in MiB/s, charging both legs of a remote-to-remote copy |
+
+A move uses the existing master-to-agent mTLS connections. See [Move](multinode/operations-p2.md#62-move).

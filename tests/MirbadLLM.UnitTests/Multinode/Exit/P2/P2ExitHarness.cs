@@ -11,13 +11,16 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MirbadLLM.Agent;
 using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Agent.Enrollment;
+using MirbadLLM.Agent.Storage;
 using MirbadLLM.Agent.Telemetry;
 using MirbadLLM.Core;
+using MirbadLLM.NodeRuntime.Downloads.Native;
 using MirbadLLM.Orchestration;
 using MirbadLLM.Orchestration.Nodes;
 using MirbadLLM.Orchestration.Pki;
@@ -523,6 +526,9 @@ internal sealed record P2FleetOptions
 
     /// <summary>The DGX agent's options (after the bootstrap defaults).</summary>
     public Action<AgentOptions>? DgxOptions { get; init; }
+
+    /// <summary>Run the historical P2 move cases with the original download-only capabilities.</summary>
+    public bool LegacyMoves { get; init; }
 }
 
 /// <summary>
@@ -589,6 +595,10 @@ internal sealed class P2Fleet : IAsyncDisposable
             options.DgxOptions?.Invoke(o);
         });
         var fleet = new P2Fleet(options, root, TestPorts.Reserve(), dgx);
+        if (options.LegacyMoves)
+        {
+            UseLegacyMoveFeatures(dgx);
+        }
         try
         {
             await ExitEnv.SeedModelsAsync(fleet.DataDir, [.. options.Models]);
@@ -616,6 +626,10 @@ internal sealed class P2Fleet : IAsyncDisposable
     {
         var node = await ContractNode.CreateAsync(enroll: false, P2Env.Ct, nodeId: nodeId);
         var agent = new P2Agent(node, TestPorts.Reserve(), FakeNvidiaSmi.Discrete(gpus ?? P2Env.PcGpus), configure ?? (_ => { }));
+        if (_options.LegacyMoves)
+        {
+            UseLegacyMoveFeatures(agent);
+        }
         _agents[nodeId] = agent;
         JoinTokenCreateResponse token = await CreateJoinTokenAsync(nodeId);
         await RunJoinAsync(agent, token);
@@ -637,6 +651,17 @@ internal sealed class P2Fleet : IAsyncDisposable
 
         return agent;
     }
+
+    private static void UseLegacyMoveFeatures(P2Agent agent)
+    {
+        var previous = agent.Node.ExtraServices;
+        agent.Node.ExtraServices = services =>
+        {
+            previous?.Invoke(services);
+            services.Configure<AgentStorageOptions>(options => options.EnableMoveTransfers = false);
+        };
+    }
+
 
     /// <summary><c>POST /api/nodes/join-tokens</c> with the admin password.</summary>
     public async Task<JoinTokenCreateResponse> CreateJoinTokenAsync(string nodeId, bool rekey = false)
@@ -744,6 +769,11 @@ internal sealed class P2Fleet : IAsyncDisposable
 
     private P2Master NewMaster() => new(DataDir, _settings, services =>
     {
+        if (_options.LegacyMoves)
+        {
+            services.RemoveAll<HuggingFaceHubClient>();
+        }
+
         if (_options.FastOffline)
         {
             // An 8 s Offline rule instead of 15 s (the real agent heartbeats every 5 s on /events) and fast reconnects; the

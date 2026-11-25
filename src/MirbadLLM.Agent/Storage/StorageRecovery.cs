@@ -19,11 +19,13 @@ public sealed class StorageRecoveryHandler(
     AgentDownloadService downloads,
     AgentImageService images,
     ModelFolderService folders,
-    StorageOperations operations) : IOperationRecoveryHandler
+    StorageOperations operations,
+    IServiceProvider? services = null) : IOperationRecoveryHandler
 {
     /// <inheritdoc />
     public IReadOnlyList<string> Kinds { get; } =
-        [OperationKinds.Download, OperationKinds.DownloadCancel, OperationKinds.ImagePull, OperationKinds.FolderDelete];
+        [OperationKinds.Download, OperationKinds.DownloadCancel, OperationKinds.ImagePull, OperationKinds.FolderDelete,
+            OperationKinds.MoveTransferOpen, OperationKinds.MoveTransferLease, OperationKinds.MoveTransferFinish, OperationKinds.MoveTransferCancel];
 
     /// <inheritdoc />
     public async Task RecoverAsync(RecoverableOperation operation, CancellationToken ct = default)
@@ -42,6 +44,10 @@ public sealed class StorageRecoveryHandler(
                 break;
             case OperationKinds.FolderDelete:
                 await folders.ResumeDeleteAsync(operation, ct).ConfigureAwait(false);
+                break;
+            case OperationKinds.MoveTransferOpen or OperationKinds.MoveTransferLease or OperationKinds.MoveTransferFinish or OperationKinds.MoveTransferCancel
+                when services?.GetService(typeof(MoveTransferService)) is MoveTransferService transfers:
+                await transfers.RecoverAsync(operation, ct).ConfigureAwait(false);
                 break;
             default:
                 await operations.CompleteAsync(operation.Status.Id, OperationState.Failed,
