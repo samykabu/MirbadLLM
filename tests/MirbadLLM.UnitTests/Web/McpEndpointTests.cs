@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Core;
 using MirbadLLM.Orchestration.Agents;
+using MirbadLLM.Orchestration.Multinode;
 using MirbadLLM.UnitTests.Auth;
 using MirbadLLM.UnitTests.Benchmarking;
 
@@ -200,8 +201,63 @@ public sealed class McpEndpointTests : IDisposable
         Assert.Equal(LaunchDelivery.Process, model.LlamaCpp.Delivery);
         Assert.Equal("q8_0", model.LlamaCpp.CacheTypeK);
         Assert.Equal("q8_0", model.LlamaCpp.CacheTypeV);
+        Assert.Equal((32_768, 4), (model.LlamaCpp.ContextSize, model.LlamaCpp.Parallel));
         Assert.Equal(4.5, model.MemoryBudgetGiB);
         Assert.Equal(["small-q8.gguf"], Assert.Single(model.Sources).AllowPatterns);
+    }
+
+    [Fact]
+    public async Task DeployAndUpdate_OnLlamaCpp_UseContextPerSlotAndParallelInLaunchArgs()
+    {
+        using var client = Client();
+        string key = await NodeReporting(Capabilities(LlamaCppProcess));
+        var deployed = await CallTool(client, key, "mirbad_deploy_model", new
+        {
+            modelId = "long-context", servedName = "long-context", repoId = "org/long-GGUF", folder = "long-context",
+            nodeId = "dgx", runtime = "llamacpp", modelFile = "model.gguf", contextSize = 262_144, parallelSlots = 2,
+        });
+
+        Assert.DoesNotContain("\"isError\":true", deployed, StringComparison.Ordinal);
+        var model = (await Models().GetAsync("long-context"))!;
+        Assert.Equal((262_144, 2), (model.LlamaCpp!.ContextSize, model.LlamaCpp.Parallel));
+        Assert.Equal(["-c", "524288", "-np", "2"], LlamaCppArgsBuilder.Build(model, gpuCount: 0).SkipWhile(arg => arg != "-c").Take(4));
+
+        var contextUpdate = await CallTool(client, key, "mirbad_update_model", new { modelId = model.Id, contextSize = 524_288 });
+        Assert.Contains("Context per request", contextUpdate, StringComparison.Ordinal);
+        model = (await Models().GetAsync(model.Id))!;
+        Assert.Equal((524_288, 2), (model.LlamaCpp!.ContextSize, model.LlamaCpp.Parallel));
+
+        var slotsUpdate = await CallTool(client, key, "mirbad_update_model", new { modelId = model.Id, parallelSlots = 1 });
+        Assert.Contains("Parallel slots", slotsUpdate, StringComparison.Ordinal);
+        model = (await Models().GetAsync(model.Id))!;
+        Assert.Equal((524_288, 1), (model.LlamaCpp!.ContextSize, model.LlamaCpp.Parallel));
+        Assert.Equal(["-c", "524288", "-np", "1"], LlamaCppArgsBuilder.Build(model, gpuCount: 0).SkipWhile(arg => arg != "-c").Take(4));
+
+        var refused = await CallTool(client, key, "mirbad_update_model", new { modelId = model.Id, parallelSlots = 4_096 });
+        Assert.Contains("is too large", refused, StringComparison.Ordinal);
+        Assert.Equal(1, (await Models().GetAsync(model.Id))!.LlamaCpp!.Parallel);
+    }
+
+    [Fact]
+    public async Task DeployAndUpdate_RefuseLlamaCppSizingOnVllm()
+    {
+        using var client = Client();
+        string key = await NodeReporting(Capabilities(Vllm));
+        string refused = await CallTool(client, key, "mirbad_deploy_model", new
+        {
+            modelId = "unsupported", servedName = "unsupported", repoId = "org/model", folder = "unsupported",
+            nodeId = "dgx", contextSize = 524_288,
+        });
+        Assert.Contains("does not use contextSize", refused, StringComparison.Ordinal);
+        Assert.Null(await Models().GetAsync("unsupported"));
+
+        await CallTool(client, key, "mirbad_deploy_model", new
+        {
+            modelId = "vllm", servedName = "vllm", repoId = "org/model", folder = "vllm", nodeId = "dgx",
+        });
+        string update = await CallTool(client, key, "mirbad_update_model", new { modelId = "vllm", parallelSlots = 1 });
+        Assert.Contains("does not use parallelSlots", update, StringComparison.Ordinal);
+        Assert.Null((await Models().GetAsync("vllm"))!.LlamaCpp);
     }
 
     [Fact]
