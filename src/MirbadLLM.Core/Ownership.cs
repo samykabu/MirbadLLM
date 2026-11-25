@@ -129,6 +129,28 @@ public sealed record MoveDetails
 
     /// <summary>True while the stale source instance still has to be stopped after a force-commit.</summary>
     public bool SourceCleanupPending { get; init; }
+
+    /// <summary>Durable acquisition progress for each required checkpoint folder.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<MoveFolderWork>? Folders { get; init; }
+}
+
+public sealed record MoveFolderWork(string Folder, string RepoId, IReadOnlyList<string> RequiredFiles)
+{
+    public string? Route { get; init; }
+    public string? PinnedRevision { get; init; }
+    public string? ManifestId { get; init; }
+    public bool? MatchesPinnedHub { get; init; }
+    public string? SnapshotNote { get; init; }
+    public string? ExportOperationId { get; init; }
+    public string? ImportOperationId { get; init; }
+    public string? ExportId { get; init; }
+    public string? ImportId { get; init; }
+    public string? DownloadOperationId { get; init; }
+    public DownloadState? State { get; init; }
+    public long BytesDownloaded { get; init; }
+    public long TotalBytes { get; init; }
+    public string? Error { get; init; }
 }
 
 /// <summary><c>{DataPath}/ownership.json</c> (design §6.7), written atomically with <see cref="MasterStateJson.Options"/>.</summary>

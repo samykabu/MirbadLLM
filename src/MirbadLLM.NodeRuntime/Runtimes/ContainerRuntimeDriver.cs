@@ -739,6 +739,13 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
                     }
                 }
 
+                if (running == ModelState.Ready && ReadRuntime(container.Labels) == RuntimeKind.LlamaCpp)
+                {
+                    var started = await ReadContainerStateAsync(container.Id, ct).ConfigureAwait(false);
+                    return Status(modelId, running, container, hostPort, started?.StartedAt ?? container.CreatedAt,
+                        restartCount: started?.RestartCount ?? 0);
+                }
+
                 // Model containers are created and started in one step, so creation time is the start time.
                 return Status(modelId, running, container, hostPort, container.CreatedAt);
 
@@ -869,16 +876,18 @@ public sealed class ContainerRuntimeDriver : IRuntimeDriver
     /// Docker's restart count. A container that Docker has already restarted and that is still not healthy is
     /// crash-looping (the restart policy hides each crash behind a fresh start); a normal first start has 0.
     /// </summary>
-    private async Task<int> RestartCountAsync(string containerId, CancellationToken ct)
+    private async Task<int> RestartCountAsync(string containerId, CancellationToken ct) =>
+        (await ReadContainerStateAsync(containerId, ct).ConfigureAwait(false))?.RestartCount ?? 0;
+
+    private async Task<ContainerRuntimeState?> ReadContainerStateAsync(string containerId, CancellationToken ct)
     {
         try
         {
-            var state = await _docker.InspectStateAsync(containerId, ct).ConfigureAwait(false);
-            return state.RestartCount;
+            return await _docker.InspectStateAsync(containerId, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or InvalidOperationException)
         {
-            return 0;
+            return null;
         }
     }
 

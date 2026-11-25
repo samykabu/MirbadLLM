@@ -1066,3 +1066,9 @@ What Waves 12–14 code against, by place (full list in design.md D117; fixtures
 - RTX 50-series reports (none specific to the Windows zips): llama.cpp issues #28196, #26674, #30000, #26257.
 - [R16] `qwen35` architecture (`src/llama-arch.cpp`, `src/models/qwen35.cpp`; PR https://github.com/ggml-org/llama.cpp/pull/19468, first tag b7990) and the built-in `chatml` template (`src/llama-chat.cpp`): https://github.com/ggml-org/llama.cpp/blob/master/src/llama-chat.cpp
 - VRAM: RTX 5070 12 GB; RTX 5060 Ti 8 or 16 GB (nvidia.com product pages; the PC's cards confirmed locally).
+## LAN checkpoint acquisition
+
+The [LAN model sharing design](lan-model-sharing.md) specifies checkpoint copies for moves over the existing
+master-to-agent connections. Native and container Hub consumers use a pinned official revision for verification.
+Transfer journals retain manifest identity and durable offsets. Leases are held in memory and renewed by the
+current master only.

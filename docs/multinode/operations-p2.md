@@ -506,7 +506,7 @@ AMD or Intel discrete card, no Linux Vulkan node and no run under the Windows se
 
 - **Add a new model on the node:** in the editor pick the node first; the folder list and the Hugging Face download
   run on that node's agent.
-- **Move an existing model:** the move downloads the checkpoint on the target from the model's Hugging Face sources.
+- **Move an existing model:** the move verifies each required folder on the target and acquires any missing files.
 - `/api/downloads*`, `/api/model-folders*` and `/api/catalog` act on the bootstrap node (`dgx`) only in P2. **In P3
   (MN-229) they take an optional `?node=<id>`**: without it the only fleet member acts, exactly as here, and with two
   or more members they answer 400 `node_required`; an unknown or revoked node is 404, one that is not approved yet is
@@ -526,7 +526,7 @@ Editor → Placement → **Move to another node…** (**Move to a node…** for 
 
 | Stage | What happens |
 |---|---|
-| `downloading` | Every source is downloaded (or completed) on the target; the image is pulled if missing; the folder must be complete |
+| `downloading` | Each required folder is verified on the target and its image is pulled if missing |
 | `stopping-source` | The model is stopped on the source and the stop is confirmed. If the source is not serving, the move **pauses** here |
 | `source-stopped` | Ready to commit |
 | `placement-committed` | The registry now places the model on the target (the placement generation goes up) |
@@ -540,13 +540,24 @@ Editor → Placement → **Move to another node…** (**Move to a node…** for 
   conflicts and transient errors are retried for up to `StartTargetTimeout` (10 min).
 - **Cancel move** is allowed at `downloading` and `stopping-source` only.
 - A finished move is shown until the master restarts (memory only).
-- A model added from a folder (no Hugging Face sources) cannot be moved: 409 `model_not_movable`.
+- Each folder can reuse verified files, copy from the approved current node, or download from a pinned Hugging Face
+  revision. An unsigned local copy is identified by its own SHA-256 manifest. Moves leave the source folders in place.
+- A model added from a folder requires an approved placed source. Both agents must advertise `storage.move-transfer-v1`
+  for a LAN copy. If the placed source is offline, the move waits for it or can be cancelled.
+- A LAN copy resumes at the target's durable offset after a reconnect. To stop it, use **Cancel move**. The existing
+  placement continues serving through acquisition, and an existing target conflict is reported without replacing its files.
+- The downloads list shows verified or acknowledged bytes per folder. **via mirror** covers local hits and upstream misses.
 - The commit drops the model's measured start time, so restart and tuning estimates are measured afresh on the target.
 
 API: `POST /api/models/{id}/move` `{targetNodeId, gpuUuids?, gpuIndices?, hfToken?}` → 202 with the record;
 `GET /api/models/{id}/move` (record, `canForceCommit`, `forceCommitConsequence`, downloads);
 `POST /api/models/{id}/move/cancel`. Refusals: 409 `model_not_movable`, `node_revoked`, `node_draining`, `model_busy`;
 400 `placement_invalid`, `invalid_request` (already on that node); 503 `node_offline` (target not serving).
+
+The loopback `tools/dev-multinode` fake runtime can exercise checkpoint transfer. Its image service has no Docker
+engine, so a container move can stop after checkpoint verification during the image check. The local
+`MoveExitTests` use real enrolled agents and a fake image engine to exercise placement, a pinned fake-Hub fallback
+and a resumed transfer without a deployment.
 
 ### 6.3 Force-commit
 
@@ -998,7 +1009,7 @@ ProblemDetails with the code in `code`.
 | `placement_required` | 400 | New model without placement, two or more fleet members | Pick a node |
 | `use_move` / `use_unplace` | 400 | `PUT` changes or clears the node | Use `/move` or `/unplace` |
 | `node_draining` | 409 | Target node is draining | Undrain it or pick another |
-| `model_not_movable` | 409 | No Hugging Face sources | Add it on the target instead |
+| `model_not_movable` | 409 | A required folder has no approved placed source or verifiable Hub source | Place the source or record a source that covers the required files |
 | `gpu_missing` | 422 | A placed GPU is not on the node (the node reads Degraded `placed_gpu_missing`) | Pick the model's GPUs again |
 | `node_offline` | 503 | The node is not serving | Section 4.1 |
 | `job_conflict` | 409 | The node already runs a job | Wait or cancel it |

@@ -17,6 +17,12 @@ is MN-242 and needs the owner's approval.
 Packaging details of the Windows agent are in [`deploy/agent/windows/README.md`](../../deploy/agent/windows/README.md).
 This guide does not repeat them.
 
+For native or container checkpoint moves, use the [move procedure](operations-p2.md#62-move).
+Upgrade the master and both agents to use the LAN copy route. A current native agent can also verify
+a pinned Hub fallback. A token-bearing download goes directly to the official Hub.
+llama.cpp reports generation throughput during decoding when authenticated slot measurements are available.
+The completion counter still drives cumulative totals and provides the rate when the slot measurement is unavailable.
+
 ---
 
 ## 1. What P3/P4 changes

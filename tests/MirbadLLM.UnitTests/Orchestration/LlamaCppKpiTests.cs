@@ -88,6 +88,64 @@ public sealed class LlamaCppKpiTests
             previous is null ? null : PrometheusText.Parse(MetricFamilyFilter.Filter(previous)),
             previous is null ? 0 : elapsedSeconds);
 
+    // The b12681 slot shape, reduced to the fields used by the sampler.
+    internal const string B12681Slots = """
+        [
+          {"id":0,"is_processing":true,"id_task":8,"next_token":[{"has_next_token":true,"n_decoded":180}]},
+          {"id":1,"is_processing":true,"id_task":9,"next_token":[{"has_next_token":true,"n_decoded":20}]},
+          {"id":2,"is_processing":false,"id_task":2,"next_token":[{"has_next_token":false,"n_decoded":999}]}
+        ]
+        """;
+
+    [Fact]
+    public async Task Collector_DifferencesCompositeAcrossCompletionAndIdle_WithSeparateCompletedAccounting()
+    {
+        var time = new ManualTimeProvider();
+        var registry = new FakeModelRegistry();
+        registry.Add(new ModelDefinition { Id = "llama", ServedName = "llama", ModelPath = "model.gguf" });
+        registry.Add(new ModelDefinition { Id = "dgx-model", ServedName = "dgx-model", ModelPath = "model" });
+
+        var env = new CollectorEnv(time, registry);
+        env.Nodes.Records["dgx"] = Node("dgx");
+        env.Agents.Add("dgx");
+        var agent = env.Agents.Nodes["dgx"];
+        var history = env.History;
+        var collector = env.Collector;
+        int steps = 0;
+        async Task<ModelSample> Sample(long completed, long? composite, string instance)
+        {
+            var at = time.GetUtcNow();
+            agent.Append(at, modelScrapes:
+            [
+                new ModelMetricsScrape { ModelId = "llama", At = at, Text = Scrape(predictedTokens: completed),
+                    RuntimeInstance = instance, LlamaDecodedTokens = composite },
+                new ModelMetricsScrape { ModelId = "dgx-model", At = at,
+                    Text = FormattableString.Invariant($"vllm:generation_tokens_total {steps++ * 100}") },
+            ]);
+            await collector.CollectOnceAsync();
+            time.Advance(TimeSpan.FromSeconds(10));
+            return history.GetModel("llama", Hour)[^1];
+        }
+
+        var first = await Sample(200, 200, "first");
+        Assert.False(first.HasRates);
+        Assert.True(double.IsNaN(first.Kpis.Load.GenerationTokensPerSecond));
+        var active = await Sample(200, 400, "first");
+        Assert.Equal(20, active.Kpis.Load.GenerationTokensPerSecond);
+        Assert.Equal(0, active.CompletedGenerationTokensPerSecond);
+        var completed = await Sample(400, 400, "first");
+        Assert.Equal(0, completed.Kpis.Load.GenerationTokensPerSecond);
+        Assert.Equal(20, completed.CompletedGenerationTokensPerSecond);
+        Assert.Equal(0, (await Sample(400, 400, "first")).Kpis.Load.GenerationTokensPerSecond);
+        Assert.False((await Sample(0, 0, "restarted")).HasRates);
+        Assert.Equal(20, (await Sample(0, 200, "restarted")).Kpis.Load.GenerationTokensPerSecond);
+        await Sample(200, null, "restarted");
+        var fallback = await Sample(400, null, "restarted");
+        Assert.Equal(20, fallback.Kpis.Load.GenerationTokensPerSecond);
+        Assert.True(fallback.Kpis.Load.GenerationRateOnCompletion);
+        Assert.All(history.GetModel("dgx-model", Hour).Skip(1), sample => Assert.Equal(10, sample.Kpis.Load.GenerationTokensPerSecond));
+    }
+
     // ---- The agent filter ----
 
     [Fact]

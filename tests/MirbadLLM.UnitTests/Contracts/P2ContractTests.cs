@@ -154,7 +154,8 @@ public sealed class P2ContractTests
         Assert.Empty(AgentFeatures.P1.Intersect(AgentFeatures.P2, StringComparer.Ordinal));
         // P3 adds its own list (MN-202, D116; P3ContractTests), macOS Phase 3 another: together they cover every constant.
         Assert.Equal(all.Order(StringComparer.Ordinal), AgentFeatures.P1.Concat(AgentFeatures.P2).Concat(AgentFeatures.P3)
-            .Concat(AgentFeatures.RuntimeExpansion).Concat(AgentFeatures.MacOS).Concat(AgentFeatures.Updates).Order(StringComparer.Ordinal));
+            .Concat(AgentFeatures.RuntimeExpansion).Concat(AgentFeatures.MacOS).Concat(AgentFeatures.Updates)
+            .Concat(AgentFeatures.HubDownloads).Concat(AgentFeatures.CheckpointTransfers).Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -184,9 +185,10 @@ public sealed class P2ContractTests
         Assert.Equal(1, Protocol.CurrentVersion);
         // P2 kept P1's 50 routes; P3 adds only the feature-gated GgufInspect (MN-202, D116).
         // The gated agent update (docs/multinode/agent-updates.md) is the 52nd.
-        Assert.Equal(52, AgentRoutes.All.Count);
+        Assert.Equal(60, AgentRoutes.All.Count);
         Assert.Equal(AgentFeatures.AgentUpdate, AgentRoutes.AgentUpdate.Feature);
-        Assert.Equal(50, AgentRoutes.All.Count(r => r != AgentRoutes.GgufInspect && r != AgentRoutes.AgentUpdate));
+        Assert.Equal(50, AgentRoutes.All.Count(r => r != AgentRoutes.GgufInspect && r != AgentRoutes.AgentUpdate &&
+            r.Feature != AgentFeatures.MoveTransfer));
         Assert.DoesNotContain(AgentRoutes.Rekey, AgentRoutes.All);
         Assert.Equal([AgentRoutes.Enroll, AgentRoutes.Rekey], AgentRoutes.EnrollListener);
         Assert.Equal("/enroll/rekey", AgentRoutes.Rekey.Path);

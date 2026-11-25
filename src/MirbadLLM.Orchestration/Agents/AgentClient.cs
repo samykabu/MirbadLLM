@@ -123,6 +123,24 @@ internal sealed class AgentClient : IAgentClient
     public Task<OperationStatus> CancelDownloadAsync(string folder, DownloadCancelRequest request, CancellationToken ct = default) =>
         CallAsync<OperationStatus>(AgentRoutes.DownloadCancel, AgentRoutes.DownloadCancel.Expand(folder), null, Required(request), ct);
 
+    public Task<MoveTransferStatus> OpenTransferAsync(MoveTransferOpenRequest request, CancellationToken ct = default) =>
+        CallAsync<MoveTransferStatus>(AgentRoutes.MoveTransferOpen, AgentRoutes.MoveTransferOpen.Path, null, Required(request), ct);
+
+    public Task<MoveTransferStatus?> GetTransferAsync(string id, CancellationToken ct = default) =>
+        CallOrNullAsync<MoveTransferStatus>(AgentRoutes.MoveTransferGet, AgentRoutes.MoveTransferGet.Expand(id), IsNotFound, ct);
+
+    public Task<MoveTransferLease> LeaseTransferAsync(string id, MoveTransferActionRequest request, CancellationToken ct = default) =>
+        CallAsync<MoveTransferLease>(AgentRoutes.MoveTransferLease, AgentRoutes.MoveTransferLease.Expand(id), null, Required(request), ct);
+
+    public Task<MoveFolderManifest> GetTransferManifestAsync(string id, string grant, CancellationToken ct = default) =>
+        DataClient.GetTransferManifestAsync(id, grant, ct);
+
+    public Task<MoveTransferStatus> FinishTransferAsync(string id, MoveTransferActionRequest request, CancellationToken ct = default) =>
+        CallAsync<MoveTransferStatus>(AgentRoutes.MoveTransferFinish, AgentRoutes.MoveTransferFinish.Expand(id), null, Required(request), ct);
+
+    public Task<MoveTransferStatus> CancelTransferAsync(string id, MoveTransferActionRequest request, CancellationToken ct = default) =>
+        CallAsync<MoveTransferStatus>(AgentRoutes.MoveTransferCancel, AgentRoutes.MoveTransferCancel.Expand(id), null, Required(request), ct);
+
     // ---- Operations ----
 
     public Task<OperationStatus?> GetOperationAsync(string operationId, CancellationToken ct = default) =>

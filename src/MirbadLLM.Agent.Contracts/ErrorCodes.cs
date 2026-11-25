@@ -62,6 +62,11 @@ public static class ErrorCodes
     /// <summary>409: the destination folder exists and <c>existing</c> is <c>refuse</c> (§4.3, §6.4).</summary>
     public const string FolderExists = "folder_exists";
 
+    public const string FolderConflict = "folder_conflict";
+    public const string TransferChanged = "transfer_changed";
+    public const string InvalidRange = "invalid_range";
+    public const string TransferLeaseRequired = "transfer_lease_required";
+
     /// <summary>422: no repo file matches the allow patterns (§4.3).</summary>
     public const string NoFilesMatch = "no_files_match";
 
@@ -245,7 +250,8 @@ public static class ErrorCodes
     [
         ProtocolMismatch, InvalidRequest, ClockSkew, Forbidden, NotFound, StaleMaster, CompetingMaster,
         OperationIdConflict, OperationExpired, AdmissionRefused, StartConflict, SpecRejected, GpuMissing, InUse,
-        AlreadyRunning, FolderExists, NoFilesMatch, InsufficientDisk, AlreadyCommitted, InvalidState, StateUnavailable,
+        AlreadyRunning, FolderExists, FolderConflict, TransferChanged, InvalidRange, TransferLeaseRequired, NoFilesMatch, InsufficientDisk,
+        AlreadyCommitted, InvalidState, StateUnavailable,
         Superseded, ModelNotRunning, ServerBusy, DockerUnavailable, HostdUnavailable, Denied, ConfirmationRequired,
         Conflict, NotSupported, Timeout, InternalError, OutcomeUnknown,
         ExecutableMissing, ExecutableUnverified, GgufInvalid, UnsupportedManifest,
@@ -486,12 +492,14 @@ public static class ErrorMappings
     public static int AgentStatus(string code) => code switch
     {
         ErrorCodes.ProtocolMismatch or ErrorCodes.InvalidRequest or ErrorCodes.ClockSkew => 400,
-        ErrorCodes.Forbidden or ErrorCodes.Denied => 403,
+        ErrorCodes.Forbidden or ErrorCodes.Denied or ErrorCodes.TransferLeaseRequired => 403,
         ErrorCodes.NotFound => 404,
         ErrorCodes.StaleMaster or ErrorCodes.CompetingMaster or ErrorCodes.OperationIdConflict or ErrorCodes.AdmissionRefused
             or ErrorCodes.StartConflict or ErrorCodes.InUse or ErrorCodes.AlreadyRunning or ErrorCodes.FolderExists
             or ErrorCodes.AlreadyCommitted or ErrorCodes.InvalidState or ErrorCodes.Superseded or ErrorCodes.ConfirmationRequired
-            or ErrorCodes.Conflict => 409,
+            or ErrorCodes.Conflict or ErrorCodes.FolderConflict => 409,
+        ErrorCodes.TransferChanged => 412,
+        ErrorCodes.InvalidRange => 416,
         ErrorCodes.OperationExpired => 410,
         ErrorCodes.SpecRejected or ErrorCodes.GpuMissing or ErrorCodes.NoFilesMatch or ErrorCodes.ExecutableMissing
             or ErrorCodes.ExecutableUnverified or ErrorCodes.GgufInvalid or ErrorCodes.UnsupportedManifest => 422,

@@ -391,6 +391,41 @@ public sealed class PlacementEditorTests
     // ================================================================ move dialog
 
     [Fact]
+    public async Task MoveDialog_ShowsEveryFolderRouteAndTheSourceNode()
+    {
+        await using var cluster = await PlacementCluster.StartAsync(MoveCluster.Model("mixed", "main"));
+        var ownership = cluster.Master.Get<IOwnershipStore>();
+        var acquired = await ownership.TryAcquireAsync(new OwnershipRecord
+        {
+            Id = "move-mixed", Kind = OwnershipKind.Move, ModelId = "mixed",
+            Stage = MoveStages.Downloading, StartedAt = DateTimeOffset.UtcNow,
+            Move = new MoveDetails
+            {
+                SourceNodeId = "dgx", SourceNodeUid = cluster.Cluster.Dgx.NodeUid,
+                TargetNodeId = "pc-office", TargetNodeUid = cluster.Cluster.Pc.NodeUid,
+                Folders =
+                [
+                    new("main", "", []) { Route = "existing", State = DownloadState.Completed, BytesDownloaded = 20, TotalBytes = 20 },
+                    new("draft", "", []) { Route = "source", State = DownloadState.Downloading, BytesDownloaded = 10, TotalBytes = 20 },
+                    new("projector", "org/projector", []) { Route = "mirror", State = DownloadState.Completed, BytesDownloaded = 20, TotalBytes = 20 },
+                    new("extras", "org/extras", []) { Route = "hub", State = DownloadState.Queued, TotalBytes = 20 },
+                ],
+            },
+        }, Ct);
+        Assert.True(acquired.Acquired);
+        var model = (await cluster.Master.Models.GetAsync("mixed", Ct))!;
+        using var ctx = cluster.Context();
+        var dialog = ctx.Render<MoveModelDialog>(p => p.Add(x => x.Model, model));
+        await dialog.InvokeAsync(() => dialog.Instance.OpenAsync());
+        Assert.Contains("verified on target", dialog.Find("[data-testid=move-download-main]").TextContent, StringComparison.Ordinal);
+        var draft = dialog.Find("[data-testid=move-download-draft]");
+        Assert.Contains("from dgx", draft.TextContent, StringComparison.Ordinal);
+        Assert.Equal("50", draft.QuerySelector("[role=progressbar]")!.GetAttribute("aria-valuenow"));
+        Assert.Contains("via mirror", dialog.Find("[data-testid=move-download-projector]").TextContent, StringComparison.Ordinal);
+        Assert.Contains("via Hugging Face", dialog.Find("[data-testid=move-download-extras]").TextContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task MoveDialog_MovesToTheTickedGpu_PassesThePickedSavedToken_AndNeverRendersIt()
     {
         const string token = "hf_editorMoveSecret0123456789";
@@ -420,6 +455,7 @@ public sealed class PlacementEditorTests
         {
             Assert.Equal("current", cut.Find($"[data-testid=move-step-{MoveStages.Downloading}]").GetAttribute("data-state"));
             Assert.Contains("m1-ckpt", cut.Find("[data-testid=move-downloads]").TextContent, StringComparison.Ordinal);
+            Assert.Contains("via Hugging Face", cut.Find("[data-testid=move-download-m1-ckpt]").TextContent, StringComparison.Ordinal);
         }, Wait);
         Assert.NotNull(cut.Find("[data-testid=move-cancel]"));
 
@@ -461,7 +497,7 @@ public sealed class PlacementEditorTests
         cut.ChangeAt("[data-testid=move-token]", (await SaveTokenAsync(cluster, token)).Id);
         cut.ClickAt("[data-testid=move-confirm]");
 
-        cut.WaitForAssertion(() => Assert.StartsWith("manual can't be moved: Model 'manual' has no Hugging Face sources",
+        cut.WaitForAssertion(() => Assert.Contains("requires an approved placed source and move transfer support",
             cut.Find("[data-testid=move-dialog-error]").TextContent.Trim(), StringComparison.Ordinal), Wait);
         Assert.Equal("setup", cut.Find("[data-testid=move-dialog]").GetAttribute("data-phase"));
         // Sent once (MN-132): a refused move never renders the token's value, and the pick is reset.

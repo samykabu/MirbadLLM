@@ -301,6 +301,46 @@ public static class AgentRoutes
     /// </summary>
     private static readonly string[] ScmAlternative = [AgentFeatures.ServicesScm, AgentFeatures.ServicesLaunchd];
 
+    public static AgentRoute MoveTransferOpen { get; } = Transfer("MoveTransferOpen", AgentHttpMethods.Post, "",
+        typeof(MoveTransferOpenRequest), typeof(MoveTransferStatus), OperationKinds.MoveTransferOpen, status: 202);
+
+    public static AgentRoute MoveTransferGet { get; } = Transfer("MoveTransferGet", AgentHttpMethods.Get, "/{transferId}",
+        typeof(NoBody), typeof(MoveTransferStatus));
+
+    public static AgentRoute MoveTransferManifest { get; } = Transfer("MoveTransferManifest", AgentHttpMethods.Get, "/{transferId}/manifest",
+        typeof(NoBody), typeof(MoveFolderManifest), data: true);
+
+    public static AgentRoute MoveTransferLease { get; } = Transfer("MoveTransferLease", AgentHttpMethods.Post, "/{transferId}/lease",
+        typeof(MoveTransferActionRequest), typeof(MoveTransferLease), OperationKinds.MoveTransferLease);
+
+    public static AgentRoute MoveTransferFinish { get; } = Transfer("MoveTransferFinish", AgentHttpMethods.Post, "/{transferId}/finish",
+        typeof(MoveTransferActionRequest), typeof(MoveTransferStatus), OperationKinds.MoveTransferFinish);
+
+    public static AgentRoute MoveTransferCancel { get; } = Transfer("MoveTransferCancel", AgentHttpMethods.Post, "/{transferId}/cancel",
+        typeof(MoveTransferActionRequest), typeof(MoveTransferStatus), OperationKinds.MoveTransferCancel);
+
+    public static AgentRoute MoveTransferRead { get; } = Transfer("MoveTransferRead", AgentHttpMethods.Get, "/{transferId}/files/{index}",
+        typeof(NoBody), typeof(RawBody), status: 206, data: true);
+
+    public static AgentRoute MoveTransferWrite { get; } = Transfer("MoveTransferWrite", AgentHttpMethods.Put, "/{transferId}/files/{index}",
+        typeof(RawBody), typeof(MoveTransferStatus), data: true);
+
+    private static AgentRoute Transfer(string name, string method, string path, Type input, Type output,
+        string? operation = null, int status = 200, bool data = false) =>
+        new()
+        {
+            Name = name, Method = method, Path = "/move-transfers" + path, RequestType = input, ResponseType = output,
+            Input = input == typeof(RawBody) ? AgentRouteInput.Raw : operation is null ? AgentRouteInput.None : AgentRouteInput.Body,
+            Output = output == typeof(RawBody) ? AgentRouteOutput.Raw : AgentRouteOutput.Json,
+            OperationKind = operation, SuccessStatus = status, Feature = AgentFeatures.MoveTransfer,
+            Channel = data ? AgentChannel.Data : AgentChannel.Control,
+            CallClass = data ? AgentCallClass.Stream : operation is null ? AgentCallClass.Read : AgentCallClass.Mutation,
+            ResultType = operation is not null && output == typeof(MoveTransferStatus) ? output : null,
+            ErrorCodes = [.. MutationErrors, ErrorCodes.NotFound, ErrorCodes.NotSupported, ErrorCodes.Forbidden,
+                ErrorCodes.FolderConflict, ErrorCodes.TransferChanged, ErrorCodes.InvalidRange, ErrorCodes.InsufficientDisk,
+                ErrorCodes.TransferLeaseRequired],
+        };
+
     // ---- Identity, health, telemetry ----
 
     /// <summary><c>GET /info</c>: identity, protocol range, accepted master (no protocol header needed).</summary>
@@ -773,6 +813,8 @@ public static class AgentRoutes
         RuntimesList, RuntimeGet, RuntimeLaunch, RuntimeStop, RuntimeLaunchConfig, RuntimeLogs, Proxy,
         ImagesList, ImagePull, ModelFoldersList, ModelFolderInspect, ModelFolderDelete, GgufInspect,
         DownloadStart, DownloadsList, DownloadGet, DownloadCancel,
+        MoveTransferOpen, MoveTransferGet, MoveTransferLease, MoveTransferManifest, MoveTransferRead, MoveTransferWrite,
+        MoveTransferFinish, MoveTransferCancel,
         OperationGet, OperationsList, OperationCancel,
         HostServicesList, HostServiceStart, HostServiceStop, HostServiceRestart, HostServiceAutostart,
         HostWhitelistAdd, HostWhitelistUpdate, HostWhitelistRemove, HostGpuProcesses, AgentUpdate,

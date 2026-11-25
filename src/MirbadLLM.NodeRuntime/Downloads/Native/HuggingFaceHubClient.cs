@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using MirbadLLM.Core;
 
 namespace MirbadLLM.NodeRuntime.Downloads.Native;
 
@@ -17,7 +18,10 @@ public sealed record HubFile(string Path, long Size, string? LfsSha256, string? 
 /// <param name="RepoId">Repo id.</param>
 /// <param name="CommitSha">40-hex commit SHA the requested revision resolved to.</param>
 /// <param name="Files">Every file of the repo at that commit.</param>
-public sealed record HubSnapshot(string RepoId, string CommitSha, IReadOnlyList<HubFile> Files);
+public sealed record HubSnapshot(string RepoId, string CommitSha, IReadOnlyList<HubFile> Files)
+{
+    public bool IsPublicUngated { get; init; }
+}
 
 /// <summary>
 /// The Hugging Face Hub calls of the native downloader: <c>GET api/models/{repo}[/revision/{rev}]?blobs=true</c> resolves
@@ -47,6 +51,13 @@ public sealed partial class HuggingFaceHubClient
     /// <summary>The Hub base URL.</summary>
     public Uri Endpoint => _endpoint;
 
+    public HuggingFaceHubClient(HttpClient http, bool mirror = false, NativeDownloadOptions? options = null)
+        : this(new SecureDownloadTransport(http, mirror ? null : http.BaseAddress ?? HubOrigin.OfficialEndpoint, options,
+                mirror ? uri => SecureDownloadTransport.SameOrigin(uri, http.BaseAddress) : null),
+            http.BaseAddress ?? HubOrigin.OfficialEndpoint)
+    {
+    }
+
     /// <summary>True for a plausible repo id (<c>name</c> or <c>owner/name</c>, Hub characters only).</summary>
     public static bool IsValidRepoId(string? repoId) => repoId is { Length: > 0 and <= 200 } && RepoIdRegex().IsMatch(repoId);
 
@@ -62,20 +73,7 @@ public sealed partial class HuggingFaceHubClient
     /// </summary>
     public async Task<HubSnapshot> GetSnapshotAsync(string repoId, string? revision, string? token, CancellationToken ct)
     {
-        if (!IsValidRepoId(repoId))
-        {
-            throw new DownloadRefusedException($"'{RepoPathRules.Printable(repoId ?? "")}' is not a Hugging Face repo id.");
-        }
-
-        if (!IsValidRevision(revision))
-        {
-            throw new DownloadRefusedException("The revision is not a valid branch, tag or commit.");
-        }
-
-        string relative = revision is null
-            ? $"api/models/{repoId}?blobs=true"
-            : $"api/models/{repoId}/revision/{Uri.EscapeDataString(revision)}?blobs=true";
-        using var response = await _transport.GetAsync(new Uri(_endpoint, relative), Credential(token), null, ct).ConfigureAwait(false);
+        using var response = await GetModelInfoAsync(repoId, revision, token, ct).ConfigureAwait(false);
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
             throw new HuggingFaceApiException(
@@ -92,12 +90,45 @@ public sealed partial class HuggingFaceHubClient
             throw new HttpRequestException($"The Hugging Face API answered HTTP {(int)response.StatusCode} for '{repoId}'.", null, response.StatusCode);
         }
 
-        if (response.Content.Headers.ContentLength is { } declared && declared > _transport.Options.MaxListingBytes)
+        var snapshot = ParseSnapshot(repoId, await ReadModelInfoAsync(response, ct).ConfigureAwait(false));
+        if (ContentDigest.IsHex(revision, 40) && !string.Equals(snapshot.CommitSha, revision, StringComparison.OrdinalIgnoreCase))
         {
-            throw new DownloadRefusedException($"The Hugging Face listing of '{repoId}' is larger than {_transport.Options.MaxListingBytes} bytes.");
+            throw new DownloadRefusedException("The Hub returned a different SHA than the requested pin.");
         }
 
-        byte[] body = await ReadBoundedAsync(response, _transport.Options.MaxListingBytes, ct).ConfigureAwait(false);
+        return snapshot;
+    }
+
+    public Task<HttpResponseMessage> GetModelInfoAsync(string repoId, string? revision, string? token, CancellationToken ct)
+    {
+        if (!IsValidRepoId(repoId))
+        {
+            throw new DownloadRefusedException($"'{RepoPathRules.Printable(repoId ?? "")}' is not a Hugging Face repo id.");
+        }
+
+        if (!IsValidRevision(revision))
+        {
+            throw new DownloadRefusedException("The revision is not a valid branch, tag or commit.");
+        }
+
+        string relative = revision is null
+            ? $"api/models/{repoId}?blobs=true"
+            : $"api/models/{repoId}/revision/{Uri.EscapeDataString(revision)}?blobs=true";
+        return _transport.GetAsync(new Uri(_endpoint, relative), Credential(token), null, ct);
+    }
+
+    public Task<byte[]> ReadModelInfoAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        if (response.Content.Headers.ContentLength is { } declared && declared > _transport.Options.MaxListingBytes)
+        {
+            throw new DownloadRefusedException($"The Hugging Face listing is larger than {_transport.Options.MaxListingBytes} bytes.");
+        }
+
+        return ReadBoundedAsync(response, _transport.Options.MaxListingBytes, ct);
+    }
+
+    public HubSnapshot ParseSnapshot(string repoId, byte[] body)
+    {
         ModelInfoDto? info;
         try
         {
@@ -141,7 +172,10 @@ public sealed partial class HuggingFaceHubClient
             }
         }
 
-        return new HubSnapshot(repoId, sha.ToLowerInvariant(), files);
+        return new HubSnapshot(repoId, sha.ToLowerInvariant(), files)
+        {
+            IsPublicUngated = info.Private == false && info.Gated.ValueKind == JsonValueKind.False,
+        };
     }
 
     /// <summary>URL of <paramref name="path"/> at <paramref name="commitSha"/> (<c>{repo}/resolve/{sha}/{path}</c>, each segment escaped).</summary>
@@ -150,6 +184,35 @@ public sealed partial class HuggingFaceHubClient
         ArgumentNullException.ThrowIfNull(path);
         string escaped = string.Join('/', path.Split('/').Select(Uri.EscapeDataString));
         return new Uri(_endpoint, $"{repoId}/resolve/{commitSha}/{escaped}");
+    }
+
+    /// <summary>Verifies the shard references of the selected files at the pinned Hub revision.</summary>
+    public async Task ValidateShardSelectionAsync(HubSnapshot snapshot, IReadOnlyList<HubFile> selected, string? token, CancellationToken ct)
+    {
+        var names = selected.Select(file => file.Path).ToHashSet(StringComparer.Ordinal);
+        MoveManifestRules.ValidateSplitGguf(names);
+        foreach (var index in selected.Where(file => file.Path.EndsWith(".safetensors.index.json", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (!IsValidRepoId(snapshot.RepoId) || !ContentDigest.IsHex(snapshot.CommitSha, 40) ||
+                RepoPathRules.Check(index.Path) is not null || index.Size < 0 || index.Size > _transport.Options.MaxListingBytes)
+            {
+                throw new InvalidDataException("The pinned checkpoint index is invalid or too large.");
+            }
+
+            using var response = await _transport.GetAsync(FileUrl(snapshot.RepoId, snapshot.CommitSha, index.Path), Credential(token), null, ct)
+                .ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var content = await ReadBoundedAsync(response, index.Size, ct).ConfigureAwait(false);
+            using var bytes = new MemoryStream(content, writable: false);
+            var digest = index.LfsSha256 is { } lfs ? ContentDigest.Sha256(lfs)
+                : index.BlobSha1 is { } git ? ContentDigest.GitBlobSha1(git, index.Size) : null;
+            if (bytes.Length != index.Size || digest is null || !await digest.MatchesAsync(bytes, ct).ConfigureAwait(false))
+            {
+                throw new InvalidDataException($"Checkpoint index '{index.Path}' does not match the pinned Hub digest.");
+            }
+
+            await MoveManifestRules.ValidateSafetensorsIndexAsync(index.Path, bytes, names, ct).ConfigureAwait(false);
+        }
     }
 
     /// <summary>The <c>Authorization</c> value for <paramref name="token"/>; null without a token.</summary>
@@ -183,6 +246,9 @@ public sealed partial class HuggingFaceHubClient
 
     private sealed class ModelInfoDto
     {
+        public bool? Private { get; set; }
+        public JsonElement Gated { get; set; }
+
         [JsonPropertyName("sha")]
         public string? Sha { get; set; }
 

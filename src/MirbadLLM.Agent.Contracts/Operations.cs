@@ -107,6 +107,11 @@ public static class OperationKinds
     /// <summary>Cancel a download.</summary>
     public const string DownloadCancel = "downloadCancel";
 
+    public const string MoveTransferOpen = "moveTransferOpen";
+    public const string MoveTransferLease = "moveTransferLease";
+    public const string MoveTransferFinish = "moveTransferFinish";
+    public const string MoveTransferCancel = "moveTransferCancel";
+
     /// <summary>Delete a model folder.</summary>
     public const string FolderDelete = "folderDelete";
 

@@ -1,5 +1,7 @@
 using System.Net;
+using System.Globalization;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text.Json;
 using MirbadLLM.Agent.Contracts;
 
@@ -27,6 +29,69 @@ internal sealed class AgentDataClient : IAgentDataClient
     public string NodeId => _generation.Endpoint.NodeId;
 
     public HttpMessageInvoker Invoker => _generation.Data;
+
+    public async Task<HttpResponseMessage> ReadTransferRangeAsync(string id, string grant, int index, long from, long inclusiveEnd,
+        string sha256, CancellationToken ct = default)
+    {
+        var route = AgentRoutes.MoveTransferRead;
+        using var request = TransferRequest(route, route.Expand(id, index.ToString(CultureInfo.InvariantCulture)), grant);
+        request.Headers.Range = new RangeHeaderValue(from, inclusiveEnd);
+        request.Headers.IfMatch.Add(new EntityTagHeaderValue($"\"sha256-{sha256}\""));
+        return await TransferAsync(request, ct).ConfigureAwait(false);
+    }
+
+    public async Task<MoveTransferStatus> WriteTransferRangeAsync(string id, string grant, int index, long from, long inclusiveEnd, long total,
+        string manifestId, HttpContent content, CancellationToken ct = default)
+    {
+        var route = AgentRoutes.MoveTransferWrite;
+        using var request = TransferRequest(route, route.Expand(id, index.ToString(CultureInfo.InvariantCulture)), grant);
+        request.Headers.IfMatch.Add(new EntityTagHeaderValue($"\"{manifestId}\""));
+        content.Headers.ContentLength = inclusiveEnd - from + 1;
+        content.Headers.ContentRange = new ContentRangeHeaderValue(from, inclusiveEnd, total);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        request.Content = content;
+        using var response = await TransferAsync(request, ct).ConfigureAwait(false);
+        await response.Content.LoadIntoBufferAsync(64 * 1024, ct).ConfigureAwait(false);
+        return await response.Content.ReadFromJsonAsync<MoveTransferStatus>(AgentJson.Options, ct).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The receiving node returned no checkpoint status.");
+    }
+
+    internal async Task<MoveFolderManifest> GetTransferManifestAsync(string id, string grant, CancellationToken ct)
+    {
+        var route = AgentRoutes.MoveTransferManifest;
+        using var request = TransferRequest(route, route.Expand(id), grant);
+        using var response = await TransferAsync(request, ct).ConfigureAwait(false);
+        await response.Content.LoadIntoBufferAsync(64 * 1024 * 1024, ct).ConfigureAwait(false);
+        return await response.Content.ReadFromJsonAsync<MoveFolderManifest>(AgentJson.Options, ct).ConfigureAwait(false)
+            ?? throw new InvalidDataException("The source returned no checkpoint manifest.");
+    }
+
+    private HttpRequestMessage TransferRequest(AgentRoute route, string path, string grant)
+    {
+        var request = new HttpRequestMessage(new HttpMethod(route.Method), _generation.Endpoint.Resolve(path));
+        request.Headers.TryAddWithoutValidation(Protocol.ProtocolHeader, _context.ProtocolVersion(NodeId).ToString(CultureInfo.InvariantCulture));
+        request.Headers.TryAddWithoutValidation(Protocol.MasterHeader, _context.Identity.Current.ToHeaderValue());
+        request.Headers.TryAddWithoutValidation(Protocol.RequestTimeHeader, _context.Time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture));
+        request.Headers.TryAddWithoutValidation(Protocol.TransferGrantHeader, grant);
+        return request;
+    }
+
+    private async Task<HttpResponseMessage> TransferAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        var response = await SendAsync(request, ct).ConfigureAwait(false);
+        if (response.IsSuccessStatusCode)
+        {
+            return response;
+        }
+
+        using (response)
+        {
+            await response.Content.LoadIntoBufferAsync(64 * 1024, ct).ConfigureAwait(false);
+            var body = await response.Content.ReadFromJsonAsync<AgentErrorResponse>(AgentJson.Options, ct).ConfigureAwait(false);
+            throw new AgentException((int)response.StatusCode,
+                body?.Error ?? new AgentError { Code = ErrorCodes.InternalError, Message = "The node refused the checkpoint range." });
+        }
+    }
 
     public Uri BuildProxyUri(string modelId, string pathAndQuery)
     {

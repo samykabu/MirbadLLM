@@ -15,7 +15,7 @@ namespace MirbadLLM.Agent.Api;
 /// request-time checks. Mutations go through <see cref="StorageOperations"/> (fencing, durable acceptance with the HF
 /// token redacted, payload-bound deduplication) and answer with the stored result on a replay.
 /// </summary>
-public static class StorageEndpoints
+public static partial class StorageEndpoints
 {
     /// <summary>Maps the storage routes onto <paramref name="endpoints"/>.</summary>
     public static IEndpointRouteBuilder MapStorageEndpoints(this IEndpointRouteBuilder endpoints)
@@ -30,6 +30,7 @@ public static class StorageEndpoints
         endpoints.MapGet(AgentRoutes.DownloadsList.Path, (Func<HttpContext, Task<IResult>>)ListDownloadsAsync);
         endpoints.MapGet(AgentRoutes.DownloadGet.Path, GetDownloadAsync);
         endpoints.MapPost(AgentRoutes.DownloadCancel.Path, CancelDownloadAsync);
+        MapMoveTransfers(endpoints);
         return endpoints;
     }
 
@@ -135,6 +136,18 @@ public static class StorageEndpoints
         if (request is null)
         {
             return Error(StorageErrors.InvalidRequest("The request body is empty."));
+        }
+
+        if (request is DownloadStartRequest download)
+        {
+            try
+            {
+                _ = HubOrigin.Parse(download.FleetHubEndpoint, download.FleetHubTrust);
+            }
+            catch (ArgumentException ex)
+            {
+                return Error(StorageErrors.InvalidRequest(ex.Message));
+            }
         }
 
         var operations = http.RequestServices.GetRequiredService<StorageOperations>();

@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using MirbadLLM.Agent.Abstractions;
 using MirbadLLM.Agent.Contracts;
+using MirbadLLM.Agent.Storage;
 using MirbadLLM.Core;
 using MirbadLLM.NodeRuntime.Abstractions;
 
@@ -40,6 +41,7 @@ public sealed partial class RuntimeOperations : IOperationCanceller, IDisposable
     private readonly AgentRuntimeOptions _options;
     private readonly ILogger _logger;
     private readonly IGpuInventory? _gpus;
+    private readonly ModelRootPaths? _modelPaths;
 
     private readonly SemaphoreSlim _acceptLock = new(1, 1);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _modelLocks = new(StringComparer.Ordinal);
@@ -59,7 +61,8 @@ public sealed partial class RuntimeOperations : IOperationCanceller, IDisposable
         TimeProvider? time = null,
         AgentRuntimeOptions? options = null,
         ILogger<RuntimeOperations>? logger = null,
-        IGpuInventory? gpuInventory = null)
+        IGpuInventory? gpuInventory = null,
+        ModelRootPaths? modelPaths = null)
     {
         ArgumentNullException.ThrowIfNull(drivers);
         _drivers = [.. drivers];
@@ -71,6 +74,7 @@ public sealed partial class RuntimeOperations : IOperationCanceller, IDisposable
         _options = options ?? new AgentRuntimeOptions();
         _logger = (ILogger?)logger ?? NullLogger.Instance;
         _gpus = gpuInventory;
+        _modelPaths = modelPaths;
     }
 
     /// <summary>
@@ -359,10 +363,28 @@ public sealed partial class RuntimeOperations : IOperationCanceller, IDisposable
         var ct = run.Cancellation.Token;
         var modelLock = ModelLock(run.ModelId);
         bool locked = false;
+        var folderLocks = new List<SemaphoreSlim>();
         try
         {
             await modelLock.WaitAsync(ct).ConfigureAwait(false);
             locked = true;
+
+            if (_modelPaths is not null)
+            {
+                foreach (string folder in LaunchFolders(run.Request.Spec))
+                {
+                    var gate = _modelPaths.Gate(folder);
+                    await gate.WaitAsync(ct).ConfigureAwait(false);
+                    folderLocks.Add(gate);
+                    if (_modelPaths.ImportReserved(folder))
+                    {
+                        throw new AgentException(409, new AgentError
+                        {
+                            Code = ErrorCodes.InUse, Message = $"Checkpoint folder '{folder}' has an unfinished import.",
+                        });
+                    }
+                }
+            }
 
             int port = run.Reservation?.HostPort
                 ?? await _reservations.AllocatePortAsync(run.ModelId, run.OperationId, ct).ConfigureAwait(false);
@@ -425,6 +447,11 @@ public sealed partial class RuntimeOperations : IOperationCanceller, IDisposable
         }
         finally
         {
+            foreach (var gate in folderLocks)
+            {
+                gate.Release();
+            }
+
             if (locked)
             {
                 modelLock.Release();
@@ -434,6 +461,37 @@ public sealed partial class RuntimeOperations : IOperationCanceller, IDisposable
             _executing.TryRemove(run.OperationId, out _);
             run.Completed.TrySetResult();
         }
+    }
+
+    private static IEnumerable<string> LaunchFolders(LaunchSpec spec)
+    {
+        const string containerPrefix = LogicalVolumes.ModelsTarget + "/";
+        const string processPrefix = ProcessArgvTokens.Models + "/";
+        var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string argument in spec.Argv)
+        {
+            int equals = argument.StartsWith('-') ? argument.IndexOf('=', StringComparison.Ordinal) : -1;
+            string value = argument[(equals + 1)..];
+            if (value.StartsWith(containerPrefix, StringComparison.Ordinal))
+            {
+                folders.Add(value[containerPrefix.Length..].Split('/')[0]);
+            }
+            else if (value.StartsWith(processPrefix, StringComparison.Ordinal))
+            {
+                folders.Add(value[processPrefix.Length..].Split('/')[0]);
+            }
+        }
+
+        foreach (var mount in spec.Mounts)
+        {
+            if (mount is { Volume: LogicalVolumes.Models, SubPath: { Length: > 0 } path })
+            {
+                folders.Add(path.Split('/', '\\')[0]);
+            }
+        }
+
+        return folders.Where(folder => ModelRootPaths.NameError(folder) is null)
+            .Select(folder => folder.Normalize()).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase);
     }
 
     // ---------------------------------------------------------------- stop

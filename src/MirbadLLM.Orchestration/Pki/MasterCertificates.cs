@@ -72,7 +72,9 @@ public sealed class MasterCertificates : IDisposable
         _time = time;
         _client = LoadOrIssue(ClientCertificateFileName, ClientKeyFileName, PeerValidator.ForMasterClient, () => _ca.IssueMasterClientCertificate());
         _enroll = new EnrollMaterial(LoadOrIssue(EnrollCertificateFileName, EnrollKeyFileName, PeerValidator.ForEnrollListener,
-            () => _ca.IssueEnrollServerCertificate(_enrollAddresses)));
+            () => _ca.IssueEnrollServerCertificate(_enrollAddresses),
+            certificate => _enrollAddresses.All(address => certificate.MatchesHostname(
+                address.Trim('[', ']'), allowWildcards: false, allowCommonName: false))));
         _previousClient = LoadPrevious();
     }
 
@@ -277,7 +279,8 @@ public sealed class MasterCertificates : IDisposable
         }
     }
 
-    private IssuedCredential LoadOrIssue(string certificateFile, string keyFile, Func<TrustAnchorSet, TimeProvider?, PeerValidator> validatorFor, Func<IssuedCredential> issue)
+    private IssuedCredential LoadOrIssue(string certificateFile, string keyFile, Func<TrustAnchorSet, TimeProvider?, PeerValidator> validatorFor, Func<IssuedCredential> issue,
+        Func<X509Certificate2, bool>? certificateMatches = null)
     {
         if (_directory is not null)
         {
@@ -290,7 +293,8 @@ public sealed class MasterCertificates : IDisposable
                 {
                     loaded = TlsCredentials.LoadCredential(certificatePem, keyPem);
                     using TrustAnchorSet trust = TrustAnchorSet.Create([_ca.Certificate]);
-                    if (validatorFor(trust, _time).Validate(loaded.PublicCertificate).IsValid)
+                    if (validatorFor(trust, _time).Validate(loaded.PublicCertificate).IsValid &&
+                        certificateMatches?.Invoke(loaded.PublicCertificate) != false)
                     {
                         return loaded;
                     }

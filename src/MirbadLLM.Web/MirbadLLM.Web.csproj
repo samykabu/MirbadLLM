@@ -4,6 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
+    <InternalsVisibleTo Include="MirbadLLM.UnitTests" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MirbadLLM.Core\MirbadLLM.Core.csproj" />

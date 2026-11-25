@@ -20,6 +20,12 @@ public sealed record RangeDownloadRequest
     /// <summary>Expected size in bytes; null when unknown (then no range resume past a 416 and no size check).</summary>
     public long? ExpectedLength { get; init; }
 
+    /// <summary>Strong ETag required on successful mirror responses.</summary>
+    public string? ExpectedETag { get; init; }
+
+    /// <summary>Open LAN staging paths without following links.</summary>
+    public bool ConfinedWrites { get; init; }
+
     /// <summary>Expected digest, checked once the file is complete; null = size check only.</summary>
     public ContentDigest? Digest { get; init; }
 
@@ -110,13 +116,20 @@ public sealed class RangeDownloader
             long have = CurrentLength(request.FilePath);
             if (request.ExpectedLength is { } tooLong && have > tooLong)
             {
-                File.Delete(request.FilePath);
+                Reset(request);
                 have = 0;
             }
 
             onLength?.Invoke(have);
             long rangeFrom = have;
             using var response = await SendAsync(request, rangeFrom, ct).ConfigureAwait(false);
+            if (request.ExpectedETag is { } expectedTag &&
+                response.StatusCode is HttpStatusCode.OK or HttpStatusCode.PartialContent or HttpStatusCode.RequestedRangeNotSatisfiable &&
+                (response.Headers.ETag is not { IsWeak: false } tag || tag.Tag != $"\"{expectedTag}\""))
+            {
+                throw new DownloadRefusedException($"The mirror reported an unexpected ETag for {request.DisplayName}.");
+            }
+
             switch (response.StatusCode)
             {
                 case HttpStatusCode.PartialContent:
@@ -131,7 +144,7 @@ public sealed class RangeDownloader
                                 $"The server answered {request.DisplayName} with an inconsistent range ({range?.ToString() ?? "none"}) twice.");
                         }
 
-                        File.Delete(request.FilePath);
+                        Reset(request);
                         restarted = true;
                         continue;
                     }
@@ -152,7 +165,7 @@ public sealed class RangeDownloader
                         throw new DownloadRefusedException($"The server refused every range of {request.DisplayName} (HTTP 416).", 416);
                     }
 
-                    File.Delete(request.FilePath);
+                    Reset(request);
                     restarted = true;
                     continue;
 
@@ -326,7 +339,10 @@ public sealed class RangeDownloader
         byte[] buffer = ArrayPool<byte>.Shared.Rent(1024 * 1024);
         try
         {
-            var file = new FileStream(request.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1, FileOptions.SequentialScan);
+            var file = request.ConfinedWrites
+                ? ConfinedModelFile.Open(request.ConfinementRoot!, RelativePath(request)) ??
+                    throw new DownloadPathException($"'{request.DisplayName}' could not be opened within staging.")
+                : new FileStream(request.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 1, FileOptions.SequentialScan);
             await using (file.ConfigureAwait(false))
             {
                 int read;
@@ -391,13 +407,32 @@ public sealed class RangeDownloader
 
         try
         {
-            return _openWrite(request.FilePath);
+            return request.ConfinedWrites ? OpenConfined(request) : _openWrite(request.FilePath);
         }
         catch (IOException ex) when (IsDiskFull(ex))
         {
             throw DiskFull(request, ex);
         }
     }
+
+    internal static void Reset(RangeDownloadRequest request)
+    {
+        if (request.ConfinedWrites)
+        {
+            using var file = OpenConfined(request);
+            file.SetLength(0);
+            return;
+        }
+
+        File.Delete(request.FilePath);
+    }
+
+    private static FileStream OpenConfined(RangeDownloadRequest request) =>
+        ConfinedModelFile.OpenWrite(request.ConfinementRoot!, RelativePath(request)) ??
+        throw new DownloadPathException($"'{request.DisplayName}' could not be opened within staging.");
+
+    private static string RelativePath(RangeDownloadRequest request) =>
+        Path.GetRelativePath(request.ConfinementRoot!, request.FilePath).Replace(Path.DirectorySeparatorChar, '/');
 
     private static void EnsureConfined(RangeDownloadRequest request, Stream file)
     {

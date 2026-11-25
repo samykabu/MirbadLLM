@@ -462,7 +462,7 @@ public sealed class BenchmarkSuite(
         var until = After(samples, window)?.At ?? DateTimeOffset.MaxValue;
         return samples.Any(s =>
             s.At > window.Start && s.At <= until && s.HasRates &&
-            (s.Kpis.RequestsPerMinute > 0 || s.Kpis.Load.GenerationTokensPerSecond > 0 || s.Kpis.Load.PromptTokensPerSecond > 0));
+            (s.Kpis.RequestsPerMinute > 0 || (s.CompletedGenerationTokensPerSecond ?? s.Kpis.Load.GenerationTokensPerSecond) > 0 || s.Kpis.Load.PromptTokensPerSecond > 0));
     }
 
     /// <summary>

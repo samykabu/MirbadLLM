@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Core;
+using MirbadLLM.NodeRuntime.Downloads.Native;
 using MirbadLLM.Orchestration.Agents;
 using MirbadLLM.Orchestration.Audit;
 using MirbadLLM.Orchestration.Nodes;
@@ -40,6 +41,9 @@ public sealed class MoveServiceOptions
 
     /// <summary>How long an unplace found after a master restart waits for its node to be serving before it is given up.</summary>
     public TimeSpan ResumeNodeWait { get; set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>Maximum aggregate relay bandwidth per participating node, in MiB/s.</summary>
+    public int MaxTransferMiBPerSecond { get; set; } = 64;
 }
 
 /// <summary>
@@ -99,7 +103,11 @@ public sealed record MoveCaller(string Actor, string ClientKey)
 /// <param name="BytesDownloaded">Bytes present.</param>
 /// <param name="TotalBytes">Expected total; 0 when unknown.</param>
 /// <param name="Error">Error of a failed download.</param>
-public sealed record MoveDownloadView(string RepoId, string Folder, DownloadState? State, long BytesDownloaded, long TotalBytes, string? Error);
+public sealed record MoveDownloadView(string RepoId, string Folder, DownloadState? State, long BytesDownloaded, long TotalBytes, string? Error)
+{
+    public string? Route { get; init; }
+    public string? SourceNodeId { get; init; }
+}
 
 /// <summary>
 /// <c>GET /api/models/{id}/move</c>: the move record (live, or the last finished one since the master started) and what the
@@ -227,7 +235,8 @@ public sealed partial class MoveService : IHostedService, IDisposable
         IAdminReauthenticator? reauth = null,
         IOptions<RegistryMigrationOptions>? migration = null,
         StartupTimeTracker? startupTimes = null,
-        ITokenStore? tokens = null)
+        ITokenStore? tokens = null,
+        HuggingFaceHubClient? hub = null)
     {
         _savedTokens = tokens;
         ArgumentNullException.ThrowIfNull(models);
@@ -249,6 +258,9 @@ public sealed partial class MoveService : IHostedService, IDisposable
         _options = options.Value;
         _moveOptions = moveOptions ?? new MoveServiceOptions();
         _time = timeProvider ?? TimeProvider.System;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_moveOptions.MaxTransferMiBPerSecond);
+        _transferRelay = new MoveTransferRelay(clients, runner, _time, _moveOptions);
+        _hub = hub;
         _logger = (ILogger?)logger ?? NullLogger.Instance;
         _audit = audit ?? NullAuditLog.Instance;
         _reauth = reauth;
@@ -413,7 +425,7 @@ public sealed partial class MoveService : IHostedService, IDisposable
         if (active && record.Stage == MoveStages.Downloading &&
             await _models.GetAsync(modelId, ct).ConfigureAwait(false) is { } model)
         {
-            downloads = await ReadDownloadsAsync(move.TargetNodeId, model, ct).ConfigureAwait(false);
+            downloads = await ReadDownloadsAsync(record, model, ct).ConfigureAwait(false);
         }
 
         return new MoveStatusView
@@ -576,7 +588,7 @@ public sealed partial class MoveService : IHostedService, IDisposable
                 $"Model '{modelId}' is already on node '{targetId}'; changing its GPUs there is an edit, not a move.");
         }
 
-        CheckMovable(model);
+        var work = BuildFolderWork(model);
 
         var target = await _nodes.GetAsync(targetId, ct).ConfigureAwait(false);
         if (target is { Revoked: true })
@@ -604,6 +616,14 @@ public sealed partial class MoveService : IHostedService, IDisposable
         }
 
         NodeRecord? source = sourceId is null ? null : await _nodes.GetAsync(sourceId, ct).ConfigureAwait(false);
+        if (work.Any(folder => folder.RepoId.Length == 0) &&
+            (source is not { Approved: true, Revoked: false } ||
+             !await SupportsTransferAsync(targetId, ct).ConfigureAwait(false) ||
+             Serving(source.Id) && !await SupportsTransferAsync(source.Id, ct).ConfigureAwait(false)))
+        {
+            throw new MoveRefusedException(ErrorCodes.ModelNotMovable,
+                $"Folder '{work.First(folder => folder.RepoId.Length == 0).Folder}' requires an approved placed source and move transfer support on both nodes.");
+        }
         bool running = sourceId is not null && await IsRunningAsync(modelId, ct).ConfigureAwait(false);
         if (running)
         {
@@ -631,48 +651,9 @@ public sealed partial class MoveService : IHostedService, IDisposable
                 TargetNodeUid = target.Uid,
                 TargetGpuUuids = placement.GpuUuids is { Count: > 0 } selected ? [.. selected] : [],
                 WasRunning = running,
+                Folders = work,
             },
         };
-    }
-
-    /// <summary>A move re-downloads from the model's sources (design §6.4): the checkpoint folder needs a Hugging Face source.</summary>
-    private static void CheckMovable(ModelDefinition model)
-    {
-        if (!model.NeedsCheckpoint)
-        {
-            return; // Its image fetches the model, so there is nothing to download first.
-        }
-
-        if (model.Sources.Count == 0)
-        {
-            throw new MoveRefusedException(ErrorCodes.ModelNotMovable,
-                $"Model '{model.Id}' has no Hugging Face sources (it was added from a folder), so it cannot be moved by re-downloading it on the other node. " +
-                "Add it there from Hugging Face, or record its sources first.");
-        }
-
-        if (!model.Sources.Any(s => string.Equals(s.Folder, model.ModelPath, StringComparison.Ordinal)))
-        {
-            throw new MoveRefusedException(ErrorCodes.ModelNotMovable,
-                $"None of the sources of model '{model.Id}' downloads its checkpoint folder '{model.ModelPath}', so it cannot be moved by re-downloading it.");
-        }
-
-        // Otherwise the model would reach the other node without its drafter and fail to start there.
-        if (model.Speculative?.DraftModel is { } draft && draft.StartsWith(LogicalVolumes.ModelsTarget + "/", StringComparison.Ordinal) &&
-            RemoteModelFolders.TopFolder(draft) is { } draftFolder && !model.Sources.Any(s => string.Equals(s.Folder, draftFolder, StringComparison.Ordinal)))
-        {
-            throw new MoveRefusedException(ErrorCodes.ModelNotMovable,
-                $"No source of model '{model.Id}' downloads its draft model folder '{draftFolder}', so it would arrive without it. Add the folder under Extra checkpoints first.");
-        }
-
-        foreach (var source in model.Sources)
-        {
-            if (string.IsNullOrWhiteSpace(source.RepoId) ||
-                !string.Equals(RemoteHuggingFaceDownloader.FolderFor(new DownloadRequest(source.RepoId, Folder: source.Folder)), source.Folder, StringComparison.Ordinal))
-            {
-                throw new MoveRefusedException(ErrorCodes.ModelNotMovable,
-                    $"Source '{source.RepoId}' of model '{model.Id}' cannot be re-downloaded into '{source.Folder}' (a folder name under the models root is needed).");
-            }
-        }
     }
 
     // ================================================================ move: worker
@@ -804,12 +785,9 @@ public sealed partial class MoveService : IHostedService, IDisposable
 
         try
         {
-            foreach (var source in model.Sources.DistinctBy(s => s.Folder, StringComparer.Ordinal))
+            if (!await AcquireFoldersAsync(record, model, ct).ConfigureAwait(false))
             {
-                if (!await EnsureDownloadedAsync(record, targetId, source, ct).ConfigureAwait(false))
-                {
-                    return;
-                }
+                return;
             }
 
             if (!await EnsureImageAsync(record, targetId, model, ct).ConfigureAwait(false))
@@ -817,14 +795,9 @@ public sealed partial class MoveService : IHostedService, IDisposable
                 return;
             }
 
-            var folders = await _clients.GetClient(targetId).ListModelFoldersAsync(ct).ConfigureAwait(false);
-            if (model.NeedsCheckpoint && !folders.Any(f => string.Equals(f.Folder, model.ModelPath, StringComparison.Ordinal) && !f.Partial && f.SizeBytes > 0))
-            {
-                await FailAsync(record, $"The checkpoint folder '{model.ModelPath}' is not complete on node '{targetId}' after its download.", ct).ConfigureAwait(false);
-                return;
-            }
         }
-        catch (MoveFailedException ex)
+        catch (Exception ex) when (ex is MoveFailedException or MoveRefusedException or InvalidDataException or
+            DownloadRefusedException or HuggingFaceApiException || ex is AgentException && !IsTransient(ex))
         {
             await FailAsync(record, ex.Message, ct).ConfigureAwait(false);
             return;
@@ -866,7 +839,9 @@ public sealed partial class MoveService : IHostedService, IDisposable
             }
 
             var status = await client.GetDownloadAsync(folder, ct).ConfigureAwait(false);
-            bool ours = status?.OperationId is { } op && current.OutstandingOperationIds.Contains(op, StringComparer.Ordinal);
+            var folderWork = current.Move?.Folders?.FirstOrDefault(item => item.Folder == folder);
+            bool ours = status?.OperationId is { } op && current.OutstandingOperationIds.Contains(op, StringComparer.Ordinal) &&
+                (_hub is null || folderWork?.DownloadOperationId == op);
             switch (status?.State)
             {
                 case DownloadState.Queued or DownloadState.Downloading:
@@ -897,10 +872,26 @@ public sealed partial class MoveService : IHostedService, IDisposable
                 AllowPatterns = source.AllowPatterns is { Count: > 0 } patterns ? patterns : null,
                 Token = _tokens.TryGetValue(record.Id, out string? token) ? token : null,
                 Existing = DownloadExistingMode.Complete,
+                RequireVerified = _hub is not null,
             };
             try
             {
-                await _runner.SubmitAsync(nodeId, AgentRoutes.DownloadStart, folder, body,
+                var (selectedBody, notice) = await _runner.WithHubEndpointAsync(nodeId, body, ct).ConfigureAwait(false);
+                if (folderWork is { } work)
+                {
+                    await SaveFolderAsync(record, work with
+                    {
+                        DownloadOperationId = envelope.OperationId,
+                        Route = selectedBody.FleetHubEndpoint is not null &&
+                            !HubOrigin.Parse(selectedBody.FleetHubEndpoint, selectedBody.FleetHubTrust).IsOfficial ? "mirror" : "hub",
+                    }, ct).ConfigureAwait(false);
+                }
+                if (notice is not null)
+                {
+                    MoveServiceLog.HubEndpointUnavailable(_logger, nodeId, notice);
+                }
+
+                await _runner.SubmitAsync(nodeId, AgentRoutes.DownloadStart, folder, selectedBody,
                     (c, r, t) => c.StartDownloadAsync(r, t), s => s.State switch
                     {
                         DownloadState.Completed => OperationState.Succeeded,
@@ -1266,6 +1257,27 @@ public sealed partial class MoveService : IHostedService, IDisposable
 
     private async Task CancelOurDownloadsAsync(OwnershipRecord record, CancellationToken ct)
     {
+        var move = record.Move!;
+        foreach (var folder in move.Folders ?? [])
+        {
+            foreach (var (node, id) in new[] { (move.SourceNodeId, folder.ExportId), (move.TargetNodeId, folder.ImportId) })
+            {
+                if (id is null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    await _transferRelay.CancelAsync(node, id, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (IsTransient(ex) || ex is AgentException)
+                {
+                    MoveServiceLog.CleanupFailed(_logger, record.ModelId, record.Id, ex.Message);
+                }
+            }
+        }
+
         if (await _models.GetAsync(record.ModelId, ct).ConfigureAwait(false) is not { } model)
         {
             return;
@@ -1725,22 +1737,31 @@ public sealed partial class MoveService : IHostedService, IDisposable
         }
     }
 
-    private async Task<IReadOnlyList<MoveDownloadView>> ReadDownloadsAsync(string nodeId, ModelDefinition model, CancellationToken ct)
+    private async Task<IReadOnlyList<MoveDownloadView>> ReadDownloadsAsync(OwnershipRecord record, ModelDefinition model, CancellationToken ct)
     {
+        var move = record.Move!;
         var views = new List<MoveDownloadView>();
-        foreach (var source in model.Sources.DistinctBy(s => s.Folder, StringComparer.Ordinal))
+        foreach (var folder in move.Folders ?? BuildFolderWork(model))
         {
             NodeDownloadStatus? status = null;
-            try
+            if (folder.Route is "mirror" or "hub" || folder.Route is null && folder.RepoId.Length != 0)
             {
-                status = await _clients.GetClient(nodeId).GetDownloadAsync(source.Folder, ct).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (IsTransient(ex) || ex is AgentException)
-            {
-                // Shown without progress.
+                try
+                {
+                    status = await _clients.GetClient(move.TargetNodeId).GetDownloadAsync(folder.Folder, ct).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (IsTransient(ex) || ex is AgentException)
+                {
+                    // Keep the last durable progress.
+                }
             }
 
-            views.Add(new MoveDownloadView(source.RepoId, source.Folder, status?.State, status?.BytesDownloaded ?? 0, status?.TotalBytes ?? 0, status?.Error));
+            views.Add(new MoveDownloadView(folder.RepoId, folder.Folder, status?.State ?? folder.State,
+                status?.BytesDownloaded ?? folder.BytesDownloaded, status?.TotalBytes ?? folder.TotalBytes, status?.Error ?? folder.Error)
+            {
+                Route = folder.Route,
+                SourceNodeId = folder.Route == "source" ? move.SourceNodeId : null,
+            });
         }
 
         return views;
@@ -1870,6 +1891,11 @@ public static class MoveServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(configuration);
         services.AddOptions<MoveServiceOptions>().Bind(configuration.GetSection(MoveServiceOptions.SectionName));
+        services.AddSingleton(sp =>
+        {
+            var clients = sp.GetRequiredService<HubHttpClients>();
+            return new HuggingFaceHubClient(clients.OfficialTransport(), clients.Official.BaseAddress ?? HubOrigin.OfficialEndpoint);
+        });
         services.AddSingleton(sp => new MoveService(
             sp.GetRequiredService<IModelRegistry>(),
             sp.GetRequiredService<INodeRegistry>(),
@@ -1886,7 +1912,8 @@ public static class MoveServiceCollectionExtensions
             sp.GetService<IAdminReauthenticator>(),
             sp.GetService<IOptions<RegistryMigrationOptions>>(),
             sp.GetService<StartupTimeTracker>(),
-            sp.GetService<ITokenStore>()));
+            sp.GetService<ITokenStore>(),
+            sp.GetService<HuggingFaceHubClient>()));
         services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<MoveService>());
         return services;
     }
@@ -1895,6 +1922,9 @@ public static class MoveServiceCollectionExtensions
 /// <summary>Source-generated log messages of <see cref="MoveService"/>.</summary>
 internal static partial class MoveServiceLog
 {
+    [LoggerMessage(Level = LogLevel.Information, Message = "Node {NodeId} uses the official Hub. {Notice}")]
+    public static partial void HubEndpointUnavailable(ILogger logger, string nodeId, string notice);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Move {RecordId} of model {ModelId} started: {SourceNodeId} -> {TargetNodeId}.")]
     public static partial void Started(ILogger logger, string modelId, string recordId, string sourceNodeId, string targetNodeId);
 

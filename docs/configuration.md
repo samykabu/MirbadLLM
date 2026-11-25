@@ -188,3 +188,63 @@ An existing model with its own image or an existing per-node default keeps that 
 the bootstrap agent at loopback. Two switches exist only for development, and both refuse to start outside the
 `Development` environment: the agent's `DevFakeRuntime` (fake models, no Docker or GPU) and the master's
 `MirbadLLM:DevJoinTokens`. See [setup.md](setup.md#development-fleet).
+
+## Hugging Face LAN mirror
+
+| Key | Default | Behaviour |
+|---|---|---|
+| `MirbadLLM:HuggingFace:Endpoint` | `https://huggingface.co/` | Fleet download default and the master’s repo inspection origin |
+| `Agent:HuggingFace:Endpoint` | Fleet default | Overrides the master for downloads on this node. Set the official Hub explicitly to opt out |
+| `MirbadLLM:HuggingFace:Trust`, `Agent:HuggingFace:Trust` | `FleetCa` for custom origins, `System` for the official Hub | Select the fleet roots or system public roots for that origin |
+| `MirbadLLM:HubMirror:Enabled` | `false` | Enables the master’s dedicated HTTPS listener |
+| `MirbadLLM:HubMirror:Port` | `8444` | Port inside the master container |
+| `MirbadLLM:HubMirror:ModelsRoot` | Unset | Absolute path to the read-only bootstrap node models mount in the master |
+
+Use an absolute HTTPS origin with no credentials, query, fragment or path prefix. Agents
+advertising `downloads.hf-endpoint` accept the fenced fleet setting per operation.
+An older agent uses the official Hub. A node override works with an older master.
+Token-bearing jobs go directly to the official Hub. The mirror authorizes anonymous
+public files for up to five minutes. A size-matching local file can be served
+while a bounded background worker verifies its digest. A failed verdict sends
+later requests for that file identity to the Hub. Consumers pin the official
+commit, verify files before completion, and retry suspect mirror bytes at the
+official origin.
+
+### Enable the mirror listener
+
+Add `models.lan` to `MirbadLLM:Enrollment:ListenerAddresses` alongside any existing
+enrollment names. Configure LAN DNS and the Docker network so the master, agents and
+helpers can reach the same name. Bind the host port to the fleet interface and limit
+ingress to fleet clients. The dedicated listener uses the rotating enrollment server
+certificate and the models mount is read-only. Add this override to either Compose
+deployment file, replacing the LAN bind address and preserving the enrollment names
+for your deployment.
+
+```yaml
+services:
+  master:
+    ports:
+      - "${MIRBADLLM_LAN_BIND:?set the fleet LAN bind address}:8444:8444"
+    volumes:
+      - "${MIRBADLLM_MODELS:-/srv/mirbadllm/models}:/mirror-models:ro"
+    environment:
+      MirbadLLM__HuggingFace__Endpoint: https://models.lan:8444/
+      MirbadLLM__HubMirror__Enabled: "true"
+      MirbadLLM__HubMirror__ModelsRoot: /mirror-models
+      MirbadLLM__Enrollment__ListenerAddresses__0: mirbadllm
+      MirbadLLM__Enrollment__ListenerAddresses__1: localhost
+      MirbadLLM__Enrollment__ListenerAddresses__2: models.lan
+```
+
+Docker agents need `Agent:CacheRoot` and `Agent:CacheHostPath` to refer to the same
+cache mount from the agent and daemon. A fleet mirror helper reads a per-job public
+CA bundle through a read-only bind. Let active downloads finish before removing
+the endpoint, listener, or models mount.
+
+## Model move bandwidth
+
+| Key | Default | Behaviour |
+|---|---|---|
+| `MirbadLLM:Moves:MaxTransferMiBPerSecond` | `64` | Positive integer. Per-node checkpoint relay budget in MiB/s, charging both legs of a remote-to-remote copy |
+
+A move uses the existing master-to-agent mTLS connections. See [Move](multinode/operations-p2.md#62-move).

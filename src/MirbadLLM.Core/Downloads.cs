@@ -37,6 +37,12 @@ public sealed record DownloadRequest(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public OllamaSource? Ollama { get; init; }
 
+    /// <summary>Internal operation policy selected by the agent.</summary>
+    [JsonIgnore]
+    public HubOrigin? Hub { get; init; }
+
+    public bool RequireVerified { get; init; }
+
     /// <summary>Never prints the Hugging Face token (W9 review MN-132, design §10.4).</summary>
     public override string ToString() =>
         $"DownloadRequest {{ RepoId = {RepoId}, Revision = {Revision}, Token = {(Token is null ? "null" : "***")}, Folder = {Folder} }}";
@@ -55,7 +61,11 @@ public sealed record DownloadStatus(
     long BytesDownloaded,
     long TotalBytes,
     double? BytesPerSecond,
-    string? Error);
+    string? Error)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? HubEndpointNotice { get; init; }
+}
 
 /// <summary>Starts, lists and cancels Hugging Face checkpoint downloads (implemented as Docker helper containers).</summary>
 public interface IHuggingFaceDownloader

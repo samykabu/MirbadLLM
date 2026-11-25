@@ -8,6 +8,7 @@ using MirbadLLM.Agent.Abstractions;
 using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Core;
 using MirbadLLM.NodeRuntime;
+using MirbadLLM.NodeRuntime.Downloads.Native;
 
 namespace MirbadLLM.Agent.Storage;
 
@@ -36,11 +37,12 @@ public sealed class AgentDownloadService(
     StorageOperations operations,
     IOptions<AgentStorageOptions> options,
     TimeProvider time,
-    ILogger<AgentDownloadService> logger) : IAgentDownloads, IAsyncDisposable
+    ILogger<AgentDownloadService> logger,
+    HuggingFaceOptions? hubOptions = null,
+    HubHttpClients? hubClients = null) : IAgentDownloads, IAsyncDisposable
 {
     private readonly AgentStorageOptions _options = options.Value;
     private readonly ConcurrentDictionary<string, TrackedDownload> _active = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _folderLocks = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<NodeDownloadStatus> _recent = new();
 
     // Every monitor still running, independent of _active: a monitor that finishes removes its download from _active
@@ -69,10 +71,15 @@ public sealed class AgentDownloadService(
         }
 
         string folder = request.Folder;
-        var gate = _folderLocks.GetOrAdd(folder, _ => new SemaphoreSlim(1, 1));
+        var gate = paths.Gate(folder);
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            if (paths.TransferReserved(folder))
+            {
+                throw StorageErrors.Create(ErrorCodes.FolderConflict, "A checkpoint transfer reserves this folder.");
+            }
+
             var location = paths.Locate(folder);
             if (location.IsLink)
             {
@@ -91,13 +98,74 @@ public sealed class AgentDownloadService(
             }
 
             var patterns = request.AllowPatterns is { Count: > 0 } ? request.AllowPatterns : HuggingFacePatterns.DefaultAllowPatterns;
-            long totalBytes = await PreflightAsync(request, patterns, location, ct).ConfigureAwait(false);
+            HubOrigin origin;
+            try
+            {
+                _ = HubOrigin.Parse(request.FleetHubEndpoint, request.FleetHubTrust);
+                origin = string.IsNullOrEmpty(request.Token)
+                    ? (hubOptions ?? new()).Resolve(request.FleetHubEndpoint, request.FleetHubTrust) : HubOrigin.Official;
+            }
+            catch (ArgumentException ex)
+            {
+                throw StorageErrors.InvalidRequest(ex.Message);
+            }
+
+            if (request.RequireVerified && (!ContentDigest.IsHex(request.Revision, 40) || hubClients is null))
+            {
+                throw StorageErrors.InvalidRequest("A verified checkpoint download requires an immutable Hub revision.");
+            }
+
+            var download = new DownloadRequest(request.RepoId, request.Revision, request.Token, folder, patterns)
+            {
+                Hub = origin, RequireVerified = request.RequireVerified,
+            };
+            HubAcquisition? acquisition = null;
+            if (hubClients is not null && (request.RequireVerified || downloader is HuggingFaceDownloader || !origin.IsOfficial))
+            {
+                string? pinned = MatchingPin(location, download, patterns);
+                try
+                {
+                    acquisition = await HubAcquisition.PrepareAsync(hubClients, download, patterns, pinned, ct).ConfigureAwait(false);
+                    if (request.RequireVerified && acquisition.Snapshot.Files.Any(file => HuggingFacePatterns.MatchesAny(file.Path, patterns) &&
+                        file.LfsSha256 is null && file.BlobSha1 is null))
+                    {
+                        throw new DownloadRefusedException("A selected Hub file lacks a verifiable digest.");
+                    }
+                }
+                catch (Exception ex) when (ex is HuggingFaceApiException or DownloadRefusedException)
+                {
+                    throw StorageErrors.HuggingFaceRefused(StorageErrors.RedactSecrets(ex.Message, request.Token)!);
+                }
+                catch (Exception ex) when (ex is HttpRequestException or IOException || ex is OperationCanceledException && !ct.IsCancellationRequested)
+                {
+                    throw StorageErrors.Create(ErrorCodes.InternalError,
+                        "Hugging Face could not be reached from this node: " + StorageErrors.RedactSecrets(ex.Message, request.Token));
+                }
+            }
+
+            long totalBytes = await PreflightAsync(request, patterns, location, acquisition, ct).ConfigureAwait(false);
 
             DownloadStatus started;
             try
             {
-                started = await downloader.StartAsync(
-                    new DownloadRequest(request.RepoId, request.Revision, request.Token, folder, patterns), ct).ConfigureAwait(false);
+                started = downloader switch
+                {
+                    NativeDownloadService native => await native.StartAsync(download, acquisition, ct).ConfigureAwait(false),
+                    HuggingFaceDownloader helper => await helper.StartAsync(download, acquisition, ct).ConfigureAwait(false),
+                    _ => await downloader.StartAsync(download, ct).ConfigureAwait(false),
+                };
+            }
+            catch (DownloadPathException ex)
+            {
+                throw StorageErrors.InvalidRequest(ex.Message);
+            }
+            catch (DownloadDestinationExistsException ex)
+            {
+                throw StorageErrors.Create(ErrorCodes.FolderExists, ex.Message);
+            }
+            catch (DownloadRefusedException ex)
+            {
+                throw StorageErrors.HuggingFaceRefused(ex.Message);
             }
             catch (ArgumentException ex)
             {
@@ -384,12 +452,39 @@ public sealed class AgentDownloadService(
         _shutdown.Dispose();
     }
 
-    private async Task<long> PreflightAsync(DownloadStartRequest request, IReadOnlyList<string> patterns, FolderLocation location, CancellationToken ct)
+    private string? MatchingPin(FolderLocation location, DownloadRequest request, IReadOnlyList<string> patterns)
+    {
+        string directory = location.Exists && location.ResolvedPath is { } existing
+            ? existing : Path.Combine(paths.Root, request.Folder + NativeDownloadService.PartialSuffix);
+        if (!Directory.Exists(directory) || RepoPathRules.IsLink(new DirectoryInfo(directory)))
+        {
+            return null;
+        }
+
+        try
+        {
+            var manifest = DownloadManifest.TryRead(directory);
+            return manifest is { Source: ModelSourceKind.HuggingFace } &&
+                string.Equals(manifest.RepoId, request.RepoId, StringComparison.OrdinalIgnoreCase) &&
+                manifest.Revision == request.Revision && manifest.AllowPatterns.SequenceEqual(patterns)
+                ? manifest.CommitSha : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<long> PreflightAsync(DownloadStartRequest request, IReadOnlyList<string> patterns, FolderLocation location,
+        HubAcquisition? acquisition, CancellationToken ct)
     {
         RepoInspection inspection;
         try
         {
-            inspection = await repoInspector.InspectAsync(request.RepoId, request.Revision, request.Token, ct).ConfigureAwait(false);
+            inspection = acquisition is not null
+                ? HuggingFaceRepoInspector.BuildInspection(request.RepoId, request.Revision,
+                    acquisition.Snapshot.Files.Select(f => new RepoFile(f.Path, f.Size)).ToList())
+                : await repoInspector.InspectAsync(request.RepoId, request.Revision, request.Token, ct).ConfigureAwait(false);
         }
         catch (HuggingFaceApiException ex)
         {
@@ -410,14 +505,32 @@ public sealed class AgentDownloadService(
 
         long total = matched.Sum(f => f.Bytes);
         long present = location.Exists && location.ResolvedPath is { } existing ? ModelRootPaths.SizeOf(existing) : 0;
-        if (!location.Exists && downloader is NativeDownloadService)
+        bool stagedHelper = downloader is HuggingFaceDownloader && (request.RequireVerified || acquisition is { Origin.IsOfficial: false });
+        if (stagedHelper || !location.Exists && downloader is NativeDownloadService)
         {
             // The native downloader resumes into {folder}.partial (MN-213): its bytes are already on the disk (MN-219).
-            // Only on that path (the container helper writes the folder itself), and never through a link.
             var partial = new DirectoryInfo(System.IO.Path.Combine(paths.Root, request.Folder + NativeDownloadService.PartialSuffix));
-            if (partial.Exists && !ModelRootPaths.IsLink(partial))
+            bool usablePartial = partial.Exists && !ModelRootPaths.IsLink(partial);
+            if (stagedHelper)
             {
-                present = ModelRootPaths.SizeOf(partial.FullName);
+                present = acquisition!.Snapshot.Files.Where(file => RepoPathRules.Check(file.Path) is null &&
+                    HuggingFacePatterns.MatchesAny(file.Path, patterns)).Sum(file =>
+                {
+                    // The helper verifies each same-sized destination file before it can reuse it.
+                    if (location is { Exists: true, ResolvedPath: { } destination } &&
+                        (file.LfsSha256 is not null || file.BlobSha1 is not null) &&
+                        new FileInfo(Path.Combine(destination, file.Path)) is { Exists: true } candidate && candidate.Length == file.Size)
+                    {
+                        return file.Size;
+                    }
+
+                    return usablePartial && new FileInfo(Path.Combine(partial.FullName, file.Path)) is { Exists: true } staged
+                        ? Math.Min(staged.Length, file.Size) : 0;
+                });
+            }
+            else
+            {
+                present = usablePartial ? ModelRootPaths.SizeOf(partial.FullName) : 0;
             }
         }
 

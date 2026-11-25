@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Core;
+using MirbadLLM.NodeRuntime.Downloads.Native;
 using MirbadLLM.Orchestration.Agents;
 using MirbadLLM.Orchestration.Audit;
 using MirbadLLM.Orchestration.Benchmarking;
@@ -73,6 +74,7 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddMirbadLLMOrchestration(this IServiceCollection services, IConfiguration configuration)
     {
+        _ = (configuration.GetSection($"{MirbadLLMOptions.SectionName}:HuggingFace").Get<HuggingFaceOptions>() ?? new()).Resolve();
         services.AddOptions<MirbadLLMOptions>()
             .Bind(configuration.GetSection(MirbadLLMOptions.SectionName));
 
@@ -141,14 +143,18 @@ public static class ServiceCollectionExtensions
         services.AddRemoteTelemetry();
 
         // Model sourcing on the bootstrap node (P1 has one node): downloads, folders and the vLLM catalog through its agent.
-        services.AddHttpClient(HuggingFaceHttpClientName, client =>
-        {
-            client.BaseAddress = new Uri("https://huggingface.co/");
-        });
+        services.AddHttpClient(HuggingFaceHttpClientName, client => client.BaseAddress = HubOrigin.OfficialEndpoint)
+            .ConfigurePrimaryHttpMessageHandler(HubHttpClients.PublicHandler);
+        services.AddSingleton(sp => new HubHttpClients(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(HuggingFaceHttpClientName),
+            () => sp.GetRequiredService<IMasterTrustAnchors>().AnchorPems));
         services.AddSingleton<IHuggingFaceDownloader>(sp => new RemoteHuggingFaceDownloader(
             BootstrapNodeId(sp), sp.GetRequiredService<IAgentClientFactory>(), sp.GetRequiredService<AgentOperationRunner>()));
-        services.AddSingleton<IHuggingFaceRepoInspector>(sp => new HuggingFaceRepoInspector(
-            sp.GetRequiredService<IHttpClientFactory>().CreateClient(HuggingFaceHttpClientName)));
+        services.AddSingleton<IHuggingFaceRepoInspector>(sp =>
+        {
+            var hub = sp.GetRequiredService<HubHttpClients>();
+            return new HuggingFaceRepoInspector(hub.Official, hub, sp.GetRequiredService<IOptions<MirbadLLMOptions>>().Value.HuggingFace.Resolve());
+        });
         services.AddSingleton(sp => new RemoteModelFolders(
             sp.GetRequiredService<IAgentClientFactory>(), sp.GetRequiredService<AgentOperationRunner>(), sp.GetRequiredService<IModelRegistry>()));
         services.AddSingleton(sp => new RemoteVllmCatalogService(
@@ -253,7 +259,8 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<IAgentOperationReferenceStore>(),
             sp.GetRequiredService<INodeRegistry>(),
             sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<ILogger<AgentOperationRunner>>()));
+            sp.GetRequiredService<ILogger<AgentOperationRunner>>(),
+            sp.GetRequiredService<IOptions<MirbadLLMOptions>>().Value.HuggingFace));
 
         services.AddSingleton(sp =>
         {

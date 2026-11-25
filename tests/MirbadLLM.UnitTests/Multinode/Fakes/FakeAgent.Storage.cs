@@ -16,6 +16,18 @@ internal sealed partial class FakeAgent
     private readonly Dictionary<string, FakeFolder> _folders = new(StringComparer.Ordinal);
     private readonly Dictionary<string, FakeDownload> _downloads = new(StringComparer.Ordinal);
     private readonly List<string?> _downloadTokens = [];
+    private readonly List<(string? Endpoint, HubTrust? Trust)> _downloadOrigins = [];
+
+    public IReadOnlyList<(string? Endpoint, HubTrust? Trust)> DownloadOrigins
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _downloadOrigins];
+            }
+        }
+    }
     private readonly Dictionary<(string Folder, string File), GgufSummary> _gguf = new();
 
     /// <summary>Approves an image digest on the node (agent.json, design §10.3).</summary>
@@ -299,6 +311,7 @@ internal sealed partial class FakeAgent
 
             var op = AcceptLocked(call);
             _downloadTokens.Add(request.Token);
+            _downloadOrigins.Add((request.FleetHubEndpoint, request.FleetHubTrust));
             var download = new FakeDownload(op, CreatedFolder: !exists)
             {
                 Status = new NodeDownloadStatus

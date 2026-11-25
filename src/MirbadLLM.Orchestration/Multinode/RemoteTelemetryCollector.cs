@@ -468,10 +468,45 @@ public sealed partial class RemoteTelemetryCollector(
         {
             var samples = PrometheusText.Parse(text);
             var previous = cursor.Baselines.GetValueOrDefault(modelId);
+            if (previous?.Instance != scrape.RuntimeInstance)
+            {
+                previous = null;
+            }
+
             double elapsedSeconds = previous is null ? 0 : (scrape.At - previous.At).TotalSeconds;
             var kpis = ModelKpiCalculator.Compute(samples, previous?.Samples, elapsedSeconds);
-            cursor.Baselines[modelId] = new Baseline(samples, scrape.At);
-            history.AddModel(modelId, new ModelSample(sampleAt, kpis) { HasRates = previous is not null && elapsedSeconds > 0 });
+            double? completedRate = null;
+            if (ModelKpiCalculator.IsLlamaCpp(samples))
+            {
+                completedRate = kpis.Load.GenerationTokensPerSecond;
+                double displayRate = completedRate.Value;
+                if (scrape.LlamaDecodedTokens is { } decoded)
+                {
+                    displayRate = previous?.DecodedTokens is { } prior && decoded >= prior && elapsedSeconds > 0
+                        ? (decoded - prior) / elapsedSeconds
+                        : double.NaN;
+                }
+                else if (previous?.DecodedTokens is not null || previous is null)
+                {
+                    displayRate = double.NaN;
+                }
+
+                kpis = kpis with
+                {
+                    Load = kpis.Load with
+                    {
+                        GenerationTokensPerSecond = displayRate,
+                        GenerationRateOnCompletion = scrape.LlamaDecodedTokens is null,
+                    },
+                };
+            }
+
+            cursor.Baselines[modelId] = new Baseline(samples, scrape.At, scrape.RuntimeInstance, scrape.LlamaDecodedTokens);
+            history.AddModel(modelId, new ModelSample(sampleAt, kpis)
+            {
+                HasRates = previous is not null && elapsedSeconds > 0,
+                CompletedGenerationTokensPerSecond = completedRate,
+            });
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -502,7 +537,7 @@ public sealed partial class RemoteTelemetryCollector(
     private static partial void LogScrapeFailed(ILogger logger, string modelId, string reason);
 
     /// <summary>A model's previous scrape: the rate baseline for the next one.</summary>
-    private sealed record Baseline(IReadOnlyList<PrometheusSample> Samples, DateTimeOffset At);
+    private sealed record Baseline(IReadOnlyList<PrometheusSample> Samples, DateTimeOffset At, string? Instance, long? DecodedTokens);
 
     /// <summary>Per-node pull state. Touched only inside a pass (passes do not overlap).</summary>
     private sealed class NodeCursor

@@ -107,6 +107,23 @@ public interface IAgentClient
     /// <summary><see cref="AgentRoutes.DownloadCancel"/>.</summary>
     Task<OperationStatus> CancelDownloadAsync(string folder, DownloadCancelRequest request, CancellationToken ct = default);
 
+    Task<MoveTransferStatus> OpenTransferAsync(MoveTransferOpenRequest request, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<MoveTransferStatus?> GetTransferAsync(string id, CancellationToken ct = default) => throw new NotSupportedException();
+
+    Task<MoveTransferLease> LeaseTransferAsync(string id, MoveTransferActionRequest request, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<MoveFolderManifest> GetTransferManifestAsync(string id, string grant, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<MoveTransferStatus> FinishTransferAsync(string id, MoveTransferActionRequest request, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
+    Task<MoveTransferStatus> CancelTransferAsync(string id, MoveTransferActionRequest request, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+
     // ---- Operations ----
 
     /// <summary><see cref="AgentRoutes.OperationGet"/>; null when the agent does not know the id.</summary>
@@ -203,6 +220,12 @@ public interface IAgentDataClient
 {
     /// <summary>Node id.</summary>
     string NodeId { get; }
+
+    Task<HttpResponseMessage> ReadTransferRangeAsync(string id, string grant, int index, long from, long inclusiveEnd, string sha256,
+        CancellationToken ct = default) => throw new NotSupportedException();
+
+    Task<MoveTransferStatus> WriteTransferRangeAsync(string id, string grant, int index, long from, long inclusiveEnd, long total,
+        string manifestId, HttpContent content, CancellationToken ct = default) => throw new NotSupportedException();
 
     /// <summary>
     /// The absolute proxy URI for a model: <c>https://{agent}/agent/v1/proxy/{modelId}/{pathAndQuery}</c>, e.g.

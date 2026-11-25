@@ -47,6 +47,7 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
     public const string PartialSuffix = ".partial";
 
     private readonly NativeSnapshotDownloader _engine;
+    private readonly HubHttpClients? _hubClients;
     private readonly ModelRootPaths _paths;
     private readonly IDiskSpaceProbe _disk;
     private readonly AgentStorageOptions _storage;
@@ -79,8 +80,9 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
         IOptions<AgentStorageOptions> storage,
         TimeProvider time,
         ILogger<NativeDownloadService> logger,
-        NativeDownloadOptions? options = null)
-        : this(huggingFaceHttp, paths, disk, storage, time, logger, options, openWrite: null)
+        NativeDownloadOptions? options = null,
+        HubHttpClients? hubClients = null)
+        : this(huggingFaceHttp, paths, disk, storage, time, logger, options, openWrite: null, hubClients)
     {
     }
 
@@ -93,7 +95,8 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
         TimeProvider time,
         ILogger<NativeDownloadService> logger,
         NativeDownloadOptions? options,
-        Func<string, Stream>? openWrite)
+        Func<string, Stream>? openWrite,
+        HubHttpClients? hubClients = null)
     {
         ArgumentNullException.ThrowIfNull(huggingFaceHttp);
         ArgumentNullException.ThrowIfNull(paths);
@@ -106,12 +109,16 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
         _storage = storage.Value;
         _time = time;
         _logger = logger;
-        _engine = new NativeSnapshotDownloader(huggingFaceHttp, options, time, logger, openWrite);
+        _hubClients = hubClients;
+        _engine = new NativeSnapshotDownloader(huggingFaceHttp, options, time, logger, openWrite, hubClients);
     }
 
     /// <inheritdoc />
     /// <exception cref="AgentException">Invalid request, folder exists, insufficient disk, Hub unreachable.</exception>
-    public async Task<DownloadStatus> StartAsync(DownloadRequest request, CancellationToken ct = default)
+    public Task<DownloadStatus> StartAsync(DownloadRequest request, CancellationToken ct = default) =>
+        StartAsync(request, null, ct);
+
+    internal async Task<DownloadStatus> StartAsync(DownloadRequest request, HubAcquisition? acquisition, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (string.IsNullOrWhiteSpace(request.RepoId))
@@ -166,7 +173,7 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
                 throw new InvalidOperationException($"A download for '{folder}' is already in progress.");
             }
 
-            var job = await PlanAsync(folder, request, patterns, token, ct).ConfigureAwait(false);
+            var job = await PlanAsync(folder, request, patterns, token, acquisition, ct).ConfigureAwait(false);
             var entry = new Entry(folder, request.RepoId, request.Revision, job.Manifest.TotalBytes, job.Manifest.PresentBytes(job.WorkDirectory));
             NativeDownloadServiceLog.Started(_logger, folder, request.RepoId, job.Manifest.CommitSha, job.Manifest.Files.Count, token is not null);
             var accepted = entry.Status(_time); // Queued: taken before the run can move it on
@@ -338,7 +345,7 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
             : null;
     }
 
-    private async Task<NativeDownloadJob> PlanAsync(string folder, DownloadRequest request, IReadOnlyList<string> patterns, string? token, CancellationToken ct)
+    private async Task<NativeDownloadJob> PlanAsync(string folder, DownloadRequest request, IReadOnlyList<string> patterns, string? token, HubAcquisition? acquisition, CancellationToken ct)
     {
         var final = _paths.Locate(folder);
         if (final.IsLink)
@@ -347,10 +354,11 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
         }
 
         bool complete = final.Exists;
+        bool lan = acquisition is { Origin.IsOfficial: false };
         string work = final.Path;
         string? finalDirectory = null;
         string workName = folder;
-        if (!complete)
+        if (!complete || lan)
         {
             workName = folder + PartialSuffix;
             var partial = _paths.Locate(workName);
@@ -377,14 +385,14 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
             {
-                if (!complete)
+                if (finalDirectory is not null)
                 {
                     throw StorageErrors.Create(ErrorCodes.FolderExists,
                         $"'{workName}' has a download manifest this agent cannot read ({ex.Message}); delete '{workName}' to start over.");
                 }
             }
 
-            if (!complete && previous is null)
+            if (finalDirectory is not null && previous is null)
             {
                 throw StorageErrors.Create(ErrorCodes.FolderExists,
                     $"'{workName}' exists but has no download manifest; delete it to start over.");
@@ -397,16 +405,27 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
                 $"'{workName}' holds a download of '{previous.RepoId}', not '{request.RepoId}'; delete it or choose another folder.");
         }
 
+        if (complete && lan && previous is null)
+        {
+            previous = DownloadManifest.TryRead(final.Path);
+            if (previous is not null && (previous.Source != ModelSourceKind.HuggingFace ||
+                !string.Equals(previous.RepoId, request.RepoId, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw StorageErrors.Create(ErrorCodes.FolderExists, $"'{folder}' belongs to a different repo.");
+            }
+        }
+
         var now = _time.GetUtcNow();
         DownloadManifest manifest;
-        if (previous is not null && previous.Revision == request.Revision && SamePatterns(previous.AllowPatterns, patterns))
+        if (acquisition is null && previous is { HubEndpoint: null } && previous.Revision == request.Revision &&
+            SamePatterns(previous.AllowPatterns, patterns))
         {
             // Resume of the same request: the pinned commit and file list come from the manifest (no Hub call).
             manifest = previous with { Authenticated = token is not null, State = DownloadManifestState.Downloading, UpdatedAt = now };
         }
         else
         {
-            var snapshot = await GetSnapshotAsync(request, token, ct).ConfigureAwait(false);
+            var snapshot = acquisition?.Snapshot ?? await GetSnapshotAsync(request, token, ct).ConfigureAwait(false);
             if (previous is not null && !string.Equals(previous.CommitSha, snapshot.CommitSha, StringComparison.Ordinal))
             {
                 throw StorageErrors.Create(ErrorCodes.FolderExists, string.Create(CultureInfo.InvariantCulture,
@@ -429,13 +448,19 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
             }
         }
 
-        if (complete)
+        var origin = acquisition?.Origin ?? request.Hub;
+        if (origin is { IsOfficial: false })
+        {
+            manifest = manifest with { HubEndpoint = origin.Endpoint.AbsoluteUri, HubTrust = origin.Trust, MergeIntoExisting = complete };
+        }
+
+        if (complete || manifest.HubEndpoint is not null)
         {
             // existing: complete — verify every file against the listing, fetch only what is missing or wrong.
             manifest = manifest with { Files = manifest.Files.Select(f => f with { State = DownloadFileState.Pending }).ToList() };
         }
 
-        CheckDisk(manifest, work);
+        CheckDisk(manifest, work, manifest.MergeIntoExisting ? final.Path : null);
         try
         {
             Directory.CreateDirectory(work);
@@ -446,7 +471,7 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
             throw StorageErrors.Create(ErrorCodes.InternalError, $"The download manifest of '{workName}' could not be written: {ex.Message}");
         }
 
-        return new NativeDownloadJob(folder, work, finalDirectory, manifest, token);
+        return new NativeDownloadJob(folder, work, finalDirectory, manifest, token) { Acquisition = acquisition };
     }
 
     private async Task<HubSnapshot> GetSnapshotAsync(DownloadRequest request, string? token, CancellationToken ct)
@@ -470,11 +495,18 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
         }
     }
 
-    private void CheckDisk(DownloadManifest manifest, string work)
+    private void CheckDisk(DownloadManifest manifest, string work, string? mergeDestination)
     {
         long remaining = 0;
         foreach (var file in manifest.Files)
         {
+            if (mergeDestination is not null && file.Digest() is not null &&
+                new FileInfo(Path.Combine(mergeDestination, file.Path)) is { Exists: true } existing && existing.Length == file.Size)
+            {
+                // Existing files of this size will either verify or cause a conflict before replacement.
+                continue;
+            }
+
             var info = new FileInfo(Path.Combine(work, Path.Combine(file.Path.Split('/'))));
             long present = info.Exists ? Math.Min(info.Length, file.Size) : 0;
             remaining += file.Size - present;
@@ -501,6 +533,26 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
         try
         {
             entry.State = DownloadState.Downloading;
+            if (job.Acquisition is null && job.Manifest.HubEndpoint is { } endpoint && _hubClients is not null)
+            {
+                var manifest = job.Manifest;
+                var request = new DownloadRequest(manifest.RepoId, manifest.Revision, token, job.Folder, manifest.AllowPatterns)
+                    { Hub = HubOrigin.Parse(endpoint, manifest.HubTrust) };
+                job.Acquisition = await HubAcquisition.PrepareAsync(
+                    _hubClients, request, manifest.AllowPatterns, manifest.CommitSha, entry.Cancellation.Token).ConfigureAwait(false);
+                var refreshed = NativeSnapshotDownloader.BuildManifest(job.Acquisition.Snapshot, manifest.Revision,
+                    manifest.AllowPatterns, manifest.Authenticated, null, _time.GetUtcNow()) with
+                {
+                    HubEndpoint = manifest.HubEndpoint, HubTrust = manifest.HubTrust, CreatedAt = manifest.CreatedAt,
+                    MergeIntoExisting = manifest.MergeIntoExisting,
+                };
+                refreshed.Write(job.WorkDirectory);
+                var acquisition = job.Acquisition;
+                job.ForgetToken();
+                job = new NativeDownloadJob(job.Folder, job.WorkDirectory, job.FinalDirectory, refreshed, token)
+                    { Acquisition = acquisition };
+            }
+
             await _engine.RunAsync(job, bytes => entry.Bytes = bytes, entry.Cancellation.Token).ConfigureAwait(false);
             entry.Finish(DownloadState.Completed, null, entry.Total);
             NativeDownloadServiceLog.Finished(_logger, entry.Folder, DownloadState.Completed);
@@ -609,7 +661,7 @@ public sealed partial class NativeDownloadService : IHuggingFaceDownloader, IAsy
         }
 
         if (DownloadManifest.TryRead(directory) is not { Source: ModelSourceKind.HuggingFace } manifest ||
-            manifest.State is not (DownloadManifestState.Downloading or DownloadManifestState.Paused))
+            manifest.ContainerHelper || manifest.State is not (DownloadManifestState.Downloading or DownloadManifestState.Paused))
         {
             return;
         }

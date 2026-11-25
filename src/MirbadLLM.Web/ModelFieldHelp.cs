@@ -347,8 +347,8 @@ public static class ModelFieldHelp
 
     public static readonly FieldHelpText MoveTarget = new(
         What: "The node the model moves to. Only online nodes that are not draining can take it.",
-        Why: "A move downloads the checkpoint again on the target from the model's Hugging Face sources while the model keeps " +
-             "serving here, then stops it here, switches the placement and starts it there.",
+        Why: "The target verifies every required checkpoint folder. It can reuse matching files, copy from the current node " +
+             "or use pinned Hugging Face sources. The model keeps serving here until verification finishes.",
         Example: "pc-office, to free the DGX's memory for a larger model.");
 
     public static readonly FieldHelpText MoveToken = new(

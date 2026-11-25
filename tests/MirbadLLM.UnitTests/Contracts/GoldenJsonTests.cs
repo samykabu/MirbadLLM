@@ -170,6 +170,7 @@ public sealed class GoldenJsonTests
     private static Dictionary<string, Type> BuildTypeMap()
     {
         var map = AgentRoutes.DtoTypes.ToDictionary(t => t.Name, StringComparer.Ordinal);
+        map["DownloadStartRequest.fleet"] = typeof(DownloadStartRequest);
         foreach (var type in typeof(AgentRoutes).Assembly.GetExportedTypes().Concat(typeof(MirbadLLM.Core.ModelDefinition).Assembly.GetExportedTypes()))
         {
             if (type is { IsClass: true, IsAbstract: false, IsGenericTypeDefinition: false } && !map.ContainsKey(type.Name))

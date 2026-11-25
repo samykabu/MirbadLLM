@@ -253,13 +253,13 @@
         <p data-testid="move-consequence">
             @if (SourceId is null)
             {
-                <span>MirbadLLM downloads the checkpoint on the node you pick from the model's Hugging Face sources, then places
-                    @Model.ServedName there. It is not started.</span>
+                <span>MirbadLLM verifies the checkpoint from the model's Hugging Face sources on the node you pick, then
+                    places @Model.ServedName there in the stopped state.</span>
             }
             else
             {
-                <span>MirbadLLM downloads the checkpoint again on the node you pick, from the model's Hugging Face sources, while
-                    @Model.ServedName keeps serving on @SourceId.</span>
+                <span>MirbadLLM verifies the checkpoint on the node you pick. It reuses matching files and can copy from
+                    @SourceId or use the model's Hugging Face sources while @Model.ServedName keeps serving on @SourceId.</span>
                 @if (Running)
                 {
                     <span> Then it stops it on @SourceId, switches the placement and starts it there: clients get 503 until it is Ready
@@ -492,7 +492,28 @@
                     double pct = MoveProgress.Percent(download);
                     <li class="download" data-testid="@($"move-download-{download.Folder}")">
                         <div class="download-head">
-                            <span><code>@download.RepoId</code> → <code>@download.Folder</code></span>
+                            <span>
+                                @if (download.RepoId.Length > 0)
+                                {
+                                    <code>@download.RepoId</code><text> → </text>
+                                }
+                                <code>@download.Folder</code>
+                                @switch (download.Route)
+                                {
+                                    case "source":
+                                        <text> from @download.SourceNodeId</text>
+                                        break;
+                                    case "existing":
+                                        <text> verified on target</text>
+                                        break;
+                                    case "mirror":
+                                        <text> via mirror</text>
+                                        break;
+                                    case "hub":
+                                        <text> via Hugging Face</text>
+                                        break;
+                                }
+                            </span>
                             <span class="num muted" data-testid="move-download-bytes">
                                 @UiFormat.Bytes(download.BytesDownloaded) of @(download.TotalBytes > 0 ? UiFormat.Bytes(download.TotalBytes) : "unknown size")
                             </span>

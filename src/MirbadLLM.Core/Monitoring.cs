@@ -106,6 +106,10 @@ public sealed record ModelSample(DateTimeOffset At, ModelKpis Kpis)
     /// per-second rates (tokens, requests) are not measurements and a chart shows a gap, not a zero.
     /// </summary>
     public bool HasRates { get; init; } = true;
+
+    /// <summary>Generation rate from completed counters for accounting, when different from the display rate.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? CompletedGenerationTokensPerSecond { get; init; }
 }
 
 public interface IGpuProbe

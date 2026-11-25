@@ -1,11 +1,13 @@
 using System.Net;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.Extensions.Options;
 using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Core;
 using MirbadLLM.Orchestration;
 using MirbadLLM.Web.Enrollment;
+using MirbadLLM.Web.HubMirror;
 
 namespace MirbadLLM.Web;
 
@@ -29,18 +31,67 @@ public static partial class MasterHosting
     public static void AddEnrollListener(WebApplicationBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
+        var mirror = builder.Configuration.GetSection(HubMirrorOptions.SectionName).Get<HubMirrorOptions>() ?? new();
+        if (mirror.Enabled)
+        {
+            if (mirror.Port is <= 0 or > 65535 || mirror.ModelsRoot is not { } modelsRoot || !Path.IsPathFullyQualified(modelsRoot))
+            {
+                throw new InvalidOperationException("HubMirror needs a valid listener port and an absolute ModelsRoot.");
+            }
+
+            builder.Services.AddSingleton(sp => new HubMirrorCatalog(modelsRoot,
+                sp.GetRequiredService<IModelRegistry>(), ServiceCollectionExtensions.BootstrapNodeId(sp)));
+            builder.Services.AddSingleton<HubMirrorEndpoints>();
+        }
+
         builder.WebHost.ConfigureKestrel((context, kestrel) =>
         {
             var enrollment = context.Configuration.GetSection(EnrollmentOptions.SectionName).Get<EnrollmentOptions>() ?? new EnrollmentOptions();
-            if (enrollment.Port <= 0)
+            if (enrollment.Port <= 0 && !mirror.Enabled)
             {
                 return;
             }
 
             string addresses = ListenOnConfiguredUrls(kestrel, context.Configuration);
-            kestrel.ListenAnyIP(enrollment.Port, listen => kestrel.ApplicationServices.GetRequiredService<EnrollListenerTls>().ConfigureEndpoint(listen));
-            ILogger logger = kestrel.ApplicationServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(MasterHosting));
-            Log.ListenersConfigured(logger, addresses, enrollment.Port);
+            if (enrollment.Port > 0)
+            {
+                kestrel.ListenAnyIP(enrollment.Port, listen => kestrel.ApplicationServices.GetRequiredService<EnrollListenerTls>().ConfigureEndpoint(listen));
+                ILogger logger = kestrel.ApplicationServices.GetRequiredService<ILoggerFactory>().CreateLogger(typeof(MasterHosting));
+                Log.ListenersConfigured(logger, addresses, enrollment.Port);
+            }
+
+            if (mirror.Enabled)
+            {
+                var origin = kestrel.ApplicationServices.GetRequiredService<IOptions<MirbadLLMOptions>>().Value.HuggingFace.Resolve();
+                string host = origin.Endpoint.IdnHost.Trim('[', ']');
+                if (mirror.Port == enrollment.Port || origin.IsOfficial || origin.Trust != HubTrust.FleetCa ||
+                    !enrollment.EffectiveListenerAddresses.Contains(host, StringComparer.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        "HubMirror requires a separate port, a custom FleetCa Hub endpoint and its host in Enrollment:ListenerAddresses.");
+                }
+
+                var tls = kestrel.ApplicationServices.GetRequiredService<EnrollListenerTls>();
+                if (!tls.Certificate.MatchesHostname(host, allowWildcards: false, allowCommonName: false))
+                {
+                    throw new InvalidOperationException("The Hub mirror endpoint host is missing from the enroll server certificate SAN.");
+                }
+
+                kestrel.ListenAnyIP(mirror.Port, listen =>
+                {
+                    listen.Protocols = HttpProtocols.Http1AndHttp2;
+                    listen.Use(next => connection =>
+                    {
+                        connection.Items[HubMirrorEndpoints.ConnectionMarker] = true;
+                        return next(connection);
+                    });
+                    listen.UseHttps(new TlsHandshakeCallbackOptions
+                    {
+                        HandshakeTimeout = EnrollListenerTls.HandshakeTimeout,
+                        OnConnection = _ => ValueTask.FromResult(tls.CreateServerOptions()),
+                    });
+                });
+            }
         });
     }
 

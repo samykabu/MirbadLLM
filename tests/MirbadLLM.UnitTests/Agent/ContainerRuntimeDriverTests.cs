@@ -254,6 +254,26 @@ public sealed class ContainerRuntimeDriverTests
     }
 
     [Fact]
+    public async Task ReadyLlamaCppUsesTheProcessStartTimeAcrossRestartsOfTheSameContainer()
+    {
+        var h = new Harness();
+        var labels = Labels("m1");
+        labels[ContainerLabels.Runtime] = "llamacpp";
+        h.Docker.Add("container-m1", "m1", "running", labels);
+        var container = Assert.Single(h.Docker.Containers);
+        container.StartedAt = Created.AddSeconds(10);
+        var first = Assert.Single(await h.Driver.ListAsync());
+        container.StartedAt = Created.AddSeconds(50);
+        var restarted = await h.Driver.GetAsync("m1");
+
+        Assert.Equal(ModelState.Ready, first.State);
+        Assert.Equal(RuntimeKind.LlamaCpp, first.Runtime);
+        Assert.Equal(first.InstanceId, restarted!.InstanceId);
+        Assert.Equal(Created.AddSeconds(10), first.Since);
+        Assert.Equal(Created.AddSeconds(50), restarted.Since);
+    }
+
+    [Fact]
     public async Task Get_RunningButUnhealthyAfterRestart_IsFailedAndStopped()
     {
         // Docker's restart policy hid the crash: the container is "running" again, but it has restarted before.
@@ -1026,6 +1046,8 @@ public sealed class ContainerRuntimeDriverTests
         public IReadOnlyList<string> Cmd { get; init; } = [];
 
         public int RestartCount { get; init; }
+
+        public DateTimeOffset? StartedAt { get; set; }
     }
 
     /// <summary>A small stateful Docker Engine behind <see cref="FakeHttpMessageHandler"/>: containers, images, logs.</summary>
@@ -1124,7 +1146,7 @@ public sealed class ContainerRuntimeDriverTests
                         return Json(JsonSerializer.Serialize(new
                         {
                             container.RestartCount,
-                            State = new { ExitCode = 0, OOMKilled = false },
+                            State = new { ExitCode = 0, OOMKilled = false, container.StartedAt },
                             Config = new { container.Image, container.Cmd },
                         }));
                     case ("GET", "logs"):

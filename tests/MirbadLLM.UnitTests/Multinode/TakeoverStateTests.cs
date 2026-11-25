@@ -352,10 +352,10 @@ public sealed class TakeoverStateTests
             return info;
         }
 
-        public static NodeCapabilities Capabilities() => new()
+        public NodeCapabilities Capabilities() => new()
         {
             Protocol = new ProtocolRange(Protocol.MinVersion, Protocol.CurrentVersion),
-            AgentVersion = "1.0.0",
+            AgentVersion = Version,
             Features = [.. AgentFeatures.P1],
             Os = new NodeOsInfo("linux", "Ubuntu 24.04 LTS"),
             Arch = "x86_64",
@@ -389,7 +389,7 @@ public sealed class TakeoverStateTests
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args) => targetMethod?.Name switch
         {
             nameof(IAgentClient.GetInfoAsync) => Target.InfoAsync(),
-            nameof(IAgentClient.GetCapabilitiesAsync) => Task.FromResult(Agent.Capabilities()),
+            nameof(IAgentClient.GetCapabilitiesAsync) => Task.FromResult(Target.Capabilities()),
             nameof(IAgentClient.GetStatusAsync) => Task.FromResult(Target.Status()),
             nameof(IAgentClient.NodeId) or "get_NodeId" => Node,
             _ => throw new NotSupportedException(targetMethod?.Name),

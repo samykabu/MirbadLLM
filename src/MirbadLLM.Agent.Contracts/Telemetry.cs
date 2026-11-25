@@ -120,6 +120,14 @@ public sealed record ModelMetricsScrape
     /// <summary>Filtered Prometheus text exposition. Null when the scrape failed.</summary>
     public string? Text { get; init; }
 
+    /// <summary>Completed plus active decoded tokens for a consistent llama.cpp scrape.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? LlamaDecodedTokens { get; init; }
+
+    /// <summary>Runtime identity for comparing consecutive llama.cpp scrapes.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RuntimeInstance { get; init; }
+
     /// <summary>Why the scrape failed. Null on success.</summary>
     public string? Error { get; init; }
 }

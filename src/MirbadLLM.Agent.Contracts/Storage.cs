@@ -132,6 +132,18 @@ public sealed record DownloadStartRequest : AgentMutation
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public OllamaSource? Ollama { get; init; }
 
+    /// <summary>Master default advertised to an endpoint-aware agent.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FleetHubEndpoint { get; init; }
+
+    /// <summary>Trust policy for the master default.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public HubTrust? FleetHubTrust { get; init; }
+
+    /// <summary>Use pinned file digests to verify completion, including any reused files.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RequireVerified { get; init; }
+
     /// <summary>Redacts <see cref="Token"/>.</summary>
     public override string ToString() =>
         $"DownloadStartRequest {{ OperationId = {OperationId}, RepoId = {RepoId}, Revision = {Revision}, Folder = {Folder}, Token = {(Token is null ? "null" : Protocol.RedactedValue)}, Existing = {Existing}, Source = {Source} }}";
@@ -190,3 +202,52 @@ public sealed record NodeDownloadStatus
 /// finished → Succeeded with its final state as the result.
 /// </summary>
 public sealed record DownloadCancelRequest : AgentMutation;
+
+/// <summary>Direction of an agent's role in a scoped checkpoint transfer.</summary>
+public enum MoveTransferRole { Export, Import }
+
+/// <summary>The verifier's progress in preparing, transferring and publishing one folder.</summary>
+public enum MoveTransferPhase { Preparing, Ready, Verifying, Completed, Failed, Cancelled }
+
+public sealed record MoveManifestFile(string Path, long Size, string Sha256)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GitBlobSha1 { get; init; }
+}
+
+/// <summary>Portable byte-level manifest identifying the complete payload of a checkpoint folder.</summary>
+public sealed record MoveFolderManifest(int Version, IReadOnlyList<MoveManifestFile> Files, string ManifestId)
+{
+    /// <summary>The transfer identity depends on file paths, sizes and SHA-256 values, including across agent versions.</summary>
+    public static string IdFor(IReadOnlyList<MoveManifestFile> files) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            OperationPayload.Canonicalize(AgentJson.ToElement(new
+            {
+                version = 1,
+                files = files.Select(file => new { file.Path, file.Size, file.Sha256 }),
+            }))));
+}
+
+public sealed record MoveTransferOpenRequest : AgentMutation
+{
+    public required string MoveId { get; init; }
+    public required MoveTransferRole Role { get; init; }
+    public required string SourceUid { get; init; }
+    public required string TargetUid { get; init; }
+    public required string ModelId { get; init; }
+    public required long PlacementGeneration { get; init; }
+    public required string Folder { get; init; }
+    public string? ManifestId { get; init; }
+    public MoveFolderManifest? Manifest { get; init; }
+}
+
+public sealed record MoveTransferActionRequest : AgentMutation;
+
+public sealed record MoveTransferStatus(
+    string TransferId, string OperationId, MoveTransferRole Role, MoveTransferPhase Phase,
+    long BytesDownloaded, long TotalBytes, int? FileIndex = null, long? NextOffset = null, AgentError? Error = null);
+
+public sealed record MoveTransferLease(string Grant, DateTimeOffset ExpiresAt)
+{
+    public override string ToString() => $"MoveTransferLease {{ Grant = {Protocol.RedactedValue}, ExpiresAt = {ExpiresAt:O} }}";
+}
