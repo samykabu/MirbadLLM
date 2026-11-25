@@ -88,12 +88,14 @@ public sealed class LlamaCppKpiTests
             previous is null ? null : PrometheusText.Parse(MetricFamilyFilter.Filter(previous)),
             previous is null ? 0 : elapsedSeconds);
 
-    // The b12681 slot shape, reduced to the fields used by the sampler.
+    // The b12681 slot shape, reduced to the fields used by the sampler: two decoding slots, one finished slot whose
+    // tokens the counter absorbs only when the slot is reused, and one slot that never ran a task.
     internal const string B12681Slots = """
         [
           {"id":0,"is_processing":true,"id_task":8,"next_token":[{"has_next_token":true,"n_decoded":180}]},
           {"id":1,"is_processing":true,"id_task":9,"next_token":[{"has_next_token":true,"n_decoded":20}]},
-          {"id":2,"is_processing":false,"id_task":2,"next_token":[{"has_next_token":false,"n_decoded":999}]}
+          {"id":2,"is_processing":false,"id_task":2,"next_token":[{"has_next_token":false,"n_decoded":50}]},
+          {"id":3,"is_processing":false}
         ]
         """;
 
