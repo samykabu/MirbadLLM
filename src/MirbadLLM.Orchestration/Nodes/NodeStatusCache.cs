@@ -1266,7 +1266,10 @@ public sealed partial class NodeStatusCache : INodeStatusCache
             LastContact = entry.LastContact,
             BootId = entry.BootId,
             Seq = entry.Seq,
-            AgentVersion = entry.AgentVersion,
+            // A capabilities read can see the replacement agent after /info read the previous build.
+            AgentVersion = entry.Phase == NodePhase.Connected && entry.LastCapabilities is { } capabilities
+                ? capabilities.AgentVersion
+                : entry.AgentVersion,
             AgentProtocol = entry.AgentProtocol,
             SelectedProtocol = entry.SelectedProtocol,
             AcceptedMaster = entry.AcceptedMaster,

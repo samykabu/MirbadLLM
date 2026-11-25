@@ -521,6 +521,21 @@ public sealed class NodeMonitorTests
     }
 
     [Fact]
+    public async Task ConnectedNodeReportsTheVersionFromItsLatestCapabilities()
+    {
+        await using var env = await MonitorEnv.StartAsync();
+        var node = await env.WaitForAsync(n => n.State == NodeState.Online, "Online");
+        Assert.Equal("0.0.0-fake", node.AgentVersion);
+
+        const string newVersion = "1.0.0+abcdef012345";
+        Assert.True(env.Cache.UpdateCapabilities(MonitorEnv.NodeId, node.Capabilities! with { AgentVersion = newVersion }));
+
+        var refreshed = env.Cache.GetNode(MonitorEnv.NodeId)!;
+        Assert.Equal(newVersion, refreshed.AgentVersion);
+        Assert.Equal(node.BootId, refreshed.BootId);
+    }
+
+    [Fact]
     public async Task ARevokedNodeLeavesTheCache()
     {
         await using var env = await MonitorEnv.StartAsync();
