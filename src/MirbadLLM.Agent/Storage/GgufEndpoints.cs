@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Agent.Hosting;
 using MirbadLLM.NodeRuntime.Abstractions;
@@ -29,6 +30,9 @@ public static class GgufEndpoints
     public const string FileQuery = "file";
 
     private const string GgufExtension = ".gguf";
+
+    private static readonly Action<ILogger, string, string, string, Exception?> LogReadWarning =
+        LoggerMessage.Define<string, string, string>(LogLevel.Warning, new EventId(1, "GgufReadWarning"), "GGUF {Folder}/{File}: {Warning}");
 
     private static readonly StringComparison PathComparison =
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
@@ -63,6 +67,15 @@ public static class GgufEndpoints
         {
             var summary = await InspectAsync(reader, paths, folder, string.IsNullOrEmpty(file) ? null : file, http.RequestAborted)
                 .ConfigureAwait(false);
+            if (summary.Warnings is { Count: > 0 } warnings
+                && http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger(typeof(GgufEndpoints).FullName!) is { } logger)
+            {
+                foreach (string warning in warnings)
+                {
+                    LogReadWarning(logger, summary.Folder, summary.File, warning, null);
+                }
+            }
+
             return Results.Json(summary, AgentJson.Options, AgentJson.JsonContentType, StatusCodes.Status200OK);
         }
         catch (AgentException ex)

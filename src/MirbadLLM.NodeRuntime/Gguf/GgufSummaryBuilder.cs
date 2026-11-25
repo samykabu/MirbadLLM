@@ -69,7 +69,21 @@ internal static class GgufSummaryBuilder
             SplitCount = parts.Count,
             TensorBytes = parts.Sum(p => p.TensorBytes),
             FileBytes = parts.Sum(p => p.FileBytes),
+            Warnings = UnknownTypesWarning(parts) is { } warning ? [warning] : null,
         };
+    }
+
+    private static string? UnknownTypesWarning(IReadOnlyList<GgufHeader> parts)
+    {
+        long count = parts.Sum(p => p.UnknownTensorCount);
+        if (count == 0)
+        {
+            return null;
+        }
+
+        string types = string.Join(", ", parts.SelectMany(p => p.UnknownTensorTypes).Distinct().Order());
+        return string.Create(CultureInfo.InvariantCulture,
+            $"{count} tensor(s) use ggml type {types}, unknown to this reader; their sizes were taken from the tensor offsets.");
     }
 
     /// <summary>

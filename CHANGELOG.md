@@ -6,6 +6,7 @@ private development history.
 
 ## Unreleased
 
+- GGUF inspection reads files that use the newer ggml tensor types NVFP4, Q1_0, Q2_0 and F8_E4M3 (40 to 43), with sizes taken from upstream `type_traits`. A tensor type newer than that no longer fails the read: the metadata (template, context length and the rest) still comes back, the tensor's size is taken from the tensor offsets, and the summary carries a `warnings` entry that the agent also logs
 - Nodes: after a deploy, a node no longer reports its agent as "from another build" until the master restarts. The master restarts first and the agent seconds later, and when the agent restarted in the middle of the master's first check, the master kept the old agent's version
 - Agents sample every 2 seconds instead of 5, and the master pulls at the same pace, so the Overview's generation rate, chart and GPU strip are at most a couple of seconds old. The page now updates as soon as a sample arrives, where it used to wait for its own 5-second refresh, which could leave the number up to 10 seconds behind
 - Overview: the Signal panel's Errors count only requests that finished in the selected window (5, 15 or 60 min), where they used to count everything since the controller started, and hovering them gives the two numbers behind the share. Hovering Ready explains the count, for example "1 of 7 registered models is Ready", and the generation rate says it covers the last sample interval (5 s by default), not the chart window
