@@ -53,6 +53,29 @@ public sealed record ContentDigest
         return hash;
     }
 
+    /// <summary>Checks the full opened file, including the git blob prefix when applicable.</summary>
+    public async Task<bool> MatchesAsync(Stream file, CancellationToken ct)
+    {
+        using var hash = CreateHash();
+        byte[] buffer = System.Buffers.ArrayPool<byte>.Shared.Rent(128 * 1024);
+        try
+        {
+            file.Position = 0;
+            int count;
+            while ((count = await file.ReadAsync(buffer, ct).ConfigureAwait(false)) > 0)
+            {
+                hash.AppendData(buffer, 0, count);
+            }
+
+            return string.Equals(Convert.ToHexStringLower(hash.GetHashAndReset()), ExpectedHex, StringComparison.Ordinal);
+        }
+        finally
+        {
+            file.Position = 0;
+            System.Buffers.ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
     /// <summary>Short display form, e.g. <c>sha256:0123abcd…</c>.</summary>
     public override string ToString() => $"{Algorithm.Name!.ToLowerInvariant()}:{ExpectedHex[..Math.Min(12, ExpectedHex.Length)]}…";
 

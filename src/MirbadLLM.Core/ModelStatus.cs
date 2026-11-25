@@ -34,7 +34,12 @@ public sealed record ModelMetrics(
     double WaitingRequests,
     double KvCacheUsage,
     double GenerationTokensPerSecond,
-    double PromptTokensPerSecond);
+    double PromptTokensPerSecond)
+{
+    /// <summary>True when llama.cpp throughput updates on request completion.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool GenerationRateOnCompletion { get; init; }
+}
 
 /// <summary>Per-served-model counters kept by the router.</summary>
 public sealed record RouterModelStats(string ServedName, long TotalRequests, long FailedRequests, int InFlight);

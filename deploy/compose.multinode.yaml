@@ -15,6 +15,9 @@
 # the pre-rename volumes into this file's on the first deploy (docs/setup.md, "Upgrading from a pre-rename install").
 name: mirbadllm
 
+# To enable the optional LAN Hub mirror, add a Compose override on the master
+# with port 8444 and a read-only models bind. See docs/configuration.md#hugging-face-lan-mirror
+# for the override, fleet certificate SAN, and DNS setup.
 services:
   master:
     image: ${MIRBADLLM_IMAGE:-mirbadllm/controller:dev}

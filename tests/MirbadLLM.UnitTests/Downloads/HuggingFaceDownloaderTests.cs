@@ -5,6 +5,8 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MirbadLLM.Core;
+using MirbadLLM.NodeRuntime.Downloads.Native;
+using MirbadLLM.Pki;
 using MirbadLLM.Orchestration;
 using MirbadLLM.UnitTests.Orchestration.Fakes;
 
@@ -92,7 +94,105 @@ public sealed class HuggingFaceDownloaderTests : IDisposable
 
         var root = CreateBody(dockerHandler);
         Assert.False(root.TryGetProperty("User", out _));
-        Assert.Equal(["HF_HUB_ENABLE_HF_TRANSFER=0"], root.GetProperty("Env").EnumerateArray().Select(e => e.GetString()).ToList());
+        Assert.Equal(["HF_HUB_ENABLE_HF_TRANSFER=0", "HF_ENDPOINT=https://huggingface.co", "HF_HUB_DISABLE_IMPLICIT_TOKEN=1"],
+            root.GetProperty("Env").EnumerateArray().Select(e => e.GetString()).ToList());
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task MirrorHelper_UsesPinnedFilesAndDaemonCaBind_ThenVerifiesBeforeCompletion(bool corrupt, bool merge)
+    {
+        const string folder = "pinned";
+        const string repo = "org/repo";
+        string sha = new('a', 40);
+        var file = NativeDownloaderTests.FakeFile.Small("config.json", "pinned bytes");
+        var existing = NativeDownloaderTests.FakeFile.Small("existing.json", "verified reuse");
+        string destination = Path.Combine(_modelsRoot, folder);
+        var listed = new List<HubFile> { new(file.Path, file.Content.Length, null, file.BlobSha1), new("README.md", 10, null, null) };
+        if (merge)
+        {
+            Directory.CreateDirectory(destination);
+            await File.WriteAllBytesAsync(Path.Combine(destination, existing.Path), existing.Content);
+            listed.Add(new HubFile(existing.Path, existing.Content.Length, null, existing.BlobSha1));
+        }
+
+        var snapshot = new HubSnapshot(repo, sha, listed);
+        var origin = HubOrigin.Parse("https://models.lan:8444/", HubTrust.FleetCa);
+        string cache = Path.Combine(_modelsRoot, "cache");
+        using var ca = CertificateAuthority.Create();
+        using var official = new HttpClient(HfHandlerReturning(RepoInfoJson)) { BaseAddress = HubOrigin.OfficialEndpoint };
+        string containers = "[]";
+        var dockerHandler = DockerHandlerFor(request =>
+            request.RequestUri!.AbsolutePath.EndsWith("containers/json", StringComparison.Ordinal)
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(containers) }
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"Id":"job-1"}""") });
+        var downloader = new HuggingFaceDownloader(
+            new DockerEngineClient(new HttpClient(dockerHandler) { BaseAddress = new Uri("http://docker/v1.47/") }),
+            official, Options.Create(new MirbadLLMOptions { ModelsHostPath = "/daemon/models", CacheHostPath = "/daemon/cache" }),
+            Options.Create(new ModelStorageOptions { ModelsLocalPath = _modelsRoot }), NullLogger<HuggingFaceDownloader>.Instance,
+            "1654:1654", new HubHttpClients(official, () => [ca.Certificate.ExportCertificatePem()]), cache);
+        var started = await downloader.StartAsync(new DownloadRequest(repo, "main", Folder: folder, AllowPatterns: ["*.json"]),
+            new HubAcquisition(snapshot, origin, origin), CancellationToken.None);
+        Assert.Equal(merge ? existing.Content.Length : 0, started.BytesDownloaded);
+
+        var create = CreateBody(dockerHandler);
+        var env = create.GetProperty("Env").EnumerateArray().Select(element => element.GetString()!).ToList();
+        Assert.Contains("HF_ENDPOINT=https://models.lan:8444", env);
+        Assert.Contains("HF_HUB_DISABLE_XET=1", env);
+        Assert.Contains("SSL_CERT_FILE=/run/mirbad/hub-ca.pem", env);
+        Assert.Contains("REQUESTS_CA_BUNDLE=/run/mirbad/hub-ca.pem", env);
+        Assert.DoesNotContain(env, value => value.StartsWith("HF_TOKEN=", StringComparison.Ordinal));
+        var bundle = Assert.Single(Directory.GetFiles(cache, "*.pem"));
+        Assert.Equal(ca.Certificate.ExportCertificatePem(), await File.ReadAllTextAsync(bundle));
+        Assert.Contains($"/daemon/cache/{Path.GetFileName(bundle)}:/run/mirbad/hub-ca.pem:ro",
+            create.GetProperty("HostConfig").GetProperty("Binds").EnumerateArray().Select(entry => entry.GetString()));
+        Assert.Contains("/daemon/models/pinned.partial:/models/pinned.partial",
+            create.GetProperty("HostConfig").GetProperty("Binds").EnumerateArray().Select(entry => entry.GetString()));
+        var argv = create.GetProperty("Cmd").EnumerateArray().Select(entry => entry.GetString()).ToList();
+        Assert.Contains(sha, argv);
+        Assert.Contains("hf_hub_download", argv[1], StringComparison.Ordinal);
+        string stage = Path.Combine(_modelsRoot, "pinned.partial");
+        var stageFiles = DownloadManifest.TryRead(stage)!.Files;
+        Assert.Equal(file.Path, Assert.Single(stageFiles, item => item.State == DownloadFileState.Pending).Path);
+        Assert.Equal(merge, Directory.Exists(destination));
+        if (merge)
+        {
+            Assert.Equal(existing.Path, Assert.Single(stageFiles, item => item.State == DownloadFileState.Verified).Path);
+            Assert.False(File.Exists(Path.Combine(stage, existing.Path)));
+        }
+        var bytes = file.Content.ToArray();
+        if (corrupt)
+        {
+            bytes[^1] ^= 1;
+        }
+
+        await File.WriteAllBytesAsync(Path.Combine(stage, file.Path), bytes);
+        var labels = create.GetProperty("Labels").GetRawText();
+        containers = $$"""[{"Id":"job-1","State":"exited","Status":"Exited (0) a second ago","Labels":{{labels}}}]""";
+        var status = await downloader.GetAsync(folder);
+        Assert.False(File.Exists(bundle));
+        if (corrupt)
+        {
+            Assert.Equal(DownloadState.Downloading, status!.State);
+            Assert.False(Directory.Exists(Path.Combine(_modelsRoot, folder)));
+            int fallback = dockerHandler.Requests.FindLastIndex(request => request.RequestUri!.AbsolutePath.EndsWith("containers/create", StringComparison.Ordinal));
+            using var fallbackBody = JsonDocument.Parse(dockerHandler.RequestBodies[fallback]);
+            var fallbackEnv = fallbackBody.RootElement.GetProperty("Env").EnumerateArray().Select(element => element.GetString()!).ToList();
+            Assert.Contains("HF_ENDPOINT=https://huggingface.co", fallbackEnv);
+            Assert.DoesNotContain("SSL_CERT_FILE=/run/mirbad/hub-ca.pem", fallbackEnv);
+            return;
+        }
+
+        Assert.Equal(DownloadState.Completed, status!.State);
+        Assert.Equal(file.Content.Length + (merge ? existing.Content.Length : 0), status.BytesDownloaded);
+        Assert.Equal(file.Content, await File.ReadAllBytesAsync(Path.Combine(destination, file.Path)));
+        Assert.Equal(DownloadManifestState.Completed, DownloadManifest.TryRead(destination)!.State);
+        if (merge)
+        {
+            Assert.Equal(existing.Content, await File.ReadAllBytesAsync(Path.Combine(destination, existing.Path)));
+        }
     }
 
     private static FakeHttpMessageHandler HfHandlerReturning(string repoJson, HttpStatusCode status = HttpStatusCode.OK) => new()

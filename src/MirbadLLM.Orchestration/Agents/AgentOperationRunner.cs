@@ -39,13 +39,15 @@ public sealed class AgentOperationRunner
     private readonly INodeRegistry _nodes;
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
+    private readonly HuggingFaceOptions? _hub;
 
     public AgentOperationRunner(
         IAgentClientFactory clients,
         IAgentOperationReferenceStore store,
         INodeRegistry nodes,
         TimeProvider timeProvider,
-        ILogger<AgentOperationRunner>? logger = null)
+        ILogger<AgentOperationRunner>? logger = null,
+        HuggingFaceOptions? hub = null)
     {
         ArgumentNullException.ThrowIfNull(clients);
         ArgumentNullException.ThrowIfNull(store);
@@ -55,6 +57,7 @@ public sealed class AgentOperationRunner
         _store = store;
         _nodes = nodes;
         _time = timeProvider;
+        _hub = hub;
         _logger = (ILogger?)logger ?? NullLogger.Instance;
     }
 
@@ -64,6 +67,25 @@ public sealed class AgentOperationRunner
     /// answer to any caller (MN-028, MN-032, …) reaches the node state (W3 review MN-094). Must not throw.
     /// </summary>
     public Action<string, AgentException>? AgentErrorObserver { get; set; }
+
+    internal async Task<(DownloadStartRequest Request, string? Notice)> WithHubEndpointAsync(
+        string nodeId, DownloadStartRequest request, CancellationToken ct)
+    {
+        if (_hub?.Endpoint is null || !string.IsNullOrEmpty(request.Token))
+        {
+            return (request, null);
+        }
+
+        var origin = _hub.Resolve();
+        var capabilities = await _clients.GetClient(nodeId).GetCapabilitiesAsync(ct).ConfigureAwait(false);
+        if (!capabilities.Features.Contains(AgentFeatures.DownloadsHfEndpoint, StringComparer.Ordinal))
+        {
+            const string notice = "This agent version uses the official Hugging Face Hub and cannot select the fleet endpoint.";
+            return (request, notice);
+        }
+
+        return (request with { FleetHubEndpoint = origin.Endpoint.AbsoluteUri, FleetHubTrust = origin.Trust }, null);
+    }
 
     /// <summary>A new envelope (id, <c>issuedAt</c> now, <c>expiresAt</c> = +24 h).</summary>
     public AgentEnvelope CreateEnvelope() => AgentEnvelope.Create(_time);

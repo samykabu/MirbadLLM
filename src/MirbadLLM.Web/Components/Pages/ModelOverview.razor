@@ -56,7 +56,7 @@ else if (_model is not null)
             <dl class="overview-kpis" data-testid="overview-kpis">
                 <div>
                     <dt>Generation</dt>
-                    <dd><span class="num" data-testid="overview-tok-s">@UiFormat.Number(Load?.GenerationTokensPerSecond)</span> <span class="overview-unit">tok/s</span></dd>
+                    <dd><span class="num" data-testid="overview-tok-s" title="@(Load?.GenerationRateOnCompletion == true ? "Updates when requests complete" : "Live generation throughput")">@UiFormat.Number(Load?.GenerationTokensPerSecond)</span> <span class="overview-unit">tok/s</span></dd>
                 </div>
                 <div>
                     <dt><ColumnHelp Label="Run / wait" Key="run-wait" Scope="overview"

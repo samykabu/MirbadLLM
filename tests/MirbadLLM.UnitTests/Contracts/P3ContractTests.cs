@@ -56,6 +56,24 @@ public sealed class P3ContractTests
 
     public static TheoryData<string> P3FixtureFiles() => [.. P3Fixtures.Select(f => f.File)];
 
+    [Fact]
+    public void HubEndpointFields_AreAdditiveAndOnlyOnTheAgentContract()
+    {
+        string directory = FixturesPath();
+        var existing = JsonSerializer.Deserialize<DownloadStartRequest>(File.ReadAllText(Path.Combine(directory, "DownloadStartRequest.json")), WireStrict)!;
+        var fleet = JsonSerializer.Deserialize<DownloadStartRequest>(File.ReadAllText(Path.Combine(directory, "DownloadStartRequest.fleet.json")), WireStrict)!;
+        Assert.Null(existing.FleetHubEndpoint);
+        Assert.Null(existing.FleetHubTrust);
+        Assert.Equal("https://models.lan:8444/", fleet.FleetHubEndpoint);
+        Assert.Equal(HubTrust.FleetCa, fleet.FleetHubTrust);
+        var roundTrip = JsonSerializer.SerializeToNode(fleet, AgentJson.Options)!.AsObject();
+        Assert.Equal("https://models.lan:8444/", roundTrip["fleetHubEndpoint"]!.GetValue<string>());
+        Assert.Equal("fleetCa", roundTrip["fleetHubTrust"]!.GetValue<string>());
+        var request = JsonSerializer.Deserialize<DownloadRequest>(
+            """{"repoId":"a/b","hub":{"endpoint":"https://models.lan/","trust":"FleetCa"}}""", Api)!;
+        Assert.Null(request.Hub);
+    }
+
     // ---------------------------------------------------------------- golden fixtures
 
     [Theory]
@@ -276,7 +294,8 @@ public sealed class P3ContractTests
         Assert.Empty(AgentFeatures.MacOS.Intersect(AgentFeatures.P1.Concat(AgentFeatures.P2).Concat(AgentFeatures.P3), StringComparer.Ordinal));
         Assert.Equal(["runtime.mlx.process", "services.launchd"], AgentFeatures.MacOS);
         Assert.Equal(all.Order(StringComparer.Ordinal), AgentFeatures.P1.Concat(AgentFeatures.P2).Concat(AgentFeatures.P3)
-            .Concat(AgentFeatures.RuntimeExpansion).Concat(AgentFeatures.MacOS).Concat(AgentFeatures.Updates).Order(StringComparer.Ordinal));
+            .Concat(AgentFeatures.RuntimeExpansion).Concat(AgentFeatures.MacOS).Concat(AgentFeatures.Updates)
+            .Concat(AgentFeatures.HubDownloads).Order(StringComparer.Ordinal));
         Assert.Equal(
             ["admission.gpu-budgets", "downloads.hf-native", "downloads.ollama", "gguf.inspect", "runtime.llamacpp.process", "services.scm"],
             AgentFeatures.P3Reported.Order(StringComparer.Ordinal));

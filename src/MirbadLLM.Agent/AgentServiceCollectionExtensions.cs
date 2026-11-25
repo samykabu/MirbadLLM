@@ -94,7 +94,7 @@ public static class AgentServiceCollectionExtensions
     public const string UpstreamHttpClientName = "mirbadllm-agent.upstream";
 
     /// <summary>Named <see cref="HttpClient"/> of the Hugging Face Hub API (repo listing before a download).</summary>
-    public const string HuggingFaceHttpClientName = "mirbadllm-agent.huggingface";
+    public const string HuggingFaceHttpClientName = NativeDownloadHttpClientName;
 
     /// <summary>
     /// Named <see cref="HttpClient"/> the native downloader uses for the Hub and its CDN (design-p3p4 §A.8): a
@@ -478,7 +478,12 @@ public static class AgentServiceCollectionExtensions
     /// </summary>
     private static void AddDownloads(IServiceCollection services, AgentOptions options, DockerAvailability docker, bool nativeDownloads = false)
     {
-        services.AddHttpClient(HuggingFaceHttpClientName, client => client.BaseAddress = new Uri("https://huggingface.co/"));
+        services.AddHttpClient(HuggingFaceHttpClientName, client => client.BaseAddress = HubOrigin.OfficialEndpoint)
+            .ConfigurePrimaryHttpMessageHandler(HubHttpClients.PublicHandler);
+        services.TryAddSingleton(options.HuggingFace);
+        services.TryAddSingleton(sp => new HubHttpClients(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(HuggingFaceHttpClientName),
+            () => sp.GetRequiredService<IAgentCredentials>().TrustAnchors.Select(c => c.ExportCertificatePem()).ToList()));
         if (docker.Enabled && !nativeDownloads)
         {
             services.TryAddSingleton<IHuggingFaceDownloader>(sp => new HuggingFaceDownloader(
@@ -487,27 +492,27 @@ public static class AgentServiceCollectionExtensions
                 Options.Create(options.ToDownloaderOptions()),
                 Options.Create(options.ToModelStorageOptions()),
                 sp.GetRequiredService<ILogger<HuggingFaceDownloader>>(),
-                ResolveDownloadHelperUser(options, sp.GetRequiredService<ILogger<HuggingFaceDownloader>>())));
+                ResolveDownloadHelperUser(options, sp.GetRequiredService<ILogger<HuggingFaceDownloader>>()),
+                sp.GetRequiredService<HubHttpClients>(), options.CacheRoot));
         }
         else
         {
-            // AllowAutoRedirect = false: SecureDownloadTransport follows the Hub's redirect to its CDN itself, so every
-            // hop passes the HTTPS rule before it is requested and the token stays on the Hub's own origin (§A.8).
-            services.AddHttpClient(NativeDownloadHttpClientName, client => client.BaseAddress = new Uri("https://huggingface.co/"))
-                .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
             services.TryAddSingleton<NativeDownloadService>(sp => new NativeDownloadService(
                 sp.GetRequiredService<IHttpClientFactory>().CreateClient(NativeDownloadHttpClientName),
                 sp.GetRequiredService<ModelRootPaths>(),
                 sp.GetRequiredService<IDiskSpaceProbe>(),
                 sp.GetRequiredService<IOptions<AgentStorageOptions>>(),
                 sp.GetRequiredService<TimeProvider>(),
-                sp.GetRequiredService<ILogger<NativeDownloadService>>()));
+                sp.GetRequiredService<ILogger<NativeDownloadService>>(), hubClients: sp.GetRequiredService<HubHttpClients>()));
             services.TryAddSingleton<IHuggingFaceDownloader>(sp => sp.GetRequiredService<NativeDownloadService>());
             services.AddSingleton<ICapabilityContributor>(new NativeDownloadContributor());
         }
 
         services.TryAddSingleton<IHuggingFaceRepoInspector>(sp =>
-            new HuggingFaceRepoInspector(sp.GetRequiredService<IHttpClientFactory>().CreateClient(HuggingFaceHttpClientName)));
+        {
+            var clients = sp.GetRequiredService<HubHttpClients>();
+            return new HuggingFaceRepoInspector(clients.Official, clients);
+        });
     }
 
     /// <summary>

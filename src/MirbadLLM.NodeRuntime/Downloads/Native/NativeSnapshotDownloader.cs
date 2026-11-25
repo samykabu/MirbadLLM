@@ -37,6 +37,8 @@ public sealed class NativeDownloadJob
     /// <summary>Rename target, or null.</summary>
     public string? FinalDirectory { get; }
 
+    public HubAcquisition? Acquisition { get; set; }
+
     /// <summary>The current manifest (replaced as files are verified).</summary>
     public DownloadManifest Manifest { get; internal set; }
 
@@ -64,6 +66,7 @@ public sealed class NativeSnapshotDownloader
     private readonly TimeProvider _time;
     private readonly ILogger _logger;
     private readonly RangeDownloader _range;
+    private readonly HubHttpClients? _hubClients;
 
     /// <summary>Creates the engine.</summary>
     /// <param name="http">Client for the Hub and its CDN; its <see cref="HttpClient.BaseAddress"/> is the endpoint (default <c>https://huggingface.co/</c>).</param>
@@ -72,14 +75,16 @@ public sealed class NativeSnapshotDownloader
     /// <param name="logger">Logger; none when null.</param>
     /// <param name="openWrite">File opener (tests); <see cref="RangeDownloader.OpenFile"/> when null.</param>
     public NativeSnapshotDownloader(
-        HttpClient http, NativeDownloadOptions? options = null, TimeProvider? time = null, ILogger? logger = null, Func<string, Stream>? openWrite = null)
+        HttpClient http, NativeDownloadOptions? options = null, TimeProvider? time = null, ILogger? logger = null,
+        Func<string, Stream>? openWrite = null, HubHttpClients? hubClients = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         _options = options ?? new NativeDownloadOptions();
         _time = time ?? TimeProvider.System;
         _logger = logger ?? NullLogger.Instance;
-        var endpoint = http.BaseAddress ?? new Uri("https://huggingface.co/");
-        Transport = new SecureDownloadTransport(http, endpoint, _options);
+        _hubClients = hubClients;
+        var endpoint = http.BaseAddress ?? HubOrigin.OfficialEndpoint;
+        Transport = hubClients?.OfficialTransport(_options) ?? new SecureDownloadTransport(http, endpoint, _options);
         Hub = new HuggingFaceHubClient(Transport, endpoint);
         _range = new RangeDownloader(Transport, _time, openWrite);
     }
@@ -144,6 +149,11 @@ public sealed class NativeSnapshotDownloader
         }
 
         var manifest = job.Manifest;
+        bool lan = manifest.HubEndpoint is not null;
+        using var mirrorHttp = job.Acquisition?.Mirror is { } mirror ? _hubClients?.OpenMirror(mirror) : null;
+        var mirrorHub = mirrorHttp is null ? null : new HuggingFaceHubClient(mirrorHttp, mirror: true, _options);
+        var mirrorRange = mirrorHttp is null ? null : new RangeDownloader(
+            new SecureDownloadTransport(mirrorHttp, null, _options, uri => SecureDownloadTransport.SameOrigin(uri, mirrorHttp.BaseAddress)), _time);
         long[] lengths = manifest.Files.Select(f => PresentLength(job.WorkDirectory, f)).ToArray();
         void Report() => onProgress?.Invoke(lengths.Sum());
         Report();
@@ -151,10 +161,36 @@ public sealed class NativeSnapshotDownloader
         for (int i = 0; i < manifest.Files.Count; i++)
         {
             var file = manifest.Files[i];
+            if (manifest.MergeIntoExisting && job.FinalDirectory is { } existing &&
+                await MatchExistingAsync(existing, file, ct).ConfigureAwait(false))
+            {
+                lengths[i] = file.Size;
+                Report();
+                continue;
+            }
+
             string target = RepoPathRules.PrepareTarget(job.WorkDirectory, file.Path);
-            if (file.State == DownloadFileState.Verified && new FileInfo(target) is { Exists: true } present && present.Length == file.Size)
+            var digest = file.Digest();
+            var present = new FileInfo(target);
+            if (!lan && file.State == DownloadFileState.Verified && present.Exists && present.Length == file.Size)
             {
                 continue;
+            }
+
+            bool verified = false;
+            if (lan && present.Exists)
+            {
+                if (present.Length == file.Size && digest is not null)
+                {
+                    await using var opened = ConfinedModelFile.Open(job.WorkDirectory, file.Path);
+                    verified = opened is not null && await digest.MatchesAsync(opened, ct).ConfigureAwait(false);
+                }
+
+                if (!verified && job.FinalDirectory is null)
+                {
+                    throw new DownloadDestinationExistsException($"'{file.Path}' conflicts with the official snapshot in '{job.Folder}'.");
+                }
+
             }
 
             int index = i;
@@ -164,16 +200,48 @@ public sealed class NativeSnapshotDownloader
                 FilePath = target,
                 DisplayName = file.Path,
                 ExpectedLength = file.Size,
-                Digest = file.Digest(),
+                Digest = digest,
                 Credential = HuggingFaceHubClient.Credential(job.Token),
                 ConfinementRoot = job.WorkDirectory,
+                ConfinedWrites = lan,
             };
+            if (lan && digest is null && present.Exists)
+            {
+                RangeDownloader.Reset(request);
+            }
 
-            var result = await FetchVerifiedAsync(job, request, len =>
+            void Update(long len)
             {
                 lengths[index] = len;
                 Report();
-            }, ct).ConfigureAwait(false);
+            }
+
+            RangeDownloadResult? result = verified ? new(true, file.Size, RangeResponseKind.AlreadyComplete, null) : null;
+            if (result is null && mirrorRange is not null && mirrorHub is not null && digest is not null)
+            {
+                try
+                {
+                    result = await mirrorRange.DownloadAsync(request with
+                    {
+                        Url = mirrorHub.FileUrl(manifest.RepoId, manifest.CommitSha, file.Path),
+                        Credential = null,
+                        ExpectedETag = digest.ExpectedHex,
+                    }, Update, ct).ConfigureAwait(false);
+                }
+                catch (NativeDownloadException ex) when (ex is DownloadRefusedException or DownloadTransientException)
+                {
+                    // Canonical retry uses the same commit and digest as the rejected mirror response.
+                }
+
+                if (result?.Verified != true)
+                {
+                    RangeDownloader.Reset(request);
+                    Update(0);
+                    result = null;
+                }
+            }
+
+            result ??= await FetchVerifiedAsync(job, request, Update, ct).ConfigureAwait(false);
 
             lengths[index] = result.Length;
             Report();
@@ -189,6 +257,13 @@ public sealed class NativeSnapshotDownloader
         string finalFolder = job.WorkDirectory;
         if (job.FinalDirectory is { } destination)
         {
+            if (manifest.MergeIntoExisting && Directory.Exists(destination))
+            {
+                job.Manifest = await PublishVerifiedFolderAsync(manifest, job.WorkDirectory, destination, ct).ConfigureAwait(false);
+                NativeDownloadLog.Finalized(_logger, job.Folder);
+                return;
+            }
+
             if (Directory.Exists(destination) || File.Exists(destination))
             {
                 throw new DownloadDestinationExistsException(
@@ -229,7 +304,7 @@ public sealed class NativeSnapshotDownloader
                 return result;
             }
 
-            File.Delete(request.FilePath);
+            RangeDownloader.Reset(request);
             onLength(0);
             if (++mismatches > 1)
             {
@@ -239,6 +314,89 @@ public sealed class NativeSnapshotDownloader
 
             NativeDownloadLog.FileMismatchRetry(_logger, job.Folder, request.DisplayName);
         }
+    }
+
+    internal static async Task<DownloadManifest> PublishVerifiedFolderAsync(
+        DownloadManifest manifest, string stage, string destination, CancellationToken ct)
+    {
+        var completed = manifest with
+        {
+            State = DownloadManifestState.Completed,
+            Files = manifest.Files.Select(file => file with { State = DownloadFileState.Verified }).ToList(),
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+
+        ct.ThrowIfCancellationRequested();
+        if (stage == destination || !Directory.Exists(destination))
+        {
+            if (stage != destination)
+            {
+                Directory.Move(stage, destination);
+                DirectorySync.TryFlushParent(destination);
+            }
+
+            completed.Write(destination);
+            return completed;
+        }
+
+        if (!manifest.MergeIntoExisting || RepoPathRules.FindLink(destination) is not null)
+        {
+            throw new DownloadDestinationExistsException("The destination appeared during the download or contains a link.");
+        }
+
+        var existing = DownloadManifest.TryRead(destination);
+        if (existing is not null && (existing.Source != manifest.Source ||
+            !string.Equals(existing.RepoId, manifest.RepoId, StringComparison.OrdinalIgnoreCase) || existing.CommitSha != manifest.CommitSha))
+        {
+            throw new DownloadDestinationExistsException("The destination belongs to a different snapshot.");
+        }
+
+        var missing = new List<DownloadManifestFile>();
+        foreach (var file in manifest.Files)
+        {
+            if (!await MatchExistingAsync(destination, file, ct).ConfigureAwait(false))
+            {
+                await using var staged = ConfinedModelFile.Open(stage, file.Path);
+                if (staged is null || staged.Length != file.Size)
+                {
+                    throw new DownloadDestinationExistsException($"'{file.Path}' disappeared during publication.");
+                }
+
+                missing.Add(file);
+            }
+        }
+
+        (manifest with { State = DownloadManifestState.Downloading }).Write(destination);
+        foreach (var file in missing)
+        {
+            ct.ThrowIfCancellationRequested();
+            var target = RepoPathRules.PrepareTarget(destination, file.Path);
+            File.Move(Path.Combine(stage, file.Path), target);
+            DirectorySync.TryFlushParent(target);
+        }
+
+        completed.Write(destination);
+        completed.Write(stage);
+        return completed;
+    }
+
+    internal static async Task<bool> MatchExistingAsync(string root, DownloadManifestFile file, CancellationToken ct)
+    {
+        string path = Path.Combine(root, file.Path);
+        if (!File.Exists(path) && !Directory.Exists(path) && !RepoPathRules.IsLink(new FileInfo(path)))
+        {
+            return false;
+        }
+
+        var digest = file.Digest();
+        await using var opened = ConfinedModelFile.Open(root, file.Path);
+        if (opened is null || digest is null || opened.Length != file.Size ||
+            !await digest.MatchesAsync(opened, ct).ConfigureAwait(false))
+        {
+            throw new DownloadDestinationExistsException($"The destination file '{file.Path}' conflicts with the pinned snapshot.");
+        }
+
+        return true;
     }
 
     private async Task MoveAsync(string source, string destination, CancellationToken ct)

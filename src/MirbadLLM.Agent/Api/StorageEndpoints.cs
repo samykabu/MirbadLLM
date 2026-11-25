@@ -137,6 +137,18 @@ public static class StorageEndpoints
             return Error(StorageErrors.InvalidRequest("The request body is empty."));
         }
 
+        if (request is DownloadStartRequest download)
+        {
+            try
+            {
+                _ = HubOrigin.Parse(download.FleetHubEndpoint, download.FleetHubTrust);
+            }
+            catch (ArgumentException ex)
+            {
+                return Error(StorageErrors.InvalidRequest(ex.Message));
+            }
+        }
+
         var operations = http.RequestServices.GetRequiredService<StorageOperations>();
         string operationTarget = target(request) ?? "";
         var admission = await operations.AdmitAsync(http.Request, request, route.OperationKind!, operationTarget, body, http.RequestAborted)

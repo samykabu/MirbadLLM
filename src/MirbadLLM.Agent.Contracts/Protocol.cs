@@ -299,6 +299,9 @@ public static class AgentFeatures
     /// <summary>Native .NET Hugging Face downloader (P3/P4).</summary>
     public const string DownloadsHfNative = "downloads.hf-native";
 
+    /// <summary>Accepts the fenced fleet Hub origin and trust settings.</summary>
+    public const string DownloadsHfEndpoint = "downloads.hf-endpoint";
+
     /// <summary>systemd units through hostd.</summary>
     public const string ServicesSystemd = "services.systemd";
 
@@ -411,6 +414,9 @@ public static class AgentFeatures
 
     /// <summary>Flags of the pushed agent update (agent-updates.md); reported by Linux, Windows and macOS agents with the helper.</summary>
     public static IReadOnlyList<string> Updates { get; } = [AgentUpdate];
+
+    /// <summary>Optional Hub endpoint selection on download-capable agents.</summary>
+    public static IReadOnlyList<string> HubDownloads { get; } = [DownloadsHfEndpoint];
 }
 
 /// <summary>Logical volumes and fixed mount targets a launch spec may use (design §10.3).</summary>

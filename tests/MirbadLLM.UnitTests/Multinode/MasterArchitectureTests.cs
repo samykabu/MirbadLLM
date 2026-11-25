@@ -14,6 +14,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MirbadLLM.Agent.Contracts;
 using MirbadLLM.Core;
+using MirbadLLM.NodeRuntime.Downloads.Native;
 using MirbadLLM.Orchestration;
 using MirbadLLM.Orchestration.Agents;
 using MirbadLLM.Orchestration.Fencing;
@@ -22,9 +23,11 @@ using MirbadLLM.Orchestration.Nodes;
 using MirbadLLM.Orchestration.Recovery;
 using MirbadLLM.Router;
 using MirbadLLM.UnitTests.Auth;
+using MirbadLLM.UnitTests.Downloads;
 using MirbadLLM.UnitTests.Multinode.Contract;
 using MirbadLLM.Web;
 using MirbadLLM.Web.Enrollment;
+using MirbadLLM.Web.HubMirror;
 
 namespace MirbadLLM.UnitTests.Multinode;
 
@@ -362,6 +365,64 @@ public sealed class MasterArchitectureTests
         Assert.Equal(ca.Certificate.Subject, presented!.Issuer);
         presented.Dispose();
         await app.StopAsync(Ct);
+    }
+
+    [Fact]
+    public async Task HubMirrorListenerUsesSeparateTlsConnectionAndDoesNotReachApplicationRoutes()
+    {
+        int port = TestPorts.Reserve();
+        using var root = MirbadLLM.Pki.CertificateAuthority.Create();
+        using var leaf = root.IssueEnrollServerCertificate(["127.0.0.1"]);
+        using var certificate = leaf.CreateTlsCertificate();
+        await using var official = await NativeDownloaderTests.FakeHub.StartAsync(certificate);
+        string sha = new('a', 40);
+        official.AddRepo("model-name").Commit(sha, NativeDownloaderTests.FakeFile.Small("config.json", "cfg"));
+
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Logging.ClearProviders();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["urls"] = "http://127.0.0.1:0",
+            ["MirbadLLM:Enrollment:Port"] = "0",
+            ["MirbadLLM:Enrollment:ListenerAddresses:0"] = "127.0.0.1",
+            ["MirbadLLM:HubMirror:Enabled"] = "true",
+            ["MirbadLLM:HubMirror:Port"] = port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["MirbadLLM:HubMirror:ModelsRoot"] = AppContext.BaseDirectory,
+        });
+        var origin = new HuggingFaceOptions { Endpoint = $"https://127.0.0.1:{port}/" };
+        builder.Services.AddSingleton(root);
+        builder.Services.AddSingleton(Options.Create(new MirbadLLMOptions { HuggingFace = origin }));
+        builder.Services.AddSingleton(Options.Create(new RegistryMigrationOptions()));
+        builder.Services.AddSingleton<INodeRegistry>(new EmptyNodeRegistry());
+        builder.Services.AddSingleton<IModelRegistry>(new MirbadLLM.UnitTests.Orchestration.Fakes.FakeModelRegistry());
+        using var upstream = HubMirrorTests.OpenFake(official.BaseUri, root);
+        builder.Services.AddSingleton(new HubHttpClients(upstream, () => []));
+        builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddMirbadLLMEnrollment(builder.Configuration);
+        builder.Services.PostConfigure<EnrollmentOptions>(options => options.BootstrapEnabled = false);
+        MasterHosting.AddEnrollListener(builder);
+
+        await using var app = builder.Build();
+        HubMirrorEndpoints.UseHubMirrorListener(app);
+        app.UseEnrollListenerGate();
+        app.MapGet("/ping", () => "pong");
+        await app.StartAsync(Ct);
+        string httpAddress = app.Services.GetRequiredService<IServer>().Features.GetRequiredFeature<IServerAddressesFeature>()
+            .Addresses.Single(address => address.StartsWith("http:", StringComparison.Ordinal));
+
+        using var http = new HttpClient { BaseAddress = new Uri(httpAddress) };
+        Assert.Equal("pong", await http.GetStringAsync("/ping", Ct));
+        using var wrongPort = await http.GetAsync("/api/models/model-name", Ct);
+        Assert.Equal(HttpStatusCode.NotFound, wrongPort.StatusCode);
+
+        using var tls = HubMirrorTests.OpenFake(origin.Resolve().Endpoint, root);
+        using var blocked = await tls.GetAsync("/ping", Ct);
+        Assert.Equal(HttpStatusCode.NotFound, blocked.StatusCode);
+        using var info = await tls.GetAsync("/api/models/model-name", Ct);
+        Assert.Equal(HttpStatusCode.OK, info.StatusCode);
+        using var body = JsonDocument.Parse(await info.Content.ReadAsByteArrayAsync(Ct));
+        Assert.Equal(sha, body.RootElement.GetProperty("sha").GetString());
+        Assert.Equal("/api/models/model-name", Assert.Single(official.Requests).Path);
     }
 
     /// <summary>A registry with no nodes (the enroll listener test never enrolls).</summary>

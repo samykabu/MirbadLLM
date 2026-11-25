@@ -69,17 +69,18 @@ public sealed partial class RemoteHuggingFaceDownloader : IHuggingFaceDownloader
 
         try
         {
+            var (selectedBody, notice) = await _runner.WithHubEndpointAsync(_nodeId, body, ct).ConfigureAwait(false);
             var status = await _runner.SubmitAsync(
                 _nodeId,
                 AgentRoutes.DownloadStart,
                 folder,
-                body,
+                selectedBody,
                 (c, r, t) => c.StartDownloadAsync(r, t),
                 s => ToOperationState(s.State),
                 errorOf: null,
                 owner: null,
                 ct).ConfigureAwait(false);
-            return status.ToDownloadStatus();
+            return status.ToDownloadStatus() with { HubEndpointNotice = notice };
         }
         catch (Exception ex) when (RemoteAgentErrors.IsAgentFailure(ex))
         {

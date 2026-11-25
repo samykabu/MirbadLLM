@@ -101,6 +101,18 @@ public sealed record DownloadManifest
     /// <summary>The revision as requested (branch, tag or SHA); null = the default branch.</summary>
     public string? Revision { get; init; }
 
+    /// <summary>Selected non-secret Hub origin and trust, persisted independently of the original ref.</summary>
+    public string? HubEndpoint { get; init; }
+    public HubTrust? HubTrust { get; init; }
+
+    /// <summary>True for a container job whose staging directory is finalized by its helper monitor.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ContainerHelper { get; init; }
+
+    /// <summary>The destination already existed at admission and may receive missing verified files.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool MergeIntoExisting { get; init; }
+
     /// <summary>The immutable commit SHA every file is fetched at (<c>resolve/{sha}/{file}</c>).</summary>
     public required string CommitSha { get; init; }
 
@@ -152,7 +164,14 @@ public sealed record DownloadManifest
             throw new InvalidDataException("The download manifest is a link.");
         }
 
-        if (info.Length > 64L * 1024 * 1024)
+        using var stream = File.OpenRead(path);
+        return Read(stream);
+    }
+
+    /// <summary>Reads a manifest from an already confined file handle.</summary>
+    public static DownloadManifest Read(Stream stream)
+    {
+        if (stream.Length > 64L * 1024 * 1024)
         {
             throw new InvalidDataException("The download manifest is too large.");
         }
@@ -160,7 +179,7 @@ public sealed record DownloadManifest
         DownloadManifest? manifest;
         try
         {
-            manifest = JsonSerializer.Deserialize<DownloadManifest>(File.ReadAllBytes(path), JsonOptions);
+            manifest = JsonSerializer.Deserialize<DownloadManifest>(stream, JsonOptions);
         }
         catch (JsonException ex)
         {
@@ -194,11 +213,17 @@ public sealed record DownloadManifest
     }
 
     /// <summary>Bytes of the files present (verified files count fully, partial files by length up to their size).</summary>
-    public long PresentBytes(string folder)
+    public long PresentBytes(string folder, bool includeReusedFiles = false)
     {
         long total = 0;
         foreach (var file in Files)
         {
+            if (includeReusedFiles && file.State == DownloadFileState.Verified)
+            {
+                total += file.Size;
+                continue;
+            }
+
             var info = new FileInfo(System.IO.Path.Combine(folder, System.IO.Path.Combine(file.Path.Split('/'))));
             if (info.Exists && !RepoPathRules.IsLink(info))
             {

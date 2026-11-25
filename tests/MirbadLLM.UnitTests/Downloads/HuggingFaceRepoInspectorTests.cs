@@ -1,5 +1,9 @@
+using System.Net;
 using MirbadLLM.Core;
+using MirbadLLM.NodeRuntime.Downloads.Native;
+using MirbadLLM.Pki;
 using MirbadLLM.Orchestration;
+using MirbadLLM.UnitTests.Orchestration.Fakes;
 
 #pragma warning disable CA1707 // underscore test names read better for these format/grouping scenarios.
 
@@ -40,6 +44,60 @@ public sealed class HuggingFaceRepoInspectorTests
         new("README.md", 12_947),
         new(".gitattributes", 6_181),
     ];
+
+    [Fact]
+    public async Task Inspect_UsesConfiguredOriginForPublicListing_AndOnlyOfficialForToken()
+    {
+        const string repo = "org/repo";
+        const string sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        using var ca = CertificateAuthority.Create();
+        using var credential = ca.IssueEnrollServerCertificate(["127.0.0.1"]);
+        using var leaf = credential.CreateTlsCertificate();
+        await using var official = await NativeDownloaderTests.FakeHub.StartAsync(leaf);
+        await using var mirror = await NativeDownloaderTests.FakeHub.StartAsync(leaf);
+        var file = NativeDownloaderTests.FakeFile.Small("sub/config.json", "123456");
+        official.AddRepo(repo).Commit(sha, file);
+        mirror.AddRepo(repo).Commit(sha, file);
+        using var officialHttp = HubMirrorTests.OpenFake(official.BaseUri, ca);
+        var clients = new HubHttpClients(officialHttp, () => [ca.Certificate.ExportCertificatePem()]);
+        var inspector = new HuggingFaceRepoInspector(officialHttp, clients, HubOrigin.Parse(mirror.BaseUri.AbsoluteUri, null));
+
+        var result = await inspector.InspectAsync(repo, null, null, TestContext.Current.CancellationToken);
+        Assert.Equal(file.Content.Length, Assert.Single(result.AllFiles).Bytes);
+        var mirrorRequest = Assert.Single(mirror.Requests);
+        Assert.Equal($"/api/models/{repo}/revision/{sha}", mirrorRequest.Path);
+        Assert.Null(mirrorRequest.Authorization);
+
+        await inspector.InspectAsync(repo, "main", "test-token", TestContext.Current.CancellationToken);
+        Assert.Single(mirror.Requests);
+        Assert.Contains(official.Requests, request => request.Path == $"/api/models/{repo}/revision/main" &&
+            request.Authorization == "Bearer test-token");
+    }
+
+    [Fact]
+    public async Task Inspect_OfficialAliasFollowsHubRedirectAndPreservesSameOriginCredentials()
+    {
+        using var handler = new FakeHttpMessageHandler
+        {
+            Handler = request => request.RequestUri!.AbsolutePath == "/api/models/alias"
+                ? new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
+                {
+                    Headers = { Location = new Uri("/api/models/org/current?blobs=true", UriKind.Relative) },
+                }
+                : new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"siblings":[{"rfilename":"config.json","size":19}]}"""),
+                },
+        };
+        using var http = new HttpClient(handler) { BaseAddress = HubOrigin.OfficialEndpoint };
+        var inspector = new HuggingFaceRepoInspector(http, new HubHttpClients(http, () => []));
+
+        var listing = await inspector.InspectAsync("alias", null, "test-token", TestContext.Current.CancellationToken);
+        Assert.Equal(19, Assert.Single(listing.AllFiles).Bytes);
+        Assert.Equal(["https://huggingface.co/api/models/alias?blobs=true", "https://huggingface.co/api/models/org/current?blobs=true"],
+            handler.Requests.Select(request => request.RequestUri!.AbsoluteUri));
+        Assert.All(handler.Requests, request => Assert.Equal("test-token", request.Headers.Authorization?.Parameter));
+    }
 
     [Fact]
     public void BuildInspection_GgufOnlyRepo_DetectsGgufFormat()

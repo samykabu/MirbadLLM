@@ -320,6 +320,25 @@ public sealed class RemoteServicesTests
         Assert.Equal("Tiny-Model", reference.Target);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Download_SendsFleetOriginOnlyToCapableAgentsAndForAnonymousJobs(bool endpointAware)
+    {
+        await using var env = await Env.StartAsync(endpointAware: endpointAware);
+        var runner = new AgentOperationRunner(env.Factory, env.Store, env.Registry, TimeProvider.System,
+            hub: new HuggingFaceOptions { Endpoint = "https://models.lan:8444" });
+        var downloader = new RemoteHuggingFaceDownloader(NodeId, env.Factory, runner);
+        var anonymous = await downloader.StartAsync(new DownloadRequest(AgentContractSeed.DownloadRepo, Folder: "anonymous"), Ct);
+        var authenticated = await downloader.StartAsync(new DownloadRequest(AgentContractSeed.DownloadRepo, Token: "test-token", Folder: "authenticated"), Ct);
+        var origins = env.Agent.DownloadOrigins;
+        Assert.Equal(2, origins.Count);
+        Assert.Equal(endpointAware ? ("https://models.lan:8444/", (HubTrust?)HubTrust.FleetCa) : (null, null), origins[0]);
+        Assert.Equal((null, null), origins[1]);
+        Assert.Equal(!endpointAware, anonymous.HubEndpointNotice is not null);
+        Assert.Null(authenticated.HubEndpointNotice);
+    }
+
     [Fact]
     public async Task Download_Cancel_RunningFinishedAndUnknown()
     {
@@ -562,9 +581,10 @@ public sealed class RemoteServicesTests
 
         public FakeModelRegistry Models { get; } = new();
 
-        public static async Task<Env> StartAsync(IReadOnlyList<ManagedContainerOptions>? managedContainers = null)
+        public static async Task<Env> StartAsync(IReadOnlyList<ManagedContainerOptions>? managedContainers = null, bool endpointAware = false)
         {
-            var agent = await FakeAgent.StartAsync(ct: Ct);
+            var options = endpointAware ? new FakeAgentOptions { Features = [.. FakeAgentOptions.P1Features, AgentFeatures.DownloadsHfEndpoint] } : null;
+            var agent = await FakeAgent.StartAsync(options, ct: Ct);
             string dataDir = Path.Combine(Path.GetTempPath(), "mn032-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(dataDir);
             var env = new Env(agent, dataDir, managedContainers);

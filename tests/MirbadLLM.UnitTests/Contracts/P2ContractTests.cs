@@ -154,7 +154,8 @@ public sealed class P2ContractTests
         Assert.Empty(AgentFeatures.P1.Intersect(AgentFeatures.P2, StringComparer.Ordinal));
         // P3 adds its own list (MN-202, D116; P3ContractTests), macOS Phase 3 another: together they cover every constant.
         Assert.Equal(all.Order(StringComparer.Ordinal), AgentFeatures.P1.Concat(AgentFeatures.P2).Concat(AgentFeatures.P3)
-            .Concat(AgentFeatures.RuntimeExpansion).Concat(AgentFeatures.MacOS).Concat(AgentFeatures.Updates).Order(StringComparer.Ordinal));
+            .Concat(AgentFeatures.RuntimeExpansion).Concat(AgentFeatures.MacOS).Concat(AgentFeatures.Updates)
+            .Concat(AgentFeatures.HubDownloads).Order(StringComparer.Ordinal));
     }
 
     [Fact]

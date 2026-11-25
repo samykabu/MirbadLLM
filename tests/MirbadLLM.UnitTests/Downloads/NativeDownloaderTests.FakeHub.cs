@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
@@ -19,7 +21,7 @@ namespace MirbadLLM.UnitTests.Downloads;
 public sealed partial class NativeDownloaderTests
 {
     /// <summary>One request the fake Hub answered.</summary>
-    internal sealed record HubRequest(string Host, string Path, string? Range, string? Authorization, int Status, long BodyBytes);
+    internal sealed record HubRequest(string Host, string Path, string? Range, string? Authorization, int Status, long BodyBytes, string Method);
 
     /// <summary>
     /// A local Hugging Face Hub on loopback (real HTTP through Kestrel, nothing from the internet): the
@@ -48,12 +50,18 @@ public sealed partial class NativeDownloaderTests
         public IReadOnlyList<HubRequest> FileRequests(string path) =>
             Requests.Where(r => r.Path.EndsWith("/" + path, StringComparison.Ordinal) && !r.Path.StartsWith("/api/", StringComparison.Ordinal)).ToList();
 
-        public static async Task<FakeHub> StartAsync()
+        public static async Task<FakeHub> StartAsync(X509Certificate2? leaf = null)
         {
             var builder = WebApplication.CreateSlimBuilder();
             builder.Logging.ClearProviders();
             builder.WebHost.UseUrls();
-            builder.WebHost.ConfigureKestrel(k => k.Listen(IPAddress.Loopback, 0));
+            builder.WebHost.ConfigureKestrel(k => k.Listen(IPAddress.Loopback, 0, listen =>
+            {
+                if (leaf is not null)
+                {
+                    listen.UseHttps(leaf);
+                }
+            }));
             var app = builder.Build();
             var hub = new FakeHub(app);
             app.Run(hub.HandleAsync);
@@ -92,7 +100,7 @@ public sealed partial class NativeDownloaderTests
             {
                 if (Interlocked.Exchange(ref recorded, 1) == 0)
                 {
-                    Requests.Enqueue(new HubRequest(context.Request.Host.Host, path, range, auth, context.Response.StatusCode, bytes));
+                    Requests.Enqueue(new HubRequest(context.Request.Host.Host, path, range, auth, context.Response.StatusCode, bytes, context.Request.Method));
                 }
             }
 
@@ -118,6 +126,10 @@ public sealed partial class NativeDownloaderTests
                     else if (repo.RequiredToken is { } token && auth != "Bearer " + token)
                     {
                         sent = await StatusAsync(context, 401, $"Invalid credentials in Authorization header: {auth}");
+                    }
+                    else if (HttpMethods.IsHead(context.Request.Method) && file.HeadStatus is { } denied)
+                    {
+                        sent = await StatusAsync(context, denied);
                     }
                     else if (file.Redirect is { } redirect)
                     {
@@ -174,8 +186,8 @@ public sealed partial class NativeDownloaderTests
 
             var siblings = repo.Commits[sha].Select(f => f.Lfs
                 ? (object)new { rfilename = f.Path, size = f.ListedSize ?? f.Content.Length, blobId = new string('a', 40), lfs = new { sha256 = f.Sha256, size = f.ListedSize ?? f.Content.Length, pointerSize = 134 } }
-                : new { rfilename = f.Path, size = f.ListedSize ?? f.Content.Length, blobId = f.BlobSha1 }).ToList();
-            byte[] body = JsonSerializer.SerializeToUtf8Bytes(new { id = repo.Id, sha, siblings });
+                : new { rfilename = f.Path, size = f.ListedSize ?? f.Content.Length, blobId = f.MissingDigest ? null : f.BlobSha1 }).ToList();
+            byte[] body = JsonSerializer.SerializeToUtf8Bytes(new { id = repo.Id, sha, siblings, @private = repo.Private, gated = repo.Gated });
             context.Response.ContentType = "application/json";
             RecordNow(context, body.Length);
             await context.Response.Body.WriteAsync(body);
@@ -185,14 +197,21 @@ public sealed partial class NativeDownloaderTests
 
         private (FakeRepo? Repo, string? Sha, FakeFile? File) Locate(string rest, string separator)
         {
-            // rest = {owner}/{name}/{sha}/{path...}
-            string[] parts = rest.Split(separator, 4);
-            if (parts.Length < 4 || !Repos.TryGetValue(parts[0] + "/" + parts[1], out var repo) || !repo.Commits.TryGetValue(parts[2], out var files))
+            foreach (var (name, repo) in Repos)
             {
-                return (null, null, null);
+                if (!rest.StartsWith(name + separator, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string[] parts = rest[(name.Length + separator.Length)..].Split(separator, 2);
+                if (parts.Length == 2 && repo.Commits.TryGetValue(parts[0], out var files))
+                {
+                    return (repo, parts[0], files.FirstOrDefault(f => f.Path == parts[1]));
+                }
             }
 
-            return (repo, parts[2], files.FirstOrDefault(f => f.Path == parts[3]));
+            return (null, null, null);
         }
 
         private static void RecordNow(HttpContext context, long bytes) => ((Action<long>)context.Items["record"]!)(bytes);
@@ -225,6 +244,14 @@ public sealed partial class NativeDownloaderTests
             }
 
             long start = 0;
+            long end = content.Length - 1;
+            context.Response.Headers.ETag = $"\"{(file.Lfs ? file.Sha256 : file.BlobSha1)}\"";
+            if (HttpMethods.IsHead(context.Request.Method))
+            {
+                context.Response.ContentLength = content.Length;
+                return 0;
+            }
+
             bool ranged = false;
             if (rangeHeader is not null && !file.IgnoreRange)
             {
@@ -235,7 +262,12 @@ public sealed partial class NativeDownloaderTests
                     return 0;
                 }
 
-                start = long.Parse(rangeHeader["bytes=".Length..].TrimEnd('-'), CultureInfo.InvariantCulture);
+                var pair = rangeHeader["bytes=".Length..].Split('-');
+                start = long.Parse(pair[0], CultureInfo.InvariantCulture);
+                if (long.TryParse(pair[1], CultureInfo.InvariantCulture, out long max))
+                {
+                    end = Math.Min(end, max);
+                }
                 if (start >= content.Length)
                 {
                     context.Response.StatusCode = 416;
@@ -249,11 +281,11 @@ public sealed partial class NativeDownloaderTests
             context.Response.StatusCode = ranged ? 206 : 200;
             if (ranged)
             {
-                context.Response.Headers.ContentRange = $"bytes {start}-{content.Length - 1}/{content.Length}";
+                context.Response.Headers.ContentRange = $"bytes {start}-{end}/{content.Length}";
             }
 
-            context.Response.ContentLength = content.Length - start;
-            long stopAt = content.Length;
+            context.Response.ContentLength = end - start + 1;
+            long stopAt = end + 1;
             bool stall = false;
             bool drop = false;
             if (file.StallAfter is { } stallAt && start < stallAt)
@@ -307,6 +339,8 @@ public sealed partial class NativeDownloaderTests
         public string Id { get; } = id;
 
         public string? RequiredToken { get; set; }
+        public bool Private { get; set; }
+        public bool Gated { get; set; }
 
         public Dictionary<string, string> Branches { get; } = new(StringComparer.Ordinal);
 
@@ -342,6 +376,8 @@ public sealed partial class NativeDownloaderTests
         public long? ListedSize { get; set; }
 
         public bool IgnoreRange { get; set; }
+        public bool MissingDigest { get; set; }
+        public int? HeadStatus { get; set; }
 
         public long? StallAfter { get; set; }
 

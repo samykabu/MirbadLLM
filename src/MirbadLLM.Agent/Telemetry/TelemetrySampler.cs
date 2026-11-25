@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net.Http.Headers;
+using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -171,7 +173,7 @@ public sealed partial class TelemetrySampler(
     /// <summary>Every Ready instance of every driver, scraped in parallel, in model-id order.</summary>
     private async Task<IReadOnlyList<ModelMetricsScrape>> ScrapeModelsAsync(CancellationToken ct)
     {
-        var ready = new Dictionary<string, (IRuntimeDriver Driver, RuntimeKind Runtime)>(StringComparer.Ordinal);
+        var ready = new Dictionary<string, (IRuntimeDriver Driver, RuntimeStatus Status)>(StringComparer.Ordinal);
         foreach (var driver in _drivers)
         {
             IReadOnlyList<RuntimeStatus> instances;
@@ -190,20 +192,22 @@ public sealed partial class TelemetrySampler(
                 // mlx_lm.server has no metrics endpoint, so MLX stays out instead of failing every pass.
                 if (instance.State == ModelState.Ready && instance.Runtime != RuntimeKind.Mlx)
                 {
-                    ready.TryAdd(instance.ModelId, (driver, instance.Runtime));
+                    ready.TryAdd(instance.ModelId, (driver, instance));
                 }
             }
         }
 
         var scrapes = await Task.WhenAll(ready
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
-            .Select(kv => ScrapeAsync(kv.Key, kv.Value.Driver, kv.Value.Runtime, ct))).ConfigureAwait(false);
+            .Select(kv => ScrapeAsync(kv.Value.Driver, kv.Value.Status, ct))).ConfigureAwait(false);
         return scrapes.OfType<ModelMetricsScrape>().ToList();
     }
 
     /// <summary>One model's scrape; null when it stopped running in between (no upstream any more).</summary>
-    private async Task<ModelMetricsScrape?> ScrapeAsync(string modelId, IRuntimeDriver driver, RuntimeKind runtime, CancellationToken ct)
+    private async Task<ModelMetricsScrape?> ScrapeAsync(IRuntimeDriver driver, RuntimeStatus instance, CancellationToken ct)
     {
+        string modelId = instance.ModelId;
+        var runtime = instance.Runtime;
         string path = runtime == RuntimeKind.Nim ? "v1/metrics" : "metrics";
         try
         {
@@ -217,13 +221,7 @@ public sealed partial class TelemetrySampler(
             }
 
             string? apiKey = await driver.GetUpstreamApiKeyAsync(modelId, timeoutCts.Token).ConfigureAwait(false);
-            using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(upstream, path));
-            if (apiKey is { Length: > 0 })
-            {
-                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
-            }
-
-            using var response = await http.Client.SendAsync(request, timeoutCts.Token).ConfigureAwait(false);
+            using var response = await ReadAsync(upstream, path, apiKey, timeoutCts.Token).ConfigureAwait(false);
             if (response.StatusCode == System.Net.HttpStatusCode.NotFound && runtime is RuntimeKind.Sglang or RuntimeKind.Nim)
             {
                 return null; // Started without metrics (SGLang before --enable-metrics): not a failure to report every pass.
@@ -236,7 +234,17 @@ public sealed partial class TelemetrySampler(
             }
 
             string text = await response.Content.ReadAsStringAsync(timeoutCts.Token).ConfigureAwait(false);
-            return new ModelMetricsScrape { ModelId = modelId, At = timeProvider.GetUtcNow(), Text = MetricFamilyFilter.Filter(text) };
+            var at = timeProvider.GetUtcNow();
+            string? identity = runtime == RuntimeKind.LlamaCpp && instance.InstanceId is { } id
+                ? FormattableString.Invariant($"{instance.Delivery}/{id}/{instance.Since:O}/{instance.RestartCount}")
+                : null;
+            long? composite = identity is null ? null : await ReadDecodedTokensAsync(
+                driver, instance, upstream, apiKey, text, timeoutCts.Token, ct).ConfigureAwait(false);
+            return new ModelMetricsScrape
+            {
+                ModelId = modelId, At = at, Text = MetricFamilyFilter.Filter(text),
+                RuntimeInstance = identity, LlamaDecodedTokens = composite,
+            };
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -249,6 +257,120 @@ public sealed partial class TelemetrySampler(
             LogScrapeException(logger, ex, modelId);
             return Failed(modelId, ex.Message);
         }
+    }
+
+    private async Task<HttpResponseMessage> ReadAsync(Uri upstream, string path, string? key, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(upstream, path));
+        if (!string.IsNullOrEmpty(key))
+        {
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        }
+
+        return await http.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+    }
+
+    private async Task<long?> ReadDecodedTokensAsync(
+        IRuntimeDriver driver, RuntimeStatus instance, Uri upstream, string? key, string metrics, CancellationToken timeout, CancellationToken ct)
+    {
+        if (CompletedTokens(metrics) is not { } before)
+        {
+            return null;
+        }
+
+        try
+        {
+            const int maxSlotsBytes = 1024 * 1024;
+            using var slots = await ReadAsync(upstream, "slots", key, timeout).ConfigureAwait(false);
+            if (!slots.IsSuccessStatusCode || slots.Content.Headers.ContentLength > maxSlotsBytes)
+            {
+                return null;
+            }
+
+            await slots.Content.LoadIntoBufferAsync(maxSlotsBytes, timeout).ConfigureAwait(false);
+            using var body = await slots.Content.ReadAsStreamAsync(timeout).ConfigureAwait(false);
+            using var json = await JsonDocument.ParseAsync(body, cancellationToken: timeout).ConfigureAwait(false);
+            if (ActiveDecodedTokens(json.RootElement) is not { } active || active > long.MaxValue - before)
+            {
+                return null;
+            }
+
+            using var after = await ReadAsync(upstream, "metrics", key, timeout).ConfigureAwait(false);
+            if (!after.IsSuccessStatusCode || CompletedTokens(await after.Content.ReadAsStringAsync(timeout).ConfigureAwait(false)) != before)
+            {
+                return null;
+            }
+
+            var current = await driver.GetAsync(instance.ModelId, timeout).ConfigureAwait(false);
+            return current is { State: ModelState.Ready } && current.InstanceId == instance.InstanceId &&
+                current.Since == instance.Since && current.RestartCount == instance.RestartCount &&
+                await driver.GetUpstreamAsync(instance.ModelId, timeout).ConfigureAwait(false) == upstream &&
+                await driver.GetUpstreamApiKeyAsync(instance.ModelId, timeout).ConfigureAwait(false) == key
+                ? before + active : null;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or JsonException ||
+                                   ex is OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            return null;
+        }
+    }
+
+    private static long? CompletedTokens(string metrics)
+    {
+        const string name = LlamaCppMetrics.TokensPredictedTotal;
+        foreach (var line in metrics.AsSpan().EnumerateLines())
+        {
+            if (line.StartsWith(name, StringComparison.Ordinal) && line.Length > name.Length &&
+                char.IsWhiteSpace(line[name.Length]))
+            {
+                var value = line[name.Length..].Trim();
+                if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double count) &&
+                    count >= 0 && count < long.MaxValue && Math.Truncate(count) == count)
+                {
+                    return (long)count;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static long? ActiveDecodedTokens(JsonElement slots)
+    {
+        if (slots.ValueKind != JsonValueKind.Array || slots.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        var tasks = new HashSet<long>();
+        long total = 0;
+        foreach (var slot in slots.EnumerateArray())
+        {
+            if (slot.ValueKind != JsonValueKind.Object || !slot.TryGetProperty("is_processing", out var state))
+            {
+                return null;
+            }
+
+            if (state.ValueKind == JsonValueKind.False)
+            {
+                continue;
+            }
+
+            if (state.ValueKind != JsonValueKind.True ||
+                !slot.TryGetProperty("id_task", out var task) || task.ValueKind != JsonValueKind.Number ||
+                !task.TryGetInt64(out long id) || id < 0 || !tasks.Add(id) ||
+                !slot.TryGetProperty("next_token", out var next) || next.ValueKind != JsonValueKind.Array ||
+                next.GetArrayLength() != 1 || next[0].ValueKind != JsonValueKind.Object ||
+                !next[0].TryGetProperty("n_decoded", out var decoded) || decoded.ValueKind != JsonValueKind.Number ||
+                !decoded.TryGetInt64(out long count) || count < 0 || count > long.MaxValue - total)
+            {
+                return null;
+            }
+
+            total += count;
+        }
+
+        return total;
     }
 
     private ModelMetricsScrape Failed(string modelId, string error) =>
@@ -298,7 +420,7 @@ public sealed class TelemetryHttpClient : IDisposable
 {
     /// <summary>Creates the default client.</summary>
     public TelemetryHttpClient()
-        : this(new SocketsHttpHandler { UseProxy = false, PooledConnectionLifetime = TimeSpan.FromMinutes(5) })
+        : this(new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false, PooledConnectionLifetime = TimeSpan.FromMinutes(5) })
     {
     }
 

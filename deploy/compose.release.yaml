@@ -13,6 +13,9 @@
 # file explains the settings in more detail.
 name: mirbadllm
 
+# To enable the optional LAN Hub mirror, add a Compose override on the master
+# with port 8444 and a read-only models bind. See docs/configuration.md#hugging-face-lan-mirror
+# for the override, fleet certificate SAN, and DNS setup.
 services:
   master:
     image: ghcr.io/samykabu/mirbadllm:${MIRBADLLM_VERSION:-latest}

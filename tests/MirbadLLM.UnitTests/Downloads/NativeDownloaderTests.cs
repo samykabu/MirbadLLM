@@ -15,6 +15,7 @@ using MirbadLLM.Agent.Storage;
 using MirbadLLM.Core;
 using MirbadLLM.NodeRuntime.Abstractions;
 using MirbadLLM.NodeRuntime.Downloads.Native;
+using MirbadLLM.Pki;
 
 #pragma warning disable CA1707, CA2000, xUnit1051 // underscore test names; the app owns its services; hand-written fakes ignore the test token.
 
@@ -173,6 +174,128 @@ public sealed partial class NativeDownloaderTests : IAsyncDisposable
 
     private static Task WaitForLengthAsync(string path, long length) =>
         WaitUntilAsync(() => Task.FromResult(new FileInfo(path) is { Exists: true } f && f.Length >= length), $"{Path.GetFileName(path)} to reach {length} bytes");
+
+    [Fact]
+    public async Task PerJobHubOrigin_PinsOfficialListing_VerifiesMirrorAndFallsBackWithoutMovingTheRef()
+    {
+        using var ca = CertificateAuthority.Create();
+        using var credential = ca.IssueEnrollServerCertificate(["127.0.0.1"]);
+        using var leaf = credential.CreateTlsCertificate();
+        _hub = await FakeHub.StartAsync(leaf);
+        await using var mirror = await FakeHub.StartAsync(leaf);
+        await using var otherMirror = await FakeHub.StartAsync(leaf);
+        var good = FakeFile.Small("config.json", "official");
+        var bad = FakeFile.Small("config.json", "corrupt!");
+        var sizeOnly = FakeFile.Small("size-only.json", "official only");
+        sizeOnly.MissingDigest = true;
+        var served = FakeFile.Small(good.Path, "official");
+        served.CorruptRemaining = 1;
+        var repo = _hub.AddRepo(RepoId).Commit(Sha1, good, sizeOnly).Commit(Sha2, bad);
+        mirror.AddRepo(RepoId).Commit(Sha1, served, sizeOnly);
+        otherMirror.AddRepo(RepoId).Commit(Sha1, bad, sizeOnly);
+        using var officialHttp = HubMirrorTests.OpenFake(_hub.BaseUri, ca);
+        var clients = new HubHttpClients(officialHttp, () => [ca.Certificate.ExportCertificatePem()]);
+        var local = new HuggingFaceOptions { Endpoint = mirror.BaseUri.AbsoluteUri };
+        var fleet = new HuggingFaceOptions { Endpoint = otherMirror.BaseUri.AbsoluteUri };
+        var req1 = Request(folder: "mirror-first", patterns: ["*.json"], revision: "main") with
+        {
+            Hub = local.Resolve(fleet.Endpoint, HubTrust.System),
+        };
+        var req2 = Request(folder: "mirror-second", patterns: ["*.json"], revision: "main") with
+        {
+            Hub = new HuggingFaceOptions().Resolve(fleet.Endpoint, HubTrust.FleetCa),
+        };
+        Assert.True(new HuggingFaceOptions().Resolve().IsOfficial);
+        Assert.True(new HuggingFaceOptions { Endpoint = HubOrigin.OfficialEndpoint.AbsoluteUri }.Resolve(fleet.Endpoint, fleet.Trust).IsOfficial);
+
+        var prepared = await Task.WhenAll(
+            HubAcquisition.PrepareAsync(clients, req1, req1.AllowPatterns!, null, CancellationToken.None),
+            HubAcquisition.PrepareAsync(clients, req2, req2.AllowPatterns!, null, CancellationToken.None));
+        Assert.Equal(mirror.BaseUri, prepared[0].Mirror!.Endpoint);
+        Assert.Null(prepared[1].Mirror);
+        Assert.All(prepared, result => Assert.Equal(Sha1, result.Snapshot.CommitSha));
+        Assert.Contains(mirror.Requests, request => request.Path == $"/api/models/{RepoId}/revision/{Sha1}");
+        Assert.Contains(otherMirror.Requests, request => request.Path == $"/api/models/{RepoId}/revision/{Sha1}");
+        Assert.Equal(2, _hub.Requests.Count(request => request.Path == $"/api/models/{RepoId}/revision/main"));
+        repo.Branches["main"] = Sha2;
+
+        await using var service = new NativeDownloadService(officialHttp, new ModelRootPaths(_root), _disk,
+            Options.Create(new AgentStorageOptions { ModelsRoot = _root }), TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<NativeDownloadService>.Instance, TestOptions(), clients);
+        await Task.WhenAll(service.StartAsync(req1, prepared[0], CancellationToken.None),
+            service.StartAsync(req2, prepared[1], CancellationToken.None));
+        await Task.WhenAll(service.WhenFinishedAsync(req1.Folder!), service.WhenFinishedAsync(req2.Folder!));
+        foreach (var request in new[] { req1, req2 })
+        {
+            var done = await service.GetAsync(request.Folder!);
+            Assert.Equal(DownloadState.Completed, done!.State);
+            Assert.Equal(good.Content.Length + sizeOnly.Content.Length, done.BytesDownloaded);
+            string directory = Path.Combine(_root, request.Folder!);
+            Assert.Equal(good.Content, await File.ReadAllBytesAsync(Path.Combine(directory, good.Path)));
+            Assert.Equal(sizeOnly.Content, await File.ReadAllBytesAsync(Path.Combine(directory, sizeOnly.Path)));
+            var manifest = DownloadManifest.TryRead(directory)!;
+            Assert.Equal(Sha1, manifest.CommitSha);
+            Assert.Equal(request.Hub!.Endpoint.AbsoluteUri, manifest.HubEndpoint);
+        }
+
+        Assert.Equal(good.Content.Length, Assert.Single(mirror.FileRequests(good.Path)).BodyBytes);
+        Assert.Equal(2 * good.Content.Length, _hub.FileRequests(good.Path).Sum(request => request.BodyBytes));
+        Assert.Empty(mirror.FileRequests(sizeOnly.Path));
+        Assert.Empty(otherMirror.FileRequests(good.Path));
+        Assert.All(_hub.Requests.Where(request => request.Path.Contains("/resolve/", StringComparison.Ordinal)),
+            request => Assert.Contains($"/resolve/{Sha1}/", request.Path, StringComparison.Ordinal));
+        Assert.All(mirror.Requests.Concat(otherMirror.Requests), request => Assert.Null(request.Authorization));
+
+        var withToken = await HubAcquisition.PrepareAsync(clients, req1 with { Token = Token },
+            req1.AllowPatterns!, Sha1, CancellationToken.None);
+        Assert.True(withToken.Origin.IsOfficial);
+        Assert.Null(withToken.Mirror);
+        Assert.Contains(_hub.Requests, request => request.Authorization == "Bearer " + Token);
+        Assert.DoesNotContain(Token, await File.ReadAllTextAsync(DownloadManifest.PathIn(Path.Combine(_root, req1.Folder!))), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OldMasterRequest_UsesNewAgentLocalOverrideThroughPreflightAndDownload()
+    {
+        using var ca = CertificateAuthority.Create();
+        using var credential = ca.IssueEnrollServerCertificate(["127.0.0.1"]);
+        using var leaf = credential.CreateTlsCertificate();
+        _hub = await FakeHub.StartAsync(leaf);
+        await using var mirror = await FakeHub.StartAsync(leaf);
+        var file = FakeFile.Small("config.json", "pinned via local override");
+        _hub.AddRepo(RepoId).Commit(Sha1, file);
+        mirror.AddRepo(RepoId).Commit(Sha1, file);
+        using var official = HubMirrorTests.OpenFake(_hub.BaseUri, ca);
+        var clients = new HubHttpClients(official, () => [ca.Certificate.ExportCertificatePem()]);
+        var local = new HuggingFaceOptions { Endpoint = mirror.BaseUri.AbsoluteUri };
+        await using var host = await AgentHost.StartAsync(this, Path.Combine(_base, "state"), clients, local);
+        var now = DateTimeOffset.UtcNow;
+        var start = new DownloadStartRequest
+        {
+            RepoId = RepoId, Folder = Folder, AllowPatterns = ["*.json"],
+            OperationId = Guid.NewGuid().ToString("N"), IssuedAt = now, ExpiresAt = now.AddHours(1),
+        };
+
+        using var response = await host.PostAsync("/downloads", start);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        await host.Native.WhenFinishedAsync(Folder);
+        var status = await host.GetDownloadAsync();
+        Assert.Equal(file.Content.Length, status.BytesDownloaded);
+        Assert.Equal(file.Content, await File.ReadAllBytesAsync(FinalPath(file.Path)));
+        Assert.Contains(mirror.Requests, request => request.Path == $"/api/models/{RepoId}/revision/{Sha1}");
+        Assert.Equal(file.Content.Length, Assert.Single(mirror.FileRequests(file.Path)).BodyBytes);
+        Assert.Empty(_hub.FileRequests(file.Path));
+    }
+
+    [Theory]
+    [InlineData("http://127.0.0.1:8444/")]
+    [InlineData("https://name:secret@models.lan/")]
+    [InlineData("https://models.lan/a/../")]
+    [InlineData("https://models.lan/?")]
+    [InlineData("https://models.lan/#")]
+    [InlineData("https://models.lan//")]
+    public void ConfiguredHub_RejectsAnythingExceptAnHttpsOrigin(string value) =>
+        Assert.Throws<ArgumentException>(() => new HuggingFaceOptions { Endpoint = value }.Resolve());
 
     // ---------------------------------------------------------------- the happy path
 
@@ -974,7 +1097,8 @@ public sealed partial class NativeDownloaderTests : IAsyncDisposable
 
         public NativeDownloadService Native => (NativeDownloadService)_app.Services.GetRequiredService<IHuggingFaceDownloader>();
 
-        public static async Task<AgentHost> StartAsync(NativeDownloaderTests test, string stateDirectory)
+        public static async Task<AgentHost> StartAsync(NativeDownloaderTests test, string stateDirectory,
+            HubHttpClients? clients = null, HuggingFaceOptions? local = null)
         {
             var log = new OperationLog(new OperationLogOptions { StateDirectory = stateDirectory, BootId = Guid.NewGuid().ToString("N") }, TimeProvider.System);
             var builder = WebApplication.CreateSlimBuilder();
@@ -982,7 +1106,12 @@ public sealed partial class NativeDownloaderTests : IAsyncDisposable
             builder.Logging.ClearProviders();
             builder.Logging.AddProvider(test._logs);
             builder.Logging.SetMinimumLevel(LogLevel.Trace);
-            var hubHttp = test.HubClient();
+            var hubHttp = clients?.Official ?? test.HubClient();
+            if (clients is not null)
+            {
+                builder.Services.AddSingleton(clients);
+                builder.Services.AddSingleton(local ?? new HuggingFaceOptions());
+            }
             builder.Services.AddSingleton<IOperationLog>(log);
             builder.Services.AddSingleton<IFencingState>(new AlwaysCurrentFencing());
             builder.Services.AddSingleton<IEventBus>(new EventBus());
@@ -992,7 +1121,7 @@ public sealed partial class NativeDownloaderTests : IAsyncDisposable
             builder.Services.AddSingleton<IHuggingFaceRepoInspector>(new MirbadLLM.NodeRuntime.HuggingFaceRepoInspector(hubHttp));
             builder.Services.AddSingleton<IHuggingFaceDownloader>(sp => new NativeDownloadService(
                 hubHttp, sp.GetRequiredService<ModelRootPaths>(), test._disk, sp.GetRequiredService<IOptions<AgentStorageOptions>>(),
-                TimeProvider.System, sp.GetRequiredService<ILogger<NativeDownloadService>>(), TestOptions()));
+                TimeProvider.System, sp.GetRequiredService<ILogger<NativeDownloadService>>(), TestOptions(), hubClients: clients));
             builder.Services.AddAgentStorage(options =>
             {
                 options.ModelsRoot = test._root;

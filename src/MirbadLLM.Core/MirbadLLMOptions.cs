@@ -3,6 +3,8 @@ namespace MirbadLLM.Core;
 /// <summary>Bound from the <c>MirbadLLM</c> configuration section.</summary>
 public sealed class MirbadLLMOptions
 {
+    public HuggingFaceOptions HuggingFace { get; set; } = new();
+
     public const string SectionName = "MirbadLLM";
 
     /// <summary>Default vLLM image for models without their own.</summary>

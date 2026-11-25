@@ -17,17 +17,19 @@ public sealed class SecureDownloadTransport
 {
     private readonly HttpClient _http;
     private readonly NativeDownloadOptions _options;
+    private readonly Func<Uri, bool>? _destinationAllowed;
 
     /// <summary>Creates the transport.</summary>
     /// <param name="http">Client used for every request.</param>
     /// <param name="credentialOrigin">Origin that may receive the credential (the Hugging Face endpoint); null = none.</param>
     /// <param name="options">Rules; defaults when null.</param>
-    public SecureDownloadTransport(HttpClient http, Uri? credentialOrigin, NativeDownloadOptions? options = null)
+    public SecureDownloadTransport(HttpClient http, Uri? credentialOrigin, NativeDownloadOptions? options = null, Func<Uri, bool>? destinationAllowed = null)
     {
         ArgumentNullException.ThrowIfNull(http);
         _http = http;
         _options = options ?? new NativeDownloadOptions();
         CredentialOrigin = credentialOrigin;
+        _destinationAllowed = destinationAllowed;
     }
 
     /// <summary>The origin that receives the credential.</summary>
@@ -40,7 +42,7 @@ public sealed class SecureDownloadTransport
     public bool IsAllowed(Uri uri)
     {
         ArgumentNullException.ThrowIfNull(uri);
-        if (!uri.IsAbsoluteUri)
+        if (!uri.IsAbsoluteUri || uri.UserInfo.Length != 0 || _destinationAllowed?.Invoke(uri) == false)
         {
             return false;
         }
@@ -71,7 +73,11 @@ public sealed class SecureDownloadTransport
     /// <param name="credential">Sent only to <see cref="CredentialOrigin"/>.</param>
     /// <param name="configure">Adds request headers (e.g. <c>Range</c>) on every hop.</param>
     /// <param name="ct">Cancellation.</param>
-    public async Task<HttpResponseMessage> GetAsync(Uri url, AuthenticationHeaderValue? credential, Action<HttpRequestMessage>? configure, CancellationToken ct)
+    public Task<HttpResponseMessage> GetAsync(Uri url, AuthenticationHeaderValue? credential, Action<HttpRequestMessage>? configure, CancellationToken ct) =>
+        SendAsync(HttpMethod.Get, url, credential, configure, ct);
+
+    public async Task<HttpResponseMessage> SendAsync(
+        HttpMethod method, Uri url, AuthenticationHeaderValue? credential, Action<HttpRequestMessage>? configure, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(url);
         Uri current = url;
@@ -82,7 +88,7 @@ public sealed class SecureDownloadTransport
                 throw new DownloadRefusedException(refused);
             }
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, current);
+            using var request = new HttpRequestMessage(method, current);
             configure?.Invoke(request);
             if (credential is not null && SameOrigin(current, CredentialOrigin))
             {
@@ -124,7 +130,7 @@ public sealed class SecureDownloadTransport
         status is HttpStatusCode.MovedPermanently or HttpStatusCode.Found or HttpStatusCode.SeeOther
             or HttpStatusCode.TemporaryRedirect or HttpStatusCode.PermanentRedirect;
 
-    private static bool SameOrigin(Uri target, Uri? origin) =>
+    public static bool SameOrigin(Uri target, Uri? origin) =>
         origin is not null && origin.IsAbsoluteUri &&
         string.Equals(target.Scheme, origin.Scheme, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(target.IdnHost, origin.IdnHost, StringComparison.OrdinalIgnoreCase) &&

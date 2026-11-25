@@ -35,7 +35,10 @@ public sealed record ContainerLaunchConfig(string Image, IReadOnlyList<string> C
 }
 
 /// <summary>How often Docker has restarted a container and how its last run ended.</summary>
-public sealed record ContainerRuntimeState(int RestartCount, int ExitCode, bool OomKilled);
+public sealed record ContainerRuntimeState(int RestartCount, int ExitCode, bool OomKilled)
+{
+    public DateTimeOffset? StartedAt { get; init; }
+}
 
 /// <summary>
 /// Everything <see cref="DockerEngineClient.CreateJobContainerAsync"/> needs to create a short-lived helper
@@ -301,7 +304,10 @@ public sealed class DockerEngineClient(HttpClient httpClient)
         return new ContainerRuntimeState(
             dto?.RestartCount ?? 0,
             dto?.State?.ExitCode ?? 0,
-            dto?.State?.OOMKilled ?? false);
+            dto?.State?.OOMKilled ?? false)
+        {
+            StartedAt = dto?.State?.StartedAt,
+        };
     }
 
     /// <summary>Image, command, environment and binds from <c>GET /containers/{id}/json</c>.</summary>
@@ -524,6 +530,9 @@ public sealed class DockerEngineClient(HttpClient httpClient)
 
     private sealed class ContainerInspectStateDto
     {
+        [JsonPropertyName("StartedAt")]
+        public DateTimeOffset? StartedAt { get; set; }
+
         [JsonPropertyName("ExitCode")]
         public int ExitCode { get; set; }
 

@@ -294,7 +294,7 @@ public sealed class FleetStatsCollector(IServiceProvider services, FleetStatsSto
                 {
                     if (sample.HasRates)
                     {
-                        store.AddTokens(sample.Kpis.Load.GenerationTokensPerSecond * seconds, sample.At);
+                        store.AddTokens((sample.CompletedGenerationTokensPerSecond ?? sample.Kpis.Load.GenerationTokensPerSecond) * seconds, sample.At);
                     }
 
                     _cursor[model.Id] = sample.At;

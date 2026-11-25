@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using MirbadLLM.Core;
+using MirbadLLM.NodeRuntime.Downloads.Native;
 
 namespace MirbadLLM.NodeRuntime;
 
@@ -31,13 +32,18 @@ public sealed partial class HuggingFaceDownloader(
     IOptions<MirbadLLMOptions> options,
     IOptions<ModelStorageOptions> storageOptions,
     ILogger<HuggingFaceDownloader> logger,
-    string? helperUser = null) : IHuggingFaceDownloader
+    string? helperUser = null,
+    HubHttpClients? hubClients = null,
+    string? cacheRoot = null) : IHuggingFaceDownloader
 {
     private const string LabelDownload = "mirbadllm.download";
     private const string LabelFolder = "mirbadllm.download.folder";
     private const string LabelRepo = "mirbadllm.download.repo";
     private const string LabelRevision = "mirbadllm.download.revision";
     private const string LabelTotalBytes = "mirbadllm.download.total-bytes";
+    private const string LabelVerifiedHelper = "mirbadllm.download.verified-helper";
+    private const string LabelCaFile = "mirbadllm.download.hub-ca";
+    private const string PartialSuffix = ".partial";
 
     /// <summary>Default files fetched when a request does not specify its own allow-patterns.</summary>
     public static readonly IReadOnlyList<string> DefaultAllowPatterns = HuggingFacePatterns.DefaultAllowPatterns;
@@ -45,6 +51,7 @@ public sealed partial class HuggingFaceDownloader(
     // python3 -c script; argv: repo_id, revision ("" = default branch), local_dir, comma-separated allow-patterns.
     // HF_TOKEN (and HF_HUB_ENABLE_HF_TRANSFER) come from the environment, never from argv or logs.
     private const string DownloadScript = """
+        import os
         import sys
         from huggingface_hub import snapshot_download
 
@@ -55,13 +62,79 @@ public sealed partial class HuggingFaceDownloader(
             revision=revision or None,
             local_dir=local_dir,
             allow_patterns=patterns,
+            token=os.environ.get("HF_TOKEN") or False,
         )
         print("mirbadllm: download complete", flush=True)
+        """;
+
+    private const string VerifiedDownloadScript = """
+        import json
+        import os
+        import ssl
+        import sys
+        from urllib.parse import unquote, urlsplit
+        import huggingface_hub as hub
+
+        repo_id, revision, local_dir, mode = sys.argv[1:]
+        endpoint = os.environ["HF_ENDPOINT"]
+        manifest = json.load(open(os.path.join(local_dir, ".mirbadllm-download.json"), encoding="utf-8"))
+        expected = {f["path"]: f.get("lfsSha256") or f.get("blobSha1")
+                    for f in manifest["files"] if f["state"] != "verified"}
+        origin = urlsplit(endpoint)
+        prefix = f"/{repo_id}/resolve/{revision}/"
+
+        def validate_request(url):
+            target = urlsplit(str(url))
+            if (target.scheme, target.netloc) != (origin.scheme, origin.netloc) or not target.path.startswith(prefix):
+                raise RuntimeError("Mirror request outside the selected origin or commit")
+            path = unquote(target.path[len(prefix):])
+            if not expected.get(path):
+                raise RuntimeError("Mirror request outside the selected files")
+            return expected[path]
+
+        def validate_response(response, digest):
+            if 300 <= response.status_code < 400:
+                raise RuntimeError("Mirror redirects are refused")
+            if response.status_code in (200, 206, 416) and response.headers.get("ETag") != '"' + digest + '"':
+                raise RuntimeError("Unexpected mirror ETag")
+
+        if mode == "mirror":
+            if hasattr(hub, "set_client_factory"):
+                import httpx
+                def check_request(request):
+                    validate_request(request.url)
+                def check_response(response):
+                    validate_response(response, validate_request(response.request.url))
+                hub.set_client_factory(lambda: httpx.Client(follow_redirects=False,
+                    trust_env=False, verify=ssl.create_default_context(cafile=os.environ.get("SSL_CERT_FILE")),
+                    event_hooks={"request": [check_request], "response": [check_response]}))
+            else:
+                import requests
+                class MirrorAdapter(requests.adapters.HTTPAdapter):
+                    def send(self, request, **kwargs):
+                        digest = validate_request(request.url)
+                        response = super().send(request, **kwargs)
+                        validate_response(response, digest)
+                        return response
+                def session():
+                    client = requests.Session()
+                    client.trust_env = False
+                    client.verify = os.environ.get("REQUESTS_CA_BUNDLE", True)
+                    client.mount("https://", MirrorAdapter())
+                    client.mount("http://", MirrorAdapter())
+                    return client
+                hub.configure_http_backend(backend_factory=session)
+
+        for path, digest in expected.items():
+            if digest:
+                hub.hf_hub_download(repo_id, filename=path, revision=revision, endpoint=endpoint,
+                    local_dir=local_dir, token=False, force_download=(mode == "direct"))
         """;
 
     private readonly MirbadLLMOptions _options = options.Value;
     private readonly ModelStorageOptions _storage = storageOptions.Value;
     private readonly HuggingFaceRepoInspector _repoInspector = new(huggingFaceHttp);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _finalization = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, (long Bytes, DateTimeOffset At)> _lastSample = new(StringComparer.Ordinal);
 
     // Final state of downloads whose helper container has already been removed. A finished container is
@@ -70,7 +143,10 @@ public sealed partial class HuggingFaceDownloader(
     // download that finished before the restart is no longer listed.
     private readonly ConcurrentDictionary<string, DownloadStatus> _finished = new(StringComparer.Ordinal);
 
-    public async Task<DownloadStatus> StartAsync(DownloadRequest request, CancellationToken ct = default)
+    public Task<DownloadStatus> StartAsync(DownloadRequest request, CancellationToken ct = default) =>
+        StartAsync(request, null, ct);
+
+    public async Task<DownloadStatus> StartAsync(DownloadRequest request, HubAcquisition? acquisition, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.RepoId))
         {
@@ -89,11 +165,19 @@ public sealed partial class HuggingFaceDownloader(
             }
 
             await docker.RemoveContainerAsync(existing.Id, ct).ConfigureAwait(false);
+            RemoveBundle(existing.Labels.GetValueOrDefault(LabelCaFile));
         }
 
         _finished.TryRemove(folder, out _);
 
-        var files = await _repoInspector.ListFilesAsync(request.RepoId, request.Revision, request.Token, ct).ConfigureAwait(false);
+        if (acquisition is { Origin.IsOfficial: false } lan)
+        {
+            return await StartVerifiedAsync(folder, request.Revision, patterns, lan, ct).ConfigureAwait(false);
+        }
+
+        var files = acquisition?.Snapshot.Files.Select(f => new RepoFile(f.Path, f.Size)).ToList()
+            ?? await _repoInspector.ListFilesAsync(request.RepoId, request.Revision, request.Token, ct).ConfigureAwait(false);
+        string? revision = acquisition?.Snapshot.CommitSha ?? request.Revision;
         var matched = files.Where(f => MatchesAny(f.Name, patterns)).ToList();
         if (matched.Count == 0)
         {
@@ -104,7 +188,12 @@ public sealed partial class HuggingFaceDownloader(
 
         await docker.EnsureNetworkAsync(_options.DockerNetwork, ct).ConfigureAwait(false);
 
-        var env = new List<string> { "HF_HUB_ENABLE_HF_TRANSFER=0" };
+        var env = new List<string>
+        {
+            "HF_HUB_ENABLE_HF_TRANSFER=0",
+            $"HF_ENDPOINT={HubOrigin.OfficialEndpoint.AbsoluteUri.TrimEnd('/')}",
+            "HF_HUB_DISABLE_IMPLICIT_TOKEN=1",
+        };
         if (!string.IsNullOrEmpty(request.Token))
         {
             env.Add($"HF_TOKEN={request.Token}");
@@ -121,7 +210,7 @@ public sealed partial class HuggingFaceDownloader(
             [LabelDownload] = "true",
             [LabelFolder] = folder,
             [LabelRepo] = request.RepoId,
-            [LabelRevision] = request.Revision ?? "",
+            [LabelRevision] = revision ?? "",
             [LabelTotalBytes] = totalBytes.ToString(CultureInfo.InvariantCulture),
         };
 
@@ -129,7 +218,7 @@ public sealed partial class HuggingFaceDownloader(
             Name: $"ss-dl-{folder}",
             Image: _options.VllmImage,
             Entrypoint: ["python3"],
-            Cmd: ["-c", DownloadScript, request.RepoId, request.Revision ?? "", $"/models/{folder}", string.Join(",", patterns)],
+            Cmd: ["-c", DownloadScript, request.RepoId, revision ?? "", $"/models/{folder}", string.Join(",", patterns)],
             Labels: labels,
             Binds: [$"{_options.ModelsHostPath}:/models"],
             Env: env,
@@ -141,7 +230,7 @@ public sealed partial class HuggingFaceDownloader(
         await docker.StartContainerAsync(containerId, ct).ConfigureAwait(false);
         DownloadLog.DownloadStarted(logger, folder, request.RepoId);
 
-        return new DownloadStatus(folder, request.RepoId, request.Revision, DownloadState.Queued, 0, totalBytes, null, null);
+        return new DownloadStatus(folder, request.RepoId, revision, DownloadState.Queued, 0, totalBytes, null, null);
     }
 
     public async Task<IReadOnlyList<DownloadStatus>> ListAsync(CancellationToken ct = default)
@@ -184,11 +273,26 @@ public sealed partial class HuggingFaceDownloader(
             return _finished.TryRemove(folder, out _);
         }
 
-        await docker.StopContainerAsync(container.Id, timeoutSeconds: 5, ct).ConfigureAwait(false);
-        await docker.RemoveContainerAsync(container.Id, ct).ConfigureAwait(false);
-        _lastSample.TryRemove(folder, out _);
-        DownloadLog.DownloadCancelled(logger, folder);
-        return true;
+        var gate = _finalization.GetOrAdd(folder, _ => new SemaphoreSlim(1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            container = await FindContainerAsync(folder, ct).ConfigureAwait(false);
+            if (container is not null)
+            {
+                await docker.StopContainerAsync(container.Id, timeoutSeconds: 5, ct).ConfigureAwait(false);
+                await docker.RemoveContainerAsync(container.Id, ct).ConfigureAwait(false);
+                RemoveBundle(container.Labels.GetValueOrDefault(LabelCaFile));
+            }
+
+            _lastSample.TryRemove(folder, out _);
+            DownloadLog.DownloadCancelled(logger, folder);
+            return true;
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private async Task<ContainerSummary?> FindContainerAsync(string folder, CancellationToken ct)
@@ -204,6 +308,11 @@ public sealed partial class HuggingFaceDownloader(
         string? revision = container.Labels.TryGetValue(LabelRevision, out string? r) && r.Length > 0 ? r : null;
         long totalBytes = container.Labels.TryGetValue(LabelTotalBytes, out string? t) &&
             long.TryParse(t, CultureInfo.InvariantCulture, out long parsed) ? parsed : 0;
+
+        if (container.Labels.TryGetValue(LabelVerifiedHelper, out string? mode))
+        {
+            return await MapVerifiedAsync(container, folder, repoId, revision, totalBytes, mode, ct).ConfigureAwait(false);
+        }
 
         long bytesDownloaded = ComputeBytesOnDisk(folder);
         if (totalBytes > 0)
@@ -281,6 +390,311 @@ public sealed partial class HuggingFaceDownloader(
         {
             // Left for the next poll (or StartAsync) to remove; the remembered state is already recorded.
             DownloadLog.RemoveDownloadContainerFailed(logger, ex, containerId);
+        }
+    }
+
+    private async Task<DownloadStatus> StartVerifiedAsync(string folder, string? revision, IReadOnlyList<string> patterns,
+        HubAcquisition acquisition, CancellationToken ct)
+    {
+        if (folder.EndsWith(PartialSuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new DownloadPathException("The helper's destination uses the reserved partial suffix.");
+        }
+
+        string stage = StagePath(folder);
+        if (RepoPathRules.FindLink(stage) is not null)
+        {
+            throw new DownloadPathException("The helper staging folder contains a link.");
+        }
+
+        var previous = Directory.Exists(stage) ? DownloadManifest.TryRead(stage) : null;
+        if (Directory.Exists(stage) && (previous is not { ContainerHelper: true } ||
+            previous.RepoId != acquisition.Snapshot.RepoId || previous.CommitSha != acquisition.Snapshot.CommitSha))
+        {
+            throw new DownloadDestinationExistsException("The staging folder belongs to a different download.");
+        }
+
+        string destination = Path.Combine(_storage.ModelsLocalPath, folder);
+        var manifest = NativeSnapshotDownloader.BuildManifest(acquisition.Snapshot, revision, patterns, false, null, DateTimeOffset.UtcNow) with
+        {
+            HubEndpoint = acquisition.Origin.Endpoint.AbsoluteUri,
+            HubTrust = acquisition.Origin.Trust,
+            ContainerHelper = true,
+            MergeIntoExisting = Directory.Exists(destination),
+        };
+        if (manifest.Files.Count == 0)
+        {
+            throw new ArgumentException("No files match the allowed patterns.");
+        }
+
+        if (manifest.MergeIntoExisting)
+        {
+            var verified = new List<DownloadManifestFile>(manifest.Files.Count);
+            foreach (var file in manifest.Files)
+            {
+                verified.Add(await NativeSnapshotDownloader.MatchExistingAsync(destination, file, ct).ConfigureAwait(false)
+                    ? file with { State = DownloadFileState.Verified } : file);
+            }
+
+            manifest = manifest with { Files = verified };
+        }
+
+        Directory.CreateDirectory(stage);
+        manifest.Write(stage);
+        await LaunchVerifiedHelperAsync(folder, manifest, acquisition.Mirror, ct).ConfigureAwait(false);
+        return new DownloadStatus(folder, manifest.RepoId, manifest.CommitSha, DownloadState.Queued,
+            manifest.PresentBytes(stage, includeReusedFiles: manifest.MergeIntoExisting), manifest.TotalBytes, null, null);
+    }
+
+    private async Task LaunchVerifiedHelperAsync(string folder, DownloadManifest manifest, HubOrigin? mirror, CancellationToken ct)
+    {
+        await docker.EnsureNetworkAsync(_options.DockerNetwork, ct).ConfigureAwait(false);
+        var endpoint = mirror?.Endpoint ?? HubOrigin.OfficialEndpoint;
+        string mode = mirror is null ? "direct" : "mirror";
+        var labels = new Dictionary<string, string>
+        {
+            [LabelDownload] = "true",
+            [LabelFolder] = folder,
+            [LabelRepo] = manifest.RepoId,
+            [LabelRevision] = manifest.CommitSha,
+            [LabelTotalBytes] = manifest.TotalBytes.ToString(CultureInfo.InvariantCulture),
+            [LabelVerifiedHelper] = mode,
+        };
+        var env = new List<string>
+        {
+            $"HF_ENDPOINT={endpoint.AbsoluteUri.TrimEnd('/')}",
+            "HF_HUB_ENABLE_HF_TRANSFER=0",
+            "HF_HUB_DISABLE_XET=1",
+            "HF_HUB_DISABLE_IMPLICIT_TOKEN=1",
+        };
+        if (helperUser is not null)
+        {
+            env.Add($"HOME={DownloadHelperUser.HelperHome}");
+            env.Add($"HF_HOME={DownloadHelperUser.HelperHome}/huggingface");
+        }
+
+        string stagingName = folder + PartialSuffix;
+        var binds = new List<string> { $"{_options.ModelsHostPath.TrimEnd('/')}/{stagingName}:/models/{stagingName}" };
+        string? bundle = null;
+        string? containerId = null;
+        try
+        {
+            if (mirror?.Trust == HubTrust.FleetCa)
+            {
+                if (cacheRoot is null || !Path.IsPathFullyQualified(cacheRoot) || hubClients?.AnchorPems is not { Count: > 0 } anchors)
+                {
+                    throw new DownloadRefusedException("The fleet mirror helper needs the agent cache mount and enrolled public roots.");
+                }
+
+                Directory.CreateDirectory(cacheRoot);
+                bundle = $"hub-ca-{Guid.NewGuid():N}.pem";
+                string local = Path.Combine(cacheRoot, bundle);
+                var fileOptions = new FileStreamOptions { Access = FileAccess.Write, Mode = FileMode.CreateNew };
+                if (!OperatingSystem.IsWindows())
+                {
+                    fileOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite |
+                        UnixFileMode.GroupRead | UnixFileMode.OtherRead;
+                }
+
+                await using (var writer = new StreamWriter(new FileStream(local, fileOptions)))
+                {
+                    await writer.WriteAsync(string.Join("\n", anchors).AsMemory(), ct).ConfigureAwait(false);
+                }
+
+                if (!OperatingSystem.IsWindows())
+                {
+                    File.SetUnixFileMode(local, UnixFileMode.UserRead | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+                }
+
+                labels[LabelCaFile] = bundle;
+                binds.Add($"{_options.CacheHostPath.TrimEnd('/')}/{bundle}:/run/mirbad/hub-ca.pem:ro");
+                env.Add("REQUESTS_CA_BUNDLE=/run/mirbad/hub-ca.pem");
+                env.Add("SSL_CERT_FILE=/run/mirbad/hub-ca.pem");
+            }
+
+            var job = new CreateJobContainerRequest($"ss-dl-{folder}", _options.VllmImage, ["python3"],
+                ["-c", VerifiedDownloadScript, manifest.RepoId, manifest.CommitSha, $"/models/{stagingName}", mode],
+                labels, binds, env, _options.DockerNetwork, $"ss-dl-{folder}", helperUser);
+            containerId = await docker.CreateJobContainerAsync(job, ct).ConfigureAwait(false);
+            await docker.StartContainerAsync(containerId, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (containerId is not null)
+            {
+                await docker.RemoveContainerAsync(containerId, CancellationToken.None).ConfigureAwait(false);
+            }
+
+            RemoveBundle(bundle);
+            throw;
+        }
+    }
+
+    private async Task<DownloadStatus> MapVerifiedAsync(ContainerSummary container, string folder, string repoId,
+        string? revision, long total, string mode, CancellationToken ct)
+    {
+        string stage = StagePath(folder);
+        var active = new DownloadStatus(folder, repoId, revision, DownloadState.Downloading,
+            Math.Min(total, VerifiedBytesOnDisk(stage)), total, null, null);
+        string? bundle = container.Labels.GetValueOrDefault(LabelCaFile);
+        bool rotate = BundleNeedsRefresh(bundle);
+        if (!rotate && container.State is not ("exited" or "dead"))
+        {
+            return active;
+        }
+
+        var gate = _finalization.GetOrAdd(folder, _ => new SemaphoreSlim(1));
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_finished.TryGetValue(folder, out var previous))
+            {
+                return previous;
+            }
+
+            var current = await FindContainerAsync(folder, ct).ConfigureAwait(false);
+            if (current?.Id != container.Id)
+            {
+                return active;
+            }
+
+            DownloadStatus final;
+            try
+            {
+                string destination = Path.Combine(_storage.ModelsLocalPath, folder);
+                string work = Directory.Exists(stage) ? stage : destination;
+                var manifest = DownloadManifest.TryRead(work);
+                if (manifest is not { ContainerHelper: true } || manifest.RepoId != repoId || manifest.CommitSha != revision ||
+                    RepoPathRules.FindLink(work) is not null)
+                {
+                    throw new DownloadPathException("The verified helper's pinned manifest or staging folder is unavailable.");
+                }
+
+                if (rotate && container.State is not ("exited" or "dead"))
+                {
+                    await docker.StopContainerAsync(container.Id, timeoutSeconds: 5, ct).ConfigureAwait(false);
+                    await docker.RemoveContainerAsync(container.Id, ct).ConfigureAwait(false);
+                    RemoveBundle(bundle);
+                    var refreshed = HubOrigin.Parse(manifest.HubEndpoint, manifest.HubTrust);
+                    await LaunchVerifiedHelperAsync(folder, manifest, refreshed, ct).ConfigureAwait(false);
+                    return active;
+                }
+
+                bool success = container.State == "exited" && ParseExitCode(container.Status) == 0;
+                bool verified = success && await VerifyHelperFilesAsync(manifest, work, destination, ct).ConfigureAwait(false);
+                if (!verified && mode == "mirror")
+                {
+                    await docker.RemoveContainerAsync(container.Id, ct).ConfigureAwait(false);
+                    RemoveBundle(container.Labels.GetValueOrDefault(LabelCaFile));
+                    await LaunchVerifiedHelperAsync(folder, manifest, mirror: null, ct).ConfigureAwait(false);
+                    return active;
+                }
+
+                if (!verified)
+                {
+                    throw new DownloadIntegrityException("The official helper exited before all checkpoint files could be verified.");
+                }
+
+                await NativeSnapshotDownloader.PublishVerifiedFolderAsync(manifest, work, destination, ct).ConfigureAwait(false);
+                final = active with { State = DownloadState.Completed, BytesDownloaded = total };
+            }
+            catch (Exception ex) when (ex is NativeDownloadException or IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                final = active with { State = DownloadState.Failed, Error = ex.Message };
+            }
+
+            await RememberAndRemoveAsync(container.Id, final, ct).ConfigureAwait(false);
+            RemoveBundle(container.Labels.GetValueOrDefault(LabelCaFile));
+            return final;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<bool> VerifyHelperFilesAsync(DownloadManifest manifest, string stage, string destination, CancellationToken ct)
+    {
+        var transport = hubClients!.OfficialTransport();
+        var hub = new HuggingFaceHubClient(transport, hubClients.Official.BaseAddress ?? HubOrigin.OfficialEndpoint);
+        var range = new RangeDownloader(transport);
+        foreach (var file in manifest.Files)
+        {
+            if (manifest.MergeIntoExisting && file.State == DownloadFileState.Verified &&
+                await NativeSnapshotDownloader.MatchExistingAsync(destination, file, ct).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            var digest = file.Digest();
+            if (digest is null)
+            {
+                string target = RepoPathRules.PrepareTarget(stage, file.Path);
+                var request = new RangeDownloadRequest
+                {
+                    Url = hub.FileUrl(manifest.RepoId, manifest.CommitSha, file.Path),
+                    FilePath = target, ExpectedLength = file.Size, DisplayName = file.Path,
+                    ConfinementRoot = stage, ConfinedWrites = true,
+                };
+                if (File.Exists(target))
+                {
+                    RangeDownloader.Reset(request);
+                }
+
+                var fetched = await range.DownloadAsync(request, null, ct).ConfigureAwait(false);
+                if (!fetched.Verified)
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                await using var opened = ConfinedModelFile.Open(stage, file.Path);
+                if (opened is null || opened.Length != file.Size || !await digest.MatchesAsync(opened, ct).ConfigureAwait(false))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private string StagePath(string folder) => Path.Combine(_storage.ModelsLocalPath, folder + PartialSuffix);
+
+    private static long VerifiedBytesOnDisk(string stage)
+    {
+        try
+        {
+            var manifest = DownloadManifest.TryRead(stage);
+            return manifest?.PresentBytes(stage, includeReusedFiles: manifest.MergeIntoExisting) ?? 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return 0;
+        }
+    }
+
+    private string? BundlePath(string? file) =>
+        cacheRoot is not null && file is { Length: 43 } && file.StartsWith("hub-ca-", StringComparison.Ordinal) &&
+            file.EndsWith(".pem", StringComparison.Ordinal) && Guid.TryParseExact(file.AsSpan(7, 32), "N", out _)
+            ? Path.Combine(cacheRoot, file) : null;
+
+    private bool BundleNeedsRefresh(string? file)
+    {
+        if (BundlePath(file) is not { } path)
+        {
+            return false;
+        }
+
+        return !File.Exists(path) || File.ReadAllText(path) != string.Join("\n", hubClients!.AnchorPems);
+    }
+
+    private void RemoveBundle(string? file)
+    {
+        if (BundlePath(file) is { } path)
+        {
+            File.Delete(path);
         }
     }
 

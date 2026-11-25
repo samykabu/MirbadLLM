@@ -534,6 +534,32 @@ public sealed class TelemetryTests
     }
 
     [Fact]
+    public async Task Sampler_LlamaSlotsUseTheRuntimeKeyAndDiscardCounterRaces()
+    {
+        var driver = new FakeDriver()
+            .Add("process", ModelState.Ready, 8101, RuntimeKind.LlamaCpp, LaunchDelivery.Process, "local-key")
+            .Add("container", ModelState.Ready, 8102, RuntimeKind.LlamaCpp)
+            .Add("mlx", ModelState.Ready, 8103, RuntimeKind.Mlx);
+        var paths = new System.Collections.Concurrent.ConcurrentBag<(int Port, string Path, string? Key)>();
+        int containerMetrics = 0;
+        using var handler = new FakeHttp((Uri uri, CancellationToken _) =>
+        {
+            return Task.FromResult(uri.AbsolutePath == "/slots"
+                ? Ok(MirbadLLM.UnitTests.Orchestration.LlamaCppKpiTests.B12681Slots)
+                : Ok($"llamacpp:tokens_predicted_total {(uri.Port == 8102 && Interlocked.Increment(ref containerMetrics) > 1 ? 400 : 200)}"));
+        }) { Observe = request => paths.Add((request.RequestUri!.Port, request.RequestUri.AbsolutePath, request.Headers.Authorization?.Parameter)) };
+        var (sampler, _) = Sampler(driver, handler);
+        var sample = await sampler.SampleOnceAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(400, sample!.Models.Single(model => model.ModelId == "process").LlamaDecodedTokens);
+        Assert.Null(sample.Models.Single(model => model.ModelId == "container").LlamaDecodedTokens);
+        Assert.All(paths.Where(path => path.Port == 8101), path => Assert.Equal("local-key", path.Key));
+        Assert.All(paths.Where(path => path.Port == 8102), path => Assert.Null(path.Key));
+        Assert.DoesNotContain(paths, path => path.Port == 8103);
+        Assert.Equal(2, paths.Count(path => path.Path == "/slots"));
+        Assert.Equal(4, paths.Count(path => path.Path == "/metrics"));
+    }
+
+    [Fact]
     public async Task Sampler_OneFailingAndOneSlowScrape_DoNotAffectTheOthers()
     {
         var driver = new FakeDriver()
@@ -965,12 +991,15 @@ public sealed class TelemetryTests
 
         public FakeHttp(Func<Uri, CancellationToken, Task<HttpResponseMessage>> answer) => _answer = answer;
 
+        public Action<HttpRequestMessage>? Observe { get; init; }
+
         public ConcurrentQueue<string> RequestQueue { get; } = new();
 
         public IReadOnlyList<string> Requests => [.. RequestQueue];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            Observe?.Invoke(request);
             RequestQueue.Enqueue(request.RequestUri!.ToString());
             return _answer(request.RequestUri!, cancellationToken);
         }
@@ -984,11 +1013,23 @@ public sealed class TelemetryTests
 
         public LaunchDelivery Delivery => LaunchDelivery.Container;
 
-        public FakeDriver Add(string modelId, ModelState state, int? port)
+        private readonly Dictionary<string, string> _keys = new(StringComparer.Ordinal);
+
+        public FakeDriver Add(string modelId, ModelState state, int? port, RuntimeKind runtime = RuntimeKind.Vllm,
+            LaunchDelivery delivery = LaunchDelivery.Container, string? key = null)
         {
-            _instances.Add(new RuntimeStatus { ModelId = modelId, State = state, HostPort = port });
+            _instances.Add(new RuntimeStatus { ModelId = modelId, State = state, HostPort = port,
+                Runtime = runtime, Delivery = delivery, InstanceId = modelId });
+            if (key is not null)
+            {
+                _keys[modelId] = key;
+            }
+
             return this;
         }
+
+        public Task<string?> GetUpstreamApiKeyAsync(string modelId, CancellationToken ct = default) =>
+            Task.FromResult(_keys.GetValueOrDefault(modelId));
 
         public Task<IReadOnlyList<RuntimeStatus>> ListAsync(CancellationToken ct = default) =>
             ListThrows ? throw new HttpRequestException("Docker is unreachable") : Task.FromResult<IReadOnlyList<RuntimeStatus>>(_instances);

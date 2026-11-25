@@ -900,7 +900,13 @@ public sealed partial class MoveService : IHostedService, IDisposable
             };
             try
             {
-                await _runner.SubmitAsync(nodeId, AgentRoutes.DownloadStart, folder, body,
+                var (selectedBody, notice) = await _runner.WithHubEndpointAsync(nodeId, body, ct).ConfigureAwait(false);
+                if (notice is not null)
+                {
+                    MoveServiceLog.HubEndpointUnavailable(_logger, nodeId, notice);
+                }
+
+                await _runner.SubmitAsync(nodeId, AgentRoutes.DownloadStart, folder, selectedBody,
                     (c, r, t) => c.StartDownloadAsync(r, t), s => s.State switch
                     {
                         DownloadState.Completed => OperationState.Succeeded,
@@ -1895,6 +1901,9 @@ public static class MoveServiceCollectionExtensions
 /// <summary>Source-generated log messages of <see cref="MoveService"/>.</summary>
 internal static partial class MoveServiceLog
 {
+    [LoggerMessage(Level = LogLevel.Information, Message = "Node {NodeId} uses the official Hub. {Notice}")]
+    public static partial void HubEndpointUnavailable(ILogger logger, string nodeId, string notice);
+
     [LoggerMessage(Level = LogLevel.Information, Message = "Move {RecordId} of model {ModelId} started: {SourceNodeId} -> {TargetNodeId}.")]
     public static partial void Started(ILogger logger, string modelId, string recordId, string sourceNodeId, string targetNodeId);
 

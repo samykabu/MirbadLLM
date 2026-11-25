@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using MirbadLLM.Core;
+using MirbadLLM.NodeRuntime.Downloads.Native;
 
 namespace MirbadLLM.NodeRuntime;
 
@@ -13,7 +14,8 @@ namespace MirbadLLM.NodeRuntime;
 /// listing <see cref="HuggingFaceDownloader"/> uses to size a download, so the "Inspect repo" step in the
 /// editor and the zero-match pre-flight check in <see cref="HuggingFaceDownloader.StartAsync"/> see the same data.
 /// </summary>
-public sealed partial class HuggingFaceRepoInspector(HttpClient huggingFaceHttp) : IHuggingFaceRepoInspector
+public sealed partial class HuggingFaceRepoInspector(
+    HttpClient huggingFaceHttp, HubHttpClients? hubClients = null, HubOrigin? origin = null) : IHuggingFaceRepoInspector
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -27,9 +29,29 @@ public sealed partial class HuggingFaceRepoInspector(HttpClient huggingFaceHttp)
     /// <exception cref="HuggingFaceApiException">The repo/revision is gated, private (401/403) or unknown (404).</exception>
     public async Task<IReadOnlyList<RepoFile>> ListFilesAsync(string repoId, string? revision, string? token, CancellationToken ct = default)
     {
+        if (origin is { IsOfficial: false } && string.IsNullOrEmpty(token))
+        {
+            var authority = new HuggingFaceHubClient(hubClients!.OfficialTransport(), hubClients.Official.BaseAddress ?? HubOrigin.OfficialEndpoint);
+            var snapshot = await authority.GetSnapshotAsync(repoId, revision, null, ct).ConfigureAwait(false);
+            if (snapshot.IsPublicUngated)
+            {
+                using var mirror = hubClients.OpenMirror(origin);
+                snapshot = await new HuggingFaceHubClient(mirror, mirror: true)
+                    .GetSnapshotAsync(repoId, snapshot.CommitSha, null, ct).ConfigureAwait(false);
+            }
+
+            return snapshot.Files.Select(file => new RepoFile(file.Path, file.Size)).ToList();
+        }
+
         string path = string.IsNullOrEmpty(revision)
             ? $"api/models/{repoId}?blobs=true"
             : $"api/models/{repoId}/revision/{Uri.EscapeDataString(revision)}?blobs=true";
+
+        if (!HuggingFaceHubClient.IsValidRepoId(repoId) ||
+            (!string.IsNullOrEmpty(revision) && !HuggingFaceHubClient.IsValidRevision(revision)))
+        {
+            throw new HuggingFaceApiException("The Hugging Face repo id or revision is invalid.");
+        }
 
         using var request = new HttpRequestMessage(HttpMethod.Get, path);
         if (!string.IsNullOrEmpty(token))
@@ -37,7 +59,11 @@ public sealed partial class HuggingFaceRepoInspector(HttpClient huggingFaceHttp)
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
 
-        using var response = await huggingFaceHttp.SendAsync(request, ct).ConfigureAwait(false);
+        using var response = hubClients is null
+            ? await huggingFaceHttp.SendAsync(request, ct).ConfigureAwait(false)
+            : await hubClients.OfficialTransport().GetAsync(
+                new Uri(huggingFaceHttp.BaseAddress ?? HubOrigin.OfficialEndpoint, path), request.Headers.Authorization, null, ct)
+                .ConfigureAwait(false);
         if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
             throw new HuggingFaceApiException(

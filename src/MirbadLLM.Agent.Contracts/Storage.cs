@@ -132,6 +132,14 @@ public sealed record DownloadStartRequest : AgentMutation
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public OllamaSource? Ollama { get; init; }
 
+    /// <summary>Master default advertised to an endpoint-aware agent.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FleetHubEndpoint { get; init; }
+
+    /// <summary>Trust policy for the master default.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public HubTrust? FleetHubTrust { get; init; }
+
     /// <summary>Redacts <see cref="Token"/>.</summary>
     public override string ToString() =>
         $"DownloadStartRequest {{ OperationId = {OperationId}, RepoId = {RepoId}, Revision = {Revision}, Folder = {Folder}, Token = {(Token is null ? "null" : Protocol.RedactedValue)}, Existing = {Existing}, Source = {Source} }}";

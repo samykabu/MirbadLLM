@@ -827,7 +827,8 @@ internal sealed class ScriptedAgent(string nodeId, TimeProvider time, int ringCa
         double availableGiB = 64,
         IReadOnlyList<(string Model, string? Text)>? models = null,
         IReadOnlyList<GpuSample>? gpus = null,
-        IReadOnlyList<GpuProcess>? processes = null) =>
+        IReadOnlyList<GpuProcess>? processes = null,
+        IReadOnlyList<ModelMetricsScrape>? modelScrapes = null) =>
         _ring.Append(new NodeSample
         {
             Seq = 0,
@@ -835,7 +836,7 @@ internal sealed class ScriptedAgent(string nodeId, TimeProvider time, int ringCa
             Memory = new NodeMemorySnapshot { Model = MemoryModel.Unified, HostTotalGiB = totalGiB, HostAvailableGiB = availableGiB },
             Gpus = gpus ?? [],
             GpuProcesses = processes,
-            Models = [.. (models ?? []).Select(m => new ModelMetricsScrape { ModelId = m.Model, At = at, Text = m.Text, Error = m.Text is null ? "scrape failed" : null })],
+            Models = modelScrapes ?? [.. (models ?? []).Select(m => new ModelMetricsScrape { ModelId = m.Model, At = at, Text = m.Text, Error = m.Text is null ? "scrape failed" : null })],
         });
 
     public Task<TelemetryPage> GetTelemetryAsync(TelemetryQuery query, CancellationToken ct = default)

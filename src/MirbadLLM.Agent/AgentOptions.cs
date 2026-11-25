@@ -39,6 +39,8 @@ namespace MirbadLLM.Agent;
 /// </summary>
 public sealed partial class AgentOptions
 {
+    public HuggingFaceOptions HuggingFace { get; set; } = new();
+
     /// <summary>Configuration section of <c>agent.json</c>.</summary>
     public const string SectionName = "Agent";
 
@@ -285,6 +287,7 @@ public sealed partial class AgentOptions
     /// <summary>Throws <see cref="ArgumentException"/> naming the first unusable setting.</summary>
     public void Validate()
     {
+        _ = HuggingFace.Resolve();
         if (string.IsNullOrWhiteSpace(NodeId) || !NodeIdRegex().IsMatch(NodeId))
         {
             throw new ArgumentException($"Agent:NodeId '{NodeId}' is not a node id (lower-case letters, digits and '-', at most 40).", nameof(NodeId));

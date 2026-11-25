@@ -84,8 +84,10 @@ public static partial class RepoPathRules
             }
         }
 
-        if (segments.Length == 1 && (segments[0].StartsWith(DownloadManifest.FileName, StringComparison.OrdinalIgnoreCase)
-            || segments[0].StartsWith(LegacyNames.DownloadMarkerFile, StringComparison.OrdinalIgnoreCase)))
+        if (segments[0].StartsWith(DownloadManifest.FileName, StringComparison.OrdinalIgnoreCase) ||
+            segments[0].StartsWith(LegacyNames.DownloadMarkerFile, StringComparison.OrdinalIgnoreCase) ||
+            (segments.Length >= 2 && segments[0].Equals(".cache", StringComparison.OrdinalIgnoreCase) &&
+                segments[1].Equals("huggingface", StringComparison.OrdinalIgnoreCase)))
         {
             return $"'{shown}' would overwrite the download manifest";
         }
@@ -101,7 +103,7 @@ public static partial class RepoPathRules
     {
         ArgumentNullException.ThrowIfNull(repoPaths);
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var directories = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var files = new List<string>();
         foreach (string path in repoPaths)
         {
@@ -110,7 +112,7 @@ public static partial class RepoPathRules
                 return error;
             }
 
-            if (!seen.Add(path))
+            if (!seen.Add(path.Normalize()))
             {
                 return $"'{Printable(path)}' appears twice (names are compared case-insensitively)";
             }
@@ -119,12 +121,19 @@ public static partial class RepoPathRules
             int slash = path.LastIndexOf('/');
             while (slash > 0)
             {
-                directories.Add(path[..slash]);
+                string parent = path[..slash];
+                string normalized = parent.Normalize();
+                if (directories.TryGetValue(normalized, out string? earlier) && earlier != parent)
+                {
+                    return $"'{Printable(parent)}' conflicts with directory '{Printable(earlier)}'";
+                }
+
+                directories[normalized] = parent;
                 slash = path.LastIndexOf('/', slash - 1);
             }
         }
 
-        string? clash = files.FirstOrDefault(directories.Contains);
+        string? clash = files.FirstOrDefault(path => directories.ContainsKey(path.Normalize()));
         return clash is null ? null : $"'{Printable(clash)}' is both a file and a directory";
     }
 

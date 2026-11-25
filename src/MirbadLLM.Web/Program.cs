@@ -24,6 +24,7 @@ using MirbadLLM.Web;
 using MirbadLLM.Web.Api;
 using MirbadLLM.Web.Components;
 using MirbadLLM.Web.Enrollment;
+using MirbadLLM.Web.HubMirror;
 
 const string LoginRateLimiterPolicy = "login";
 
@@ -208,6 +209,9 @@ if (!boot.IsRecovery)
     await app.Services.GetRequiredService<CaRotationService>().InitializeAsync();
     await MasterHosting.EnsureBootstrapNodeAsync(app.Services);
 }
+
+// The Hub listener dispatches only its anonymous protocol routes and never reaches application routing.
+HubMirrorEndpoints.UseHubMirrorListener(app);
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())

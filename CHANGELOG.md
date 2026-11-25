@@ -6,6 +6,9 @@ private development history.
 
 ## Unreleased
 
+- llama.cpp shows generation throughput while requests are decoding on process and container runtimes. When the server does not expose usable slot data, the rate updates as requests complete
+- Nodes can download public Hugging Face checkpoints through a configured HTTPS mirror. The optional master listener verifies its local files against the pinned official snapshot and forwards misses to the Hub at the same commit
+
 - Saving a llama.cpp model no longer breaks its vision projector when the projector is in its own folder next to the model's, as when it comes from a second download source. The save put the model's folder in front of the projector's path, and the next start was refused with "does not resolve to an existing file"
 - GGUF inspection reads files that use the newer ggml tensor types NVFP4, Q1_0, Q2_0 and F8_E4M3 (40 to 43), with sizes taken from upstream `type_traits`. A tensor type newer than that no longer fails the read: the metadata (template, context length and the rest) still comes back, the tensor's size is taken from the tensor offsets, and the summary carries a `warnings` entry that the agent also logs
 - Nodes: after a deploy, a node no longer reports its agent as "from another build" until the master restarts. The master restarts first and the agent seconds later, and when the agent restarted in the middle of the master's first check, the master kept the old agent's version
