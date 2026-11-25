@@ -1,9 +1,14 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using Microsoft.Extensions.DependencyInjection;
+using MirbadLLM.Agent.Abstractions;
 using MirbadLLM.Agent.Contracts;
+using MirbadLLM.Agent.Storage;
 using MirbadLLM.UnitTests.Multinode.Contract;
+using MirbadLLM.UnitTests.Multinode.Fakes;
 using Xunit;
 
 namespace MirbadLLM.UnitTests.Agent;
@@ -11,6 +16,208 @@ namespace MirbadLLM.UnitTests.Agent;
 public sealed class MoveTransferTests
 {
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AnActiveRangeEndsWhenLeaseExpiresOrMasterChanges(bool takeover)
+    {
+        await using var node = await ContractNode.CreateAsync(enroll: true, Ct);
+        var clock = new ManualClock(DateTimeOffset.UtcNow);
+        node.ExtraServices = services => services.AddSingleton<TimeProvider>(clock);
+        const string folder = "clock-checkpoint";
+        var source = Directory.CreateDirectory(Path.Combine(node.ModelsRoot, folder));
+        byte[] data = new byte[512 * 1024];
+        await File.WriteAllBytesAsync(Path.Combine(source.FullName, "model.gguf"), data, Ct);
+        await using var host = await RealAgentHarness.StartAsync(node, ct: Ct);
+        using var client = new AgentContractClient(host.Target);
+        var opened = await client.SendAsync(AgentRoutes.MoveTransferOpen, [],
+            Open(MoveTransferRole.Export, node.NodeUid, "receiver", folder), ct: Ct);
+        Assert.Equal(202, opened.Status);
+        string id = opened.Read<MoveTransferStatus>().TransferId;
+        var lease = await LeaseAsync(client, id);
+        _ = await WaitAsync(client, id, MoveTransferPhase.Ready);
+        var service = host.App.Services.GetRequiredService<MoveTransferService>();
+        string etag = $"\"sha256-{Convert.ToHexStringLower(SHA256.HashData(data))}\"";
+        using var body = new BlockingRange();
+        var inFlight = service.ReadAsync(id, client.Master, lease.Grant, 0, 0, data.Length - 1, etag, _ => body, Ct);
+        await body.Blocked.Task.WaitAsync(TimeSpan.FromSeconds(10), Ct);
+        Assert.InRange(body.Length, 1, data.Length - 1);
+
+        if (takeover)
+        {
+            var fence = host.App.Services.GetRequiredService<IFencingState>();
+            var changed = client.Master with { Epoch = client.Master.Epoch + 1, BootId = "next-boot" };
+            await fence.CheckAsync(changed, Ct);
+            Assert.True(fence.IsCurrent(changed));
+            clock.Advance(TimeSpan.FromSeconds(1));
+        }
+        else
+        {
+            clock.Advance(TimeSpan.FromMinutes(5));
+        }
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => inFlight.WaitAsync(TimeSpan.FromSeconds(10), Ct));
+        using var refused = new MemoryStream();
+        var error = await Assert.ThrowsAsync<AgentException>(() =>
+            service.ReadAsync(id, client.Master, lease.Grant, 0, 0, 0, etag, _ => refused, Ct));
+        Assert.Equal(ErrorCodes.TransferLeaseRequired, error.Code);
+        Assert.Empty(refused.ToArray());
+    }
+
+    [Fact]
+    public async Task DiskHeadroomIsRequiredBeforeCreatingStagingOrWritingBytes()
+    {
+        await using var node = await ContractNode.CreateAsync(enroll: true, Ct);
+        node.ExtraServices = services =>
+        {
+            services.Configure<AgentStorageOptions>(options => options.DiskHeadroomFraction = 0.1);
+            services.AddSingleton<IDiskSpaceProbe>(new LimitedDisk());
+        };
+        await using var host = await RealAgentHarness.StartAsync(node, ct: Ct);
+        using var client = new AgentContractClient(host.Target);
+        byte[] data = new byte[100];
+        var (id, _) = await OpenImportAsync(node, client, "full-checkpoint", "model.gguf", data);
+        var failed = await WaitAsync(client, id, MoveTransferPhase.Failed);
+        Assert.Equal(ErrorCodes.InsufficientDisk, failed.Error?.Code);
+        Assert.Equal(0, failed.BytesDownloaded);
+        Assert.False(Directory.Exists(Path.Combine(node.ModelsRoot, ".move-" + id)));
+    }
+
+    [Theory]
+    [InlineData("model-00001-of-00002.gguf", "", "model-00002-of-00002.gguf")]
+    [InlineData("nested/model.safetensors.index.json", "{\"weight_map\":{\"layer\":\"weights-2.safetensors\"}}", "nested/weights-2.safetensors")]
+    public async Task ExportRefusesMissingShardByName(string name, string contents, string missing)
+    {
+        await using var node = await ContractNode.CreateAsync(enroll: true, Ct);
+        const string folder = "incomplete-checkpoint";
+        string path = Path.Combine(node.ModelsRoot, folder, name);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, contents, Ct);
+        await using var host = await RealAgentHarness.StartAsync(node, ct: Ct);
+        using var client = new AgentContractClient(host.Target);
+        var opened = await client.SendAsync(AgentRoutes.MoveTransferOpen, [], Open(MoveTransferRole.Export, node.NodeUid, "receiver", folder), ct: Ct);
+        Assert.Equal(202, opened.Status);
+        string id = opened.Read<MoveTransferStatus>().TransferId;
+        _ = await LeaseAsync(client, id);
+        var failed = await WaitAsync(client, id, MoveTransferPhase.Failed);
+        Assert.Contains($"'{missing}'", failed.Error?.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task PublishRefusesSwappedParentOrNewConflictingFile(bool swapParent)
+    {
+        await using var node = await ContractNode.CreateAsync(enroll: true, Ct);
+        string outside = Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(node.ModelsRoot)!, "outside")).FullName;
+        const string folder = "existing-checkpoint";
+        string parent = Directory.CreateDirectory(Path.Combine(node.ModelsRoot, folder, "nested")).FullName;
+        string target = Path.Combine(parent, "model.gguf");
+        await using var host = await RealAgentHarness.StartAsync(node, ct: Ct);
+        var service = host.App.Services.GetRequiredService<MoveTransferService>();
+        service.BeforeMergeForTests = async token =>
+        {
+            if (!swapParent)
+            {
+                await File.WriteAllTextAsync(target, "keep this file", token);
+                return;
+            }
+
+            Directory.Move(parent, parent + "-original");
+            if (OperatingSystem.IsWindows())
+            {
+                var junction = new ProcessStartInfo("cmd.exe") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true };
+                foreach (string arg in new[] { "/c", "mklink", "/J", parent, outside })
+                {
+                    junction.ArgumentList.Add(arg);
+                }
+                using var process = Process.Start(junction)!;
+                await process.WaitForExitAsync(token);
+                Assert.Equal(0, process.ExitCode);
+            }
+            else
+            {
+                Directory.CreateSymbolicLink(parent, outside);
+            }
+        };
+
+        using var client = new AgentContractClient(host.Target);
+        byte[] data = [1, 2, 3];
+        var (id, manifest) = await OpenImportAsync(node, client, folder, "nested/model.gguf", data);
+        _ = await WaitAsync(client, id, MoveTransferPhase.Ready);
+        using var body = new MemoryStream(data);
+        await service.WriteAsync(id, client.Master, manifest.Grant, 0, 0, data.Length - 1, data.Length,
+            $"\"{manifest.ManifestId}\"", body, Ct);
+        await service.FinishAsync(id, client.Master, Ct);
+        var failed = await WaitAsync(client, id, MoveTransferPhase.Failed);
+        Assert.Equal(ErrorCodes.FolderConflict, failed.Error?.Code);
+        Assert.Empty(Directory.GetFileSystemEntries(outside));
+        if (swapParent)
+        {
+            Assert.Empty(Directory.GetFileSystemEntries(parent + "-original"));
+            Directory.Delete(parent);
+        }
+        else
+        {
+            Assert.Equal("keep this file", await File.ReadAllTextAsync(target, Ct));
+        }
+    }
+
+    [Fact]
+    public async Task PublishAddsAMissingNestedFileToAnExistingFolder()
+    {
+        await using var node = await ContractNode.CreateAsync(enroll: true, Ct);
+        const string folder = "existing-checkpoint";
+        string destination = Directory.CreateDirectory(Path.Combine(node.ModelsRoot, folder)).FullName;
+        await using var host = await RealAgentHarness.StartAsync(node, ct: Ct);
+        using var client = new AgentContractClient(host.Target);
+        byte[] data = [3, 2, 1];
+        var (id, manifest) = await OpenImportAsync(node, client, folder, "nested/model.gguf", data);
+        _ = await WaitAsync(client, id, MoveTransferPhase.Ready);
+        var service = host.App.Services.GetRequiredService<MoveTransferService>();
+        using var body = new MemoryStream(data);
+        await service.WriteAsync(id, client.Master, manifest.Grant, 0, 0, data.Length - 1, data.Length,
+            $"\"{manifest.ManifestId}\"", body, Ct);
+        await service.FinishAsync(id, client.Master, Ct);
+        _ = await WaitAsync(client, id, MoveTransferPhase.Completed);
+        Assert.Equal(data, await File.ReadAllBytesAsync(Path.Combine(destination, "nested", "model.gguf"), Ct));
+    }
+
+    private static async Task<(string Id, (string ManifestId, string Grant) Lease)> OpenImportAsync(ContractNode node,
+        AgentContractClient client, string folder, string path, byte[] data)
+    {
+        MoveManifestFile[] files = [new(path, data.Length, Convert.ToHexStringLower(SHA256.HashData(data)))];
+        var manifest = new MoveFolderManifest(1, files, MoveFolderManifest.IdFor(files));
+        var opened = await client.SendAsync(AgentRoutes.MoveTransferOpen, [],
+            Open(MoveTransferRole.Import, "sender", node.NodeUid, folder) with { ManifestId = manifest.ManifestId, Manifest = manifest }, ct: Ct);
+        Assert.Equal(202, opened.Status);
+        string id = opened.Read<MoveTransferStatus>().TransferId;
+        var lease = await LeaseAsync(client, id);
+        return (id, (manifest.ManifestId, lease.Grant));
+    }
+
+    private sealed class BlockingRange : MemoryStream
+    {
+        public TaskCompletionSource Blocked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (Length == 0)
+            {
+                await base.WriteAsync(buffer, cancellationToken);
+                return;
+            }
+
+            Blocked.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+        }
+    }
+
+    private sealed class LimitedDisk : IDiskSpaceProbe
+    {
+        public DiskSpace Probe(string path) => new(105, 1000);
+    }
 
     [Fact]
     public async Task MasterCopiesExactRangesAndDuplicateRangeReportsDurableOffset()
@@ -132,12 +339,12 @@ public sealed class MoveTransferTests
             var response = await client.SendAsync(AgentRoutes.MoveTransferGet, [id], ct: Ct);
             Assert.Equal(200, response.Status);
             var status = response.Read<MoveTransferStatus>();
-            Assert.True(status.Phase is not (MoveTransferPhase.Cancelled or MoveTransferPhase.Failed), status.Error?.Message);
             if (status.Phase == phase)
             {
                 return status;
             }
 
+            Assert.True(status.Phase is not (MoveTransferPhase.Cancelled or MoveTransferPhase.Failed), status.Error?.Message);
             await Task.Delay(10, Ct);
         }
 

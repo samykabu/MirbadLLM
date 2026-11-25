@@ -140,6 +140,8 @@ public sealed record MoveFolderWork(string Folder, string RepoId, IReadOnlyList<
     public string? Route { get; init; }
     public string? PinnedRevision { get; init; }
     public string? ManifestId { get; init; }
+    public bool? MatchesPinnedHub { get; init; }
+    public string? SnapshotNote { get; init; }
     public string? ExportOperationId { get; init; }
     public string? ImportOperationId { get; init; }
     public string? ExportId { get; init; }

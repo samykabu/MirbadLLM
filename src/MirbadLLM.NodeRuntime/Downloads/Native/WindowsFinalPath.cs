@@ -57,6 +57,9 @@ internal static partial class WindowsFinalPath
         return handle.IsInvalid ? null : FinalPathOf(handle);
     }
 
+    public static SafeFileHandle OpenStableDirectory(string directory) =>
+        NativeMethods.CreateFile(directory, 0x80, 0x1, 0, OpenExisting, FileFlagBackupSemantics | 0x00200000, 0);
+
     /// <summary>The final path of an open handle, without the <c>\\?\</c> / <c>\\?\UNC\</c> prefix; null on failure.</summary>
     public static unsafe string? FinalPathOf(SafeFileHandle handle)
     {

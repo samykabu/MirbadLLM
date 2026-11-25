@@ -527,6 +527,8 @@ internal sealed record P2FleetOptions
     /// <summary>The DGX agent's options (after the bootstrap defaults).</summary>
     public Action<AgentOptions>? DgxOptions { get; init; }
 
+    public Action<IServiceCollection>? DgxServices { get; init; }
+
     /// <summary>Run the historical P2 move cases with the original download-only capabilities.</summary>
     public bool LegacyMoves { get; init; }
 }
@@ -595,6 +597,15 @@ internal sealed class P2Fleet : IAsyncDisposable
             options.DgxOptions?.Invoke(o);
         });
         var fleet = new P2Fleet(options, root, TestPorts.Reserve(), dgx);
+        if (options.DgxServices is { } configureServices)
+        {
+            var previous = dgx.Node.ExtraServices;
+            dgx.Node.ExtraServices = services =>
+            {
+                previous?.Invoke(services);
+                configureServices(services);
+            };
+        }
         if (options.LegacyMoves)
         {
             UseLegacyMoveFeatures(dgx);

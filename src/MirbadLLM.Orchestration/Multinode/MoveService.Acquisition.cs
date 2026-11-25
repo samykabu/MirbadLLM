@@ -137,7 +137,9 @@ public sealed partial class MoveService
                             {
                                 folder = next;
                                 await SaveFolderAsync(record, next, token).ConfigureAwait(false);
-                            }, token => CheckScopeAsync(record, token), ct).ConfigureAwait(false);
+                            }, token => CheckScopeAsync(record, token),
+                                (next, manifest, token) => ClassifySnapshotAsync(record, next, source, manifest, token),
+                                ct).ConfigureAwait(false);
                             await SaveFolderAsync(record, folder, ct).ConfigureAwait(false);
                         }
                         break;
@@ -146,7 +148,8 @@ public sealed partial class MoveService
                     {
                         throw new MoveFailedException($"The placed source could not be authenticated for '{folder.Folder}'.");
                     }
-                    catch (Exception ex) when (IsTransient(ex) || ex is AgentException { Code: ErrorCodes.NotFound })
+                    catch (Exception ex) when (!ct.IsCancellationRequested &&
+                        (IsTransient(ex) || ex is HttpRequestException or IOException or OperationCanceledException or AgentException { Code: ErrorCodes.NotFound }))
                     {
                         if (ex is not AgentException && attempt < 2)
                         {
@@ -154,13 +157,27 @@ public sealed partial class MoveService
                             continue;
                         }
 
-                        if (source is null || folder.ManifestId is not null)
+                        if (folder.ManifestId is not null && folder.MatchesPinnedHub != true &&
+                            (source is not null || ex is not AgentException))
+                        {
+                            await PauseSourceCopyAsync(record, folder, ex, ct).ConfigureAwait(false);
+                            return false;
+                        }
+
+                        if (source is null)
                         {
                             throw;
                         }
 
-                        folder = folder with { Error = "Placed source did not provide a snapshot." };
+                        folder = folder with { Route = "hub", Error = "Placed source could not finish copying the checkpoint." };
+                        await SaveFolderAsync(record, folder, ct).ConfigureAwait(false);
                         break;
+                    }
+                    catch (AgentException ex) when (folder.MatchesPinnedHub == false &&
+                        ex.Code is ErrorCodes.TransferChanged or ErrorCodes.TransferLeaseRequired or ErrorCodes.FolderConflict or ErrorCodes.InsufficientDisk)
+                    {
+                        await PauseSourceCopyAsync(record, folder, ex, ct).ConfigureAwait(false);
+                        return false;
                     }
                 }
             }
@@ -170,9 +187,24 @@ public sealed partial class MoveService
                 continue;
             }
 
-            if (source is null || folder.ManifestId is not null)
+            if (source is null || folder.ManifestId is not null && folder.MatchesPinnedHub != true)
             {
                 throw new MoveFailedException($"No verified transfer is available for checkpoint folder '{folder.Folder}'.");
+            }
+
+            if (folder.ImportId is { } import)
+            {
+                try
+                {
+                    await _transferRelay.CancelAsync(move.TargetNodeId, import, ct).ConfigureAwait(false);
+                }
+                catch (AgentException ex) when (ex.Code == ErrorCodes.NotFound)
+                {
+                    // The target has no reservation for this import.
+                }
+
+                folder = folder with { ImportId = null };
+                await SaveFolderAsync(record, folder, ct).ConfigureAwait(false);
             }
 
             string? revision = folder.PinnedRevision ?? source.Revision;
@@ -188,6 +220,7 @@ public sealed partial class MoveService
                     throw new MoveFailedException($"The pinned Hub selection cannot verify every required file in '{folder.Folder}'.");
                 }
 
+                await _hub.ValidateShardSelectionAsync(snapshot, selected, token, ct).ConfigureAwait(false);
                 var capabilities = await target.GetCapabilitiesAsync(ct).ConfigureAwait(false);
                 if (!capabilities.Features.Contains(AgentFeatures.DownloadsHfNative, StringComparer.Ordinal) &&
                     !capabilities.Features.Contains(AgentFeatures.MoveTransfer, StringComparer.Ordinal))
@@ -214,6 +247,64 @@ public sealed partial class MoveService
         }
 
         return true;
+    }
+
+    private async Task PauseSourceCopyAsync(OwnershipRecord record, MoveFolderWork folder, Exception failure, CancellationToken ct)
+    {
+        string note = folder.SnapshotNote ?? "local snapshot, equivalence to Hugging Face is unverified";
+        string error = $"Checkpoint folder '{folder.Folder}' paused ({note}): {failure.Message} Waiting to retry the source copy.";
+        await SaveFolderAsync(record, folder with { Error = error }, ct).ConfigureAwait(false);
+        await NoteAsync(record, error, ct).ConfigureAwait(false);
+        await DelayAsync(record.Id, _moveOptions.RetryInterval, ct).ConfigureAwait(false);
+    }
+
+    private async Task<MoveFolderWork> ClassifySnapshotAsync(OwnershipRecord record, MoveFolderWork folder,
+        ModelSource? source, MoveFolderManifest manifest, CancellationToken ct)
+    {
+        if (source is null || folder.MatchesPinnedHub is not null || _hub is null ||
+            (folder.PinnedRevision ?? source.Revision) is not { } revision || !ContentDigest.IsHex(revision, 40))
+        {
+            return folder;
+        }
+
+        _tokens.TryGetValue(record.Id, out string? token);
+        HubSnapshot snapshot;
+        try
+        {
+            snapshot = await _hub.GetSnapshotAsync(source.RepoId, revision, token, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested &&
+            ex is HttpRequestException or IOException or HuggingFaceApiException or OperationCanceledException)
+        {
+            return folder with { PinnedRevision = revision, SnapshotNote = $"local snapshot, equivalence to {source.RepoId}@{revision} is unverified" };
+        }
+
+        var listed = snapshot.Files.ToDictionary(file => file.Path, StringComparer.Ordinal);
+        bool overlap = false;
+        bool unverified = false;
+        foreach (var file in manifest.Files)
+        {
+            if (!listed.TryGetValue(file.Path, out var official))
+            {
+                continue;
+            }
+
+            overlap = true;
+            string? digest = official.LfsSha256 ?? official.BlobSha1;
+            string? actual = official.LfsSha256 is not null ? file.Sha256 : file.GitBlobSha1;
+            if (file.Size != official.Size || digest is not null && actual is not null &&
+                !string.Equals(digest, actual, StringComparison.OrdinalIgnoreCase))
+            {
+                return folder with { PinnedRevision = snapshot.CommitSha, MatchesPinnedHub = false,
+                    SnapshotNote = $"local snapshot, differs from {source.RepoId}@{snapshot.CommitSha}" };
+            }
+
+            unverified |= digest is null || actual is null;
+        }
+
+        bool matches = overlap && !unverified;
+        return folder with { PinnedRevision = snapshot.CommitSha, MatchesPinnedHub = matches ? true : null,
+            SnapshotNote = matches ? null : $"local snapshot, equivalence to {source.RepoId}@{snapshot.CommitSha} is unverified" };
     }
 
     private Task<OwnershipRecord?> SaveFolderAsync(OwnershipRecord record, MoveFolderWork next, CancellationToken ct, bool preserveRoute = false) =>

@@ -5,6 +5,9 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -13,12 +16,14 @@ using MirbadLLM.Agent.Storage;
 using MirbadLLM.Core;
 using MirbadLLM.NodeRuntime;
 using MirbadLLM.NodeRuntime.Downloads.Native;
+using MirbadLLM.Orchestration.Agents;
 using MirbadLLM.Orchestration.Benchmarking;
 using MirbadLLM.Orchestration.Multinode;
 using MirbadLLM.Pki;
 using MirbadLLM.UnitTests.Agent;
 using MirbadLLM.UnitTests.Downloads;
 using MirbadLLM.UnitTests.Multinode.Contract;
+using MirbadLLM.UnitTests.Multinode.Fakes;
 using MirbadLLM.UnitTests.Multinode.P1Exit;
 using static MirbadLLM.UnitTests.Multinode.P2Exit.P2Env;
 using static MirbadLLM.UnitTests.Downloads.NativeDownloaderTests;
@@ -38,6 +43,173 @@ namespace MirbadLLM.UnitTests.Multinode.P2Exit;
 public sealed partial class MoveExitTests
 {
     private const string Folder = "m1-ckpt";
+
+    [Fact]
+    public async Task RelayPacesBothLegsAndStatusRemainsResponsiveWhileAChunkWaits()
+    {
+        await using var fleet = await P2Fleet.StartAsync();
+        var pc = await JoinPcAsync(fleet);
+        var source = Directory.CreateDirectory(Path.Combine(fleet.Dgx.Node.ModelsRoot, Folder));
+        byte[] payload = new byte[512 * 1024];
+        Random.Shared.NextBytes(payload);
+        await File.WriteAllBytesAsync(Path.Combine(source.FullName, "model.gguf"), payload, Ct);
+
+        var master = fleet.Master;
+        var clock = new ManualClock(DateTimeOffset.UtcNow);
+        var relay = new MoveTransferRelay(master.Get<IAgentClientFactory>(), master.Get<AgentOperationRunner>(), clock,
+            new MoveServiceOptions { MaxTransferMiBPerSecond = 1, PollInterval = TimeSpan.FromMilliseconds(10) });
+        var record = new OwnershipRecord
+        {
+            Id = "pacing-test", Kind = OwnershipKind.Move, ModelId = "pacing-model",
+            Stage = MoveStages.Downloading, StartedAt = clock.GetUtcNow(),
+            Move = new MoveDetails
+            {
+                SourceNodeId = "dgx", SourceNodeUid = (await master.Nodes.GetAsync("dgx", Ct))!.Uid,
+                TargetNodeId = "pc", TargetNodeUid = (await master.Nodes.GetAsync("pc", Ct))!.Uid,
+            },
+        };
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
+        var transferring = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var acknowledged = new TaskCompletionSource<TimeSpan>(TaskCreationOptions.RunContinuationsAsynchronously);
+        long started = 0;
+        var transfer = relay.CopyAsync(record, new MoveFolderWork(Folder, "", []), (work, _) =>
+        {
+            if (work.BytesDownloaded == 0 && work.State == DownloadState.Downloading)
+            {
+                started = clock.GetTimestamp();
+                transferring.TrySetResult(work.ImportId!);
+            }
+            if (work.BytesDownloaded == payload.Length)
+            {
+                acknowledged.TrySetResult(clock.GetElapsedTime(started));
+            }
+            return Task.CompletedTask;
+        }, _ => Task.CompletedTask, (work, _, _) => Task.FromResult(work), timeout.Token);
+
+        while (!transferring.Task.IsCompleted && !transfer.IsCompleted)
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(10));
+            await Task.WhenAny(transferring.Task, transfer, Task.Delay(10, timeout.Token));
+            timeout.Token.ThrowIfCancellationRequested();
+        }
+
+        string id = await transferring.Task.WaitAsync(timeout.Token);
+        await clock.WaitForOneShotAsync(TimeSpan.FromMilliseconds(550), timeout.Token);
+        // The 512 KiB range costs one second at 1 MiB/s when both legs are counted.
+        clock.Advance(TimeSpan.FromMilliseconds(980));
+        Assert.False(acknowledged.Task.IsCompleted);
+        var target = master.Client("pc");
+        Assert.Equal(0, (await target.GetTransferAsync(id, timeout.Token))!.BytesDownloaded);
+        Assert.NotNull(await target.GetStatusAsync(timeout.Token));
+        clock.Advance(TimeSpan.FromMilliseconds(20));
+        Assert.InRange(await acknowledged.Task.WaitAsync(timeout.Token), TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(1020));
+        while (!transfer.IsCompleted)
+        {
+            clock.Advance(TimeSpan.FromMilliseconds(10));
+            await Task.WhenAny(transfer, Task.Delay(10, timeout.Token));
+            timeout.Token.ThrowIfCancellationRequested();
+        }
+
+        Assert.Equal(DownloadState.Completed, (await transfer).State);
+        Assert.Equal(payload, await File.ReadAllBytesAsync(Path.Combine(pc.Node.ModelsRoot, Folder, "model.gguf"), Ct));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OnlyAnEquivalentPinnedSourceCanFallBackAfterAnInterruptedCopy(bool customized)
+    {
+        const string repo = "org/m1";
+        const string sha = "1111111111111111111111111111111111111111";
+        using var ca = CertificateAuthority.Create();
+        using var leaf = ca.IssueEnrollServerCertificate(["127.0.0.1"]);
+        using var cert = leaf.CreateTlsCertificate();
+        await using var official = await FakeHub.StartAsync(cert);
+        using var http = HubMirrorTests.OpenFake(official.BaseUri, ca);
+        var hubs = new HubHttpClients(http, () => []);
+        var config = FakeFile.Small("config.json", "{\"model_type\":\"llama\"}");
+        var shard = FakeFile.Large("model.safetensors", 1024, 197);
+        official.AddRepo(repo).Commit(sha, config, shard);
+        var interruption = new InterruptSourceRanges();
+        await using var fleet = await P2Fleet.StartAsync(new P2FleetOptions
+        {
+            Models = [Movable("m1", Folder) with { Sources = [new ModelSource(repo, Folder, sha)] }],
+            Services = services => services.AddSingleton(hubs),
+            DgxServices = services => services.AddSingleton<IStartupFilter>(interruption),
+        });
+        string source = Directory.CreateDirectory(Path.Combine(fleet.Dgx.Node.ModelsRoot, Folder)).FullName;
+        byte[] local = [.. config.Content];
+        if (customized)
+        {
+            // Same length and the same LFS shard, but a different Git blob.
+            local[local.Length - 4] = (byte)'b';
+        }
+        await File.WriteAllBytesAsync(Path.Combine(source, config.Path), local, Ct);
+        await File.WriteAllBytesAsync(Path.Combine(source, shard.Path), shard.Content, Ct);
+        var pc = await JoinPcWithNativeHubAsync(fleet, hubs);
+        await MoveAsync(fleet.Master, "m1", new { targetNodeId = "pc", gpuUuids = new[] { PcGpus[0] } });
+
+        if (customized)
+        {
+            await ExitEnv.UntilAsync(async () =>
+            {
+                var move = await fleet.Master.Get<IOwnershipStore>().GetForModelAsync("m1", Ct);
+                return move is { Stage: MoveStages.Downloading } && move.Error?.Contains("Waiting to retry the source copy", StringComparison.Ordinal) == true;
+            }, "the customized checkpoint paused");
+            Assert.Empty(official.FileRequests(config.Path));
+            Assert.Empty(official.FileRequests(shard.Path));
+            Assert.Equal(0, await CountAsync(fleet.Master, "pc", OperationKinds.Download, Folder));
+            Assert.Equal("dgx", (await fleet.Master.Models.GetAsync("m1", Ct))!.Placement!.NodeId);
+            var paused = await fleet.Master.Get<IOwnershipStore>().GetForModelAsync("m1", Ct);
+            Assert.Equal(config.Content.Length, Assert.Single(paused!.Move!.Folders!).BytesDownloaded);
+            interruption.AllowRanges = true;
+        }
+
+        var completed = await WaitForMoveEndAsync(fleet.Master, "m1");
+        Assert.Equal(MoveStages.Done, completed.GetProperty("record").GetProperty("stage").GetString());
+        Assert.Null(ErrorOf(completed));
+        Assert.True(interruption.RefusedRanges > 0);
+        var work = Assert.Single(completed.GetProperty("record").GetProperty("move").GetProperty("folders").EnumerateArray());
+        Assert.Equal(!customized, work.GetProperty("matchesPinnedHub").GetBoolean());
+        Assert.Equal(customized ? "source" : "hub", work.GetProperty("route").GetString());
+        Assert.Equal(sha, work.GetProperty("pinnedRevision").GetString());
+        if (customized)
+        {
+            Assert.Equal($"local snapshot, differs from {repo}@{sha}", work.GetProperty("snapshotNote").GetString());
+            Assert.Empty(official.FileRequests(config.Path));
+        }
+        else
+        {
+            Assert.Equal(config.Content.Length, official.FileRequests(config.Path).Sum(request => request.BodyBytes));
+            Assert.Equal(shard.Content.Length, official.FileRequests(shard.Path).Sum(request => request.BodyBytes));
+        }
+        Assert.Equal(local, await File.ReadAllBytesAsync(Path.Combine(pc.Node.ModelsRoot, Folder, config.Path), Ct));
+    }
+
+    private sealed class InterruptSourceRanges : IStartupFilter
+    {
+        public volatile bool AllowRanges;
+        public int RefusedRanges;
+
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use(async (http, proceed) =>
+            {
+                if (!AllowRanges && HttpMethods.IsGet(http.Request.Method) &&
+                    http.Request.Path.StartsWithSegments("/agent/v1/move-transfers") &&
+                    http.Request.Path.Value!.EndsWith("/files/1", StringComparison.Ordinal))
+                {
+                    Interlocked.Increment(ref RefusedRanges);
+                    await Results.Json(new AgentErrorResponse(new AgentError { Code = ErrorCodes.NotFound, Message = "Test source range interruption." }),
+                        AgentJson.Options, statusCode: 404).ExecuteAsync(http);
+                    return;
+                }
+                await proceed(http);
+            });
+            next(app);
+        };
+    }
 
     [Fact]
     public async Task PublicHubMoveUsesTheSamePinForMirrorAndOfficialBytes()
@@ -62,19 +234,7 @@ public sealed partial class MoveExitTests
             Services = services => services.AddSingleton(hubs),
             Settings = new Dictionary<string, string?> { ["MirbadLLM:HuggingFace:Endpoint"] = mirror.BaseUri.AbsoluteUri },
         });
-        var pc = await fleet.JoinAsync("pc", PcGpus, start: false);
-        var previous = pc.Node.ExtraServices;
-        pc.Node.ExtraServices = services =>
-        {
-            previous?.Invoke(services);
-            services.AddSingleton(hubs);
-            services.AddSingleton<IHuggingFaceDownloader>(sp => new NativeDownloadService(officialHttp,
-                sp.GetRequiredService<ModelRootPaths>(), sp.GetRequiredService<IDiskSpaceProbe>(),
-                sp.GetRequiredService<IOptions<AgentStorageOptions>>(), sp.GetRequiredService<TimeProvider>(),
-                sp.GetRequiredService<ILogger<NativeDownloadService>>(), hubClients: hubs));
-        };
-        await pc.StartAsync();
-        await fleet.Master.WaitForNodeAsync("pc", node => node.State == NodeState.Online, "pc Online");
+        var pc = await JoinPcWithNativeHubAsync(fleet, hubs);
         await MoveAsync(fleet.Master, "loose", new { targetNodeId = "pc", gpuUuids = new[] { PcGpus[0] } });
         var view = await WaitForMoveEndAsync(fleet.Master, "loose");
         Assert.Null(ErrorOf(view));
@@ -89,6 +249,24 @@ public sealed partial class MoveExitTests
         Assert.All(mirror.FileRequests(upstream.Path).Concat(official.FileRequests(upstream.Path)),
             request => Assert.Equal($"/{repo}/resolve/{sha}/{upstream.Path}", request.Path));
         Assert.Equal(upstream.Content, await File.ReadAllBytesAsync(Path.Combine(pc.Node.ModelsRoot, Folder, upstream.Path), Ct));
+    }
+
+    private static async Task<P2Agent> JoinPcWithNativeHubAsync(P2Fleet fleet, HubHttpClients hubs)
+    {
+        var pc = await fleet.JoinAsync("pc", PcGpus, start: false);
+        var previous = pc.Node.ExtraServices;
+        pc.Node.ExtraServices = services =>
+        {
+            previous?.Invoke(services);
+            services.AddSingleton(hubs);
+            services.AddSingleton<IHuggingFaceDownloader>(sp => new NativeDownloadService(hubs.Official,
+                sp.GetRequiredService<ModelRootPaths>(), sp.GetRequiredService<IDiskSpaceProbe>(),
+                sp.GetRequiredService<IOptions<AgentStorageOptions>>(), sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<ILogger<NativeDownloadService>>(), hubClients: hubs));
+        };
+        await pc.StartAsync();
+        await fleet.Master.WaitForNodeAsync("pc", node => node.State == NodeState.Online, "pc Online");
+        return pc;
     }
 
     [Fact]

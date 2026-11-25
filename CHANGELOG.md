@@ -6,12 +6,10 @@ private development history.
 
 ## Unreleased
 
-- Model moves can copy checkpoint folders over their existing agent connections, including locally added models and their draft or projector folders. The target verifies the files before the source stops, and the dialog shows the route and acknowledged bytes for each folder
-- The Hugging Face mirror starts serving a size-matching local file while it hashes that file in the background. Consumers verify the bytes before using them, and later requests for a file that failed verification use the official Hub
-
-- llama.cpp shows generation throughput while requests are decoding on process and container runtimes. When the server does not expose usable slot data, the rate updates as requests complete
-- Nodes can download public Hugging Face checkpoints through a configured HTTPS mirror. The optional master listener verifies its local files against the pinned official snapshot and forwards misses to the Hub at the same commit
-
+- Model moves copy each checkpoint folder from the node that already has it, relayed by the master over the agent connections it already holds, instead of downloading it again from Hugging Face. Models added from a local folder can now be moved, with their draft and projector folders. The target verifies every file before the source stops, a restart resumes from the last acknowledged byte, and the move dialog shows each folder's route and progress
+- Nodes can download public Hugging Face checkpoints through a LAN mirror on the master (`MirbadLLM:HubMirror:Enabled`), chosen per node with `Agent:HuggingFace:Endpoint` or fleet-wide with `MirbadLLM:HuggingFace:Endpoint`. The mirror serves files the DGX already holds and forwards the rest to the Hub at the same commit; nodes still verify every file against the official snapshot, and gated, private or token downloads go to the Hub directly
+- llama.cpp shows its generation rate while a request is decoding, where it used to read 0 tok/s until the request finished. When the server gives no usable slot data, the rate updates as requests complete
+- Nodes report the new agent version right after an agent update, where the version from the previous build could stay until the next restart
 - Saving a llama.cpp model no longer breaks its vision projector when the projector is in its own folder next to the model's, as when it comes from a second download source. The save put the model's folder in front of the projector's path, and the next start was refused with "does not resolve to an existing file"
 - GGUF inspection reads files that use the newer ggml tensor types NVFP4, Q1_0, Q2_0 and F8_E4M3 (40 to 43), with sizes taken from upstream `type_traits`. A tensor type newer than that no longer fails the read: the metadata (template, context length and the rest) still comes back, the tensor's size is taken from the tensor offsets, and the summary carries a `warnings` entry that the agent also logs
 - Nodes: after a deploy, a node no longer reports its agent as "from another build" until the master restarts. The master restarts first and the agent seconds later, and when the agent restarted in the middle of the master's first check, the master kept the old agent's version

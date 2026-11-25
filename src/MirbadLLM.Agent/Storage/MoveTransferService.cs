@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -32,6 +33,8 @@ public sealed class MoveTransferService(
     private readonly SemaphoreSlim _dataSlot = new(1);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly string _journalRoot = Path.Combine(hostOptions.StateDirectory, "move-transfers");
+
+    internal Func<CancellationToken, Task>? BeforeMergeForTests { get; set; }
 
     public async Task<MoveTransferStatus> OpenAsync(MoveTransferOpenRequest request, OperationStatus accepted, MasterTriple master,
         CancellationToken ct)
@@ -284,7 +287,7 @@ public sealed class MoveTransferService(
                 if (entry.Journal.Phase is MoveTransferPhase.Preparing or MoveTransferPhase.Verifying)
                 {
                     var error = ex is AgentException agent ? agent.Error : StorageErrors.Error(ErrorCodes.FolderConflict,
-                        "Could not read a confined checkpoint file or prepare its staging folder.");
+                        ex is InvalidDataException ? ex.Message : "Could not read a confined checkpoint file or prepare its staging folder.");
                     await EndAsync(entry, MoveTransferPhase.Failed, error).ConfigureAwait(false);
                 }
             }
@@ -300,6 +303,8 @@ public sealed class MoveTransferService(
         string folder = journal.Scope.Folder;
         string root = paths.Root;
         var names = MoveManifestRules.EnumeratePayload(Path.Combine(root, folder), ct);
+        MoveManifestRules.ValidateSplitGguf(names);
+        var named = names.ToHashSet(StringComparer.Ordinal);
         var files = new List<MoveManifestFile>(names.Count);
         var identities = new List<ConfinedModelFile.Identity>(names.Count);
         foreach (string name in names)
@@ -307,13 +312,15 @@ public sealed class MoveTransferService(
             check();
             await using var file = OpenRead(root, folder + "/" + name);
             var before = Identify(file);
-            string hash = await HashAsync(file, check, ct).ConfigureAwait(false);
+            using var git = GitHash(before.Size);
+            string hash = await HashAsync(file, check, ct, git).ConfigureAwait(false);
+            await CheckIndexAsync(name, file, named, ct).ConfigureAwait(false);
             if (Identify(file) != before)
             {
                 throw Changed();
             }
 
-            files.Add(new MoveManifestFile(name, before.Size, hash));
+            files.Add(new MoveManifestFile(name, before.Size, hash) { GitBlobSha1 = Convert.ToHexStringLower(git.GetHashAndReset()) });
             identities.Add(before);
         }
 
@@ -593,19 +600,17 @@ public sealed class MoveTransferService(
         var location = paths.Locate(entry.Journal.Scope.Folder);
         ValidateDestination(location, manifest, ct);
         var missing = new List<MoveManifestFile>();
+        var names = manifest.Files.Select(file => file.Path).ToHashSet(StringComparer.Ordinal);
         foreach (var file in manifest.Files)
         {
             check();
-            if (await CheckExistingAsync(root, location, file, check, ct).ConfigureAwait(false))
+            if (await CheckExistingAsync(root, location, file, check, ct, names).ConfigureAwait(false))
             {
                 continue;
             }
 
             await using var staged = OpenRead(root, Path.GetFileName(stage) + "/" + file.Path);
-            if (staged.Length != file.Size || await HashAsync(staged, check, ct).ConfigureAwait(false) != file.Sha256)
-            {
-                throw Changed();
-            }
+            await VerifyMemberAsync(staged, file, names, check, ct).ConfigureAwait(false);
 
             missing.Add(file);
         }
@@ -623,10 +628,15 @@ public sealed class MoveTransferService(
             return;
         }
 
+        if (missing.Count > 0 && BeforeMergeForTests is { } beforeMerge)
+        {
+            await beforeMerge(ct).ConfigureAwait(false);
+        }
+
         foreach (var file in missing)
         {
             check();
-            File.Move(Path.Combine(stage, file.Path), RepoPathRules.PrepareTarget(location.Path, file.Path));
+            ConfinedModelFile.Publish(root, Path.GetFileName(stage) + "/" + file.Path, location.Folder + "/" + file.Path);
             DirectorySync.TryFlushParent(Path.Combine(location.Path, file.Path));
         }
     }
@@ -649,7 +659,7 @@ public sealed class MoveTransferService(
     }
 
     private static async Task<bool> CheckExistingAsync(string root, FolderLocation location, MoveManifestFile member,
-        Action check, CancellationToken ct)
+        Action check, CancellationToken ct, IReadOnlySet<string>? names = null)
     {
         if (!location.Exists || !File.Exists(Path.Combine(location.Path, member.Path)))
         {
@@ -658,12 +668,59 @@ public sealed class MoveTransferService(
 
         await using var file = OpenRead(root, location.Folder + "/" + member.Path);
         var identity = Identify(file);
-        if (file.Length != member.Size || await HashAsync(file, check, ct).ConfigureAwait(false) != member.Sha256 || Identify(file) != identity)
+        if (!await MatchesMemberAsync(file, member, check, ct).ConfigureAwait(false))
         {
             throw Error(ErrorCodes.FolderConflict, "An existing destination file conflicts with the checkpoint.");
         }
 
+        if (names is not null)
+        {
+            await CheckIndexAsync(member.Path, file, names, ct).ConfigureAwait(false);
+        }
+
+        if (Identify(file) != identity)
+        {
+            throw Changed();
+        }
+
         return true;
+    }
+
+    private static async Task VerifyMemberAsync(FileStream stream, MoveManifestFile member, IReadOnlySet<string> names,
+        Action check, CancellationToken ct)
+    {
+        var identity = Identify(stream);
+        if (!await MatchesMemberAsync(stream, member, check, ct).ConfigureAwait(false))
+        {
+            throw Changed();
+        }
+
+        await CheckIndexAsync(member.Path, stream, names, ct).ConfigureAwait(false);
+        if (Identify(stream) != identity)
+        {
+            throw Changed();
+        }
+    }
+
+    private static async Task<bool> MatchesMemberAsync(FileStream stream, MoveManifestFile member, Action check, CancellationToken ct)
+    {
+        using var git = member.GitBlobSha1 is null ? null : GitHash(member.Size);
+        return stream.Length == member.Size &&
+            await HashAsync(stream, check, ct, git).ConfigureAwait(false) == member.Sha256 &&
+            (git is null || string.Equals(Convert.ToHexStringLower(git.GetHashAndReset()), member.GitBlobSha1, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsSafetensorsIndex(string path) => path.EndsWith(".safetensors.index.json", StringComparison.OrdinalIgnoreCase);
+
+    private static Task CheckIndexAsync(string path, Stream stream, IReadOnlySet<string> names, CancellationToken ct) =>
+        IsSafetensorsIndex(path) ? MoveManifestRules.ValidateSafetensorsIndexAsync(path, stream, names, ct) : Task.CompletedTask;
+
+    private static IncrementalHash GitHash(long size)
+    {
+        // Git's blob identity is compared alongside the transfer's SHA-256.
+        var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+        hash.AppendData(Encoding.ASCII.GetBytes(string.Create(CultureInfo.InvariantCulture, $"blob {size}\0")));
+        return hash;
     }
 
     private static FileStream OpenStageWrite(string stage, string relative)
@@ -869,7 +926,7 @@ public sealed class MoveTransferService(
         }
     }
 
-    private static async Task<string> HashAsync(Stream file, Action check, CancellationToken ct)
+    private static async Task<string> HashAsync(Stream file, Action check, CancellationToken ct, IncrementalHash? git = null)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         byte[] buffer = ArrayPool<byte>.Shared.Rent(256 * 1024);
@@ -880,6 +937,7 @@ public sealed class MoveTransferService(
             {
                 check();
                 hash.AppendData(buffer, 0, read);
+                git?.AppendData(buffer, 0, read);
             }
             return Convert.ToHexStringLower(hash.GetHashAndReset());
         }

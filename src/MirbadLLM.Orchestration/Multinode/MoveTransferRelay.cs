@@ -17,7 +17,8 @@ internal sealed class MoveTransferRelay(IAgentClientFactory clients, AgentOperat
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _slots = new(StringComparer.Ordinal);
 
     public async Task<MoveFolderWork> CopyAsync(OwnershipRecord record, MoveFolderWork work,
-        Func<MoveFolderWork, CancellationToken, Task> save, Func<CancellationToken, Task> check, CancellationToken ct)
+        Func<MoveFolderWork, CancellationToken, Task> save, Func<CancellationToken, Task> check,
+        Func<MoveFolderWork, MoveFolderManifest, CancellationToken, Task<MoveFolderWork>> classify, CancellationToken ct)
     {
         var move = record.Move!;
         var source = clients.GetClient(move.SourceNodeId);
@@ -49,6 +50,7 @@ internal sealed class MoveTransferRelay(IAgentClientFactory clients, AgentOperat
             ManifestId = manifest.ManifestId, ImportOperationId = work.ImportOperationId ?? runner.CreateEnvelope().OperationId,
             TotalBytes = expectedBytes,
         };
+        work = await classify(work, manifest, ct).ConfigureAwait(false);
         await save(work, ct).ConfigureAwait(false);
         await check(ct).ConfigureAwait(false);
         var import = await FindOrOpenAsync(target, record, work, MoveTransferRole.Import, manifest, ct).ConfigureAwait(false);

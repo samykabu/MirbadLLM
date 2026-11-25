@@ -209,14 +209,23 @@ public enum MoveTransferRole { Export, Import }
 /// <summary>The verifier's progress in preparing, transferring and publishing one folder.</summary>
 public enum MoveTransferPhase { Preparing, Ready, Verifying, Completed, Failed, Cancelled }
 
-public sealed record MoveManifestFile(string Path, long Size, string Sha256);
+public sealed record MoveManifestFile(string Path, long Size, string Sha256)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GitBlobSha1 { get; init; }
+}
 
 /// <summary>Portable byte-level manifest identifying the complete payload of a checkpoint folder.</summary>
 public sealed record MoveFolderManifest(int Version, IReadOnlyList<MoveManifestFile> Files, string ManifestId)
 {
+    /// <summary>The transfer identity depends on file paths, sizes and SHA-256 values, including across agent versions.</summary>
     public static string IdFor(IReadOnlyList<MoveManifestFile> files) =>
         Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
-            OperationPayload.Canonicalize(AgentJson.ToElement(new { version = 1, files }))));
+            OperationPayload.Canonicalize(AgentJson.ToElement(new
+            {
+                version = 1,
+                files = files.Select(file => new { file.Path, file.Size, file.Sha256 }),
+            }))));
 }
 
 public sealed record MoveTransferOpenRequest : AgentMutation

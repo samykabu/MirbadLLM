@@ -186,6 +186,35 @@ public sealed partial class HuggingFaceHubClient
         return new Uri(_endpoint, $"{repoId}/resolve/{commitSha}/{escaped}");
     }
 
+    /// <summary>Verifies the shard references of the selected files at the pinned Hub revision.</summary>
+    public async Task ValidateShardSelectionAsync(HubSnapshot snapshot, IReadOnlyList<HubFile> selected, string? token, CancellationToken ct)
+    {
+        var names = selected.Select(file => file.Path).ToHashSet(StringComparer.Ordinal);
+        MoveManifestRules.ValidateSplitGguf(names);
+        foreach (var index in selected.Where(file => file.Path.EndsWith(".safetensors.index.json", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (!IsValidRepoId(snapshot.RepoId) || !ContentDigest.IsHex(snapshot.CommitSha, 40) ||
+                RepoPathRules.Check(index.Path) is not null || index.Size < 0 || index.Size > _transport.Options.MaxListingBytes)
+            {
+                throw new InvalidDataException("The pinned checkpoint index is invalid or too large.");
+            }
+
+            using var response = await _transport.GetAsync(FileUrl(snapshot.RepoId, snapshot.CommitSha, index.Path), Credential(token), null, ct)
+                .ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var content = await ReadBoundedAsync(response, index.Size, ct).ConfigureAwait(false);
+            using var bytes = new MemoryStream(content, writable: false);
+            var digest = index.LfsSha256 is { } lfs ? ContentDigest.Sha256(lfs)
+                : index.BlobSha1 is { } git ? ContentDigest.GitBlobSha1(git, index.Size) : null;
+            if (bytes.Length != index.Size || digest is null || !await digest.MatchesAsync(bytes, ct).ConfigureAwait(false))
+            {
+                throw new InvalidDataException($"Checkpoint index '{index.Path}' does not match the pinned Hub digest.");
+            }
+
+            await MoveManifestRules.ValidateSafetensorsIndexAsync(index.Path, bytes, names, ct).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>The <c>Authorization</c> value for <paramref name="token"/>; null without a token.</summary>
     public static AuthenticationHeaderValue? Credential(string? token) =>
         string.IsNullOrEmpty(token) ? null : new AuthenticationHeaderValue("Bearer", token);
